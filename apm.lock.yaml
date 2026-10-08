@@ -1,0 +1,174 @@
+lockfile_version: "1"
+apm_version: 0.33.0
+dependencies:
+  - repo_url: halby24/agent-common-package
+    name: halby-agent-common-package
+    host: github.com
+    resolved_commit: 6118ce896f5370106eb37cbd2fda5aed42cf41f5
+    resolved_ref: main
+    version: 0.1.0
+    package_type: apm_package
+    deployed_files:
+      - .agents/skills/code-writing
+      - .agents/skills/code-writing/SKILL.md
+      - .agents/skills/design-writing
+      - .agents/skills/design-writing/SKILL.md
+      - .agents/skills/document-writing
+      - .agents/skills/document-writing/SKILL.md
+      - .agents/skills/rust-writing
+      - .agents/skills/rust-writing/SKILL.md
+      - .agents/skills/ts-writing
+      - .agents/skills/ts-writing/SKILL.md
+      - .opencode/agents/advisor.md
+      - .opencode/agents/builder.md
+      - .opencode/agents/orchestrator.md
+      - .opencode/agents/reviewer.md
+      - .opencode/agents/verifier.md
+    deployed_file_hashes:
+      .agents/skills/code-writing/SKILL.md: sha256:7a89b073d8e7514f97eda1891333161ec03de4b439a9635b6188907e208ab7e6
+      .agents/skills/design-writing/SKILL.md: sha256:5afde2fc4f15e26e20f7ed283ea6ec8f390e02097f6dd6f945b855c5e9763c49
+      .agents/skills/document-writing/SKILL.md: sha256:18b4baa95de61d54aafad7ccf68526b6f1b216ad813109db99cb2d563aafef9e
+      .agents/skills/rust-writing/SKILL.md: sha256:f7edfcd4a6a8724cf497f945490429fff95ba201c2a4cdc6c18d3ce208174b9a
+      .agents/skills/ts-writing/SKILL.md: sha256:fa96b7f462130fef94554ed1d56cdeeb5758b2c0139eb734c87976b7ee01f05d
+      .opencode/agents/advisor.md: sha256:5fdd6baafa498ce696e7bb60e4522aadf17deb3242ec25e3e603dc7e7299b66a
+      .opencode/agents/builder.md: sha256:fad79f4a6bb4f798a54f0a857fb2442fdbbe95b86fa56ad7b219bd16bf6f95d3
+      .opencode/agents/orchestrator.md: sha256:cabc9f73eebae08f2518945923ac893fac6be164c31eccdf93972fa54d96f95f
+      .opencode/agents/reviewer.md: sha256:b02406c0b1652fccf9c6feb5b2cade566e6e9224620a48e4f068059464aac184
+      .opencode/agents/verifier.md: sha256:837674a7298dab92f713f1a609d7b146d423cbcd2d9498469fdb6d4de485b6d0
+    content_hash: sha256:c83bf00fe14ac39f5cb7698912007f96c82abcf46297a3e03e7f74dc7b875c65
+deployments:
+  - kind: project-relative
+    target: opencode
+    value: .agents/skills/code-writing
+    runtime: null
+    scope: project
+    owners:
+      - halby24/agent-common-package
+    active_owner: halby24/agent-common-package
+    content_hash: null
+  - kind: project-relative
+    target: opencode
+    value: .agents/skills/code-writing/SKILL.md
+    runtime: null
+    scope: project
+    owners:
+      - halby24/agent-common-package
+    active_owner: halby24/agent-common-package
+    content_hash: sha256:7a89b073d8e7514f97eda1891333161ec03de4b439a9635b6188907e208ab7e6
+  - kind: project-relative
+    target: opencode
+    value: .agents/skills/design-writing
+    runtime: null
+    scope: project
+    owners:
+      - halby24/agent-common-package
+    active_owner: halby24/agent-common-package
+    content_hash: null
+  - kind: project-relative
+    target: opencode
+    value: .agents/skills/design-writing/SKILL.md
+    runtime: null
+    scope: project
+    owners:
+      - halby24/agent-common-package
+    active_owner: halby24/agent-common-package
+    content_hash: sha256:5afde2fc4f15e26e20f7ed283ea6ec8f390e02097f6dd6f945b855c5e9763c49
+  - kind: project-relative
+    target: opencode
+    value: .agents/skills/document-writing
+    runtime: null
+    scope: project
+    owners:
+      - halby24/agent-common-package
+    active_owner: halby24/agent-common-package
+    content_hash: null
+  - kind: project-relative
+    target: opencode
+    value: .agents/skills/document-writing/SKILL.md
+    runtime: null
+    scope: project
+    owners:
+      - halby24/agent-common-package
+    active_owner: halby24/agent-common-package
+    content_hash: sha256:18b4baa95de61d54aafad7ccf68526b6f1b216ad813109db99cb2d563aafef9e
+  - kind: project-relative
+    target: opencode
+    value: .agents/skills/rust-writing
+    runtime: null
+    scope: project
+    owners:
+      - halby24/agent-common-package
+    active_owner: halby24/agent-common-package
+    content_hash: null
+  - kind: project-relative
+    target: opencode
+    value: .agents/skills/rust-writing/SKILL.md
+    runtime: null
+    scope: project
+    owners:
+      - halby24/agent-common-package
+    active_owner: halby24/agent-common-package
+    content_hash: sha256:f7edfcd4a6a8724cf497f945490429fff95ba201c2a4cdc6c18d3ce208174b9a
+  - kind: project-relative
+    target: opencode
+    value: .agents/skills/ts-writing
+    runtime: null
+    scope: project
+    owners:
+      - halby24/agent-common-package
+    active_owner: halby24/agent-common-package
+    content_hash: null
+  - kind: project-relative
+    target: opencode
+    value: .agents/skills/ts-writing/SKILL.md
+    runtime: null
+    scope: project
+    owners:
+      - halby24/agent-common-package
+    active_owner: halby24/agent-common-package
+    content_hash: sha256:fa96b7f462130fef94554ed1d56cdeeb5758b2c0139eb734c87976b7ee01f05d
+  - kind: project-relative
+    target: opencode
+    value: .opencode/agents/advisor.md
+    runtime: null
+    scope: project
+    owners:
+      - halby24/agent-common-package
+    active_owner: halby24/agent-common-package
+    content_hash: sha256:5fdd6baafa498ce696e7bb60e4522aadf17deb3242ec25e3e603dc7e7299b66a
+  - kind: project-relative
+    target: opencode
+    value: .opencode/agents/builder.md
+    runtime: null
+    scope: project
+    owners:
+      - halby24/agent-common-package
+    active_owner: halby24/agent-common-package
+    content_hash: sha256:fad79f4a6bb4f798a54f0a857fb2442fdbbe95b86fa56ad7b219bd16bf6f95d3
+  - kind: project-relative
+    target: opencode
+    value: .opencode/agents/orchestrator.md
+    runtime: null
+    scope: project
+    owners:
+      - halby24/agent-common-package
+    active_owner: halby24/agent-common-package
+    content_hash: sha256:cabc9f73eebae08f2518945923ac893fac6be164c31eccdf93972fa54d96f95f
+  - kind: project-relative
+    target: opencode
+    value: .opencode/agents/reviewer.md
+    runtime: null
+    scope: project
+    owners:
+      - halby24/agent-common-package
+    active_owner: halby24/agent-common-package
+    content_hash: sha256:b02406c0b1652fccf9c6feb5b2cade566e6e9224620a48e4f068059464aac184
+  - kind: project-relative
+    target: opencode
+    value: .opencode/agents/verifier.md
+    runtime: null
+    scope: project
+    owners:
+      - halby24/agent-common-package
+    active_owner: halby24/agent-common-package
+    content_hash: sha256:837674a7298dab92f713f1a609d7b146d423cbcd2d9498469fdb6d4de485b6d0
