@@ -1,23 +1,10 @@
-# vite-plus-starter
+# utils
 
-A starter for creating a Vite Plus project.
+xrift-bridge で共有する汎用ユーティリティ。
 
 ## Development
 
-- Install dependencies:
-
-```bash
-vp install
-```
-
-- Run the unit tests:
-
 ```bash
 vp test
-```
-
-- Build the library:
-
-```bash
 vp pack
 ```
