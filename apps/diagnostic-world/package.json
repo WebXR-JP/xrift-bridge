@@ -1,0 +1,42 @@
+{
+  "name": "diagnostic-world",
+  "version": "0.1.0",
+  "private": true,
+  "description": "XRift とローカルブリッジの接続を診断するワールド（開発検証用）。",
+  "type": "module",
+  "scripts": {
+    "dev": "vp dev",
+    "build": "tsc && vp build",
+    "preview": "vp preview",
+    "typecheck": "tsc --noEmit",
+    "test": "vp test",
+    "check": "vp check"
+  },
+  "dependencies": {
+    "@pmndrs/uikit": "^1.0.64",
+    "@react-three/drei": "^10.7.7",
+    "@react-three/fiber": "^9.5.0",
+    "@react-three/rapier": "^2.2.0",
+    "@react-three/uikit": "^1.0.64",
+    "@xrift/world-components": "^0.53.0",
+    "react": "~19.2.4",
+    "react-dom": "~19.2.4",
+    "three": "^0.183.1",
+    "world-client": "catalog:"
+  },
+  "devDependencies": {
+    "@originjs/vite-plugin-federation": "^1.4.1",
+    "@types/node": "catalog:",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@types/three": "^0.183.1",
+    "@types/ws": "catalog:",
+    "@vitejs/plugin-react": "^5.1.4",
+    "bridge-protocol": "workspace:*",
+    "happy-dom": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vite-plus": "catalog:",
+    "ws": "catalog:"
+  }
+}

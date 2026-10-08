@@ -1,0 +1,40 @@
+{
+  "world": {
+    "distDir": "./dist",
+    "title": "XRift Bridge 診断ワールド",
+    "description": "ローカルブリッジへの接続・認証・echo・ping を診断する開発検証用ワールドです",
+    "thumbnailPath": "thumbnail.png",
+    "buildCommand": "npm run build",
+    "ignore": [
+      "**/.DS_Store",
+      "**/Thumbs.db",
+      "**/*.js.map",
+      "**/.gitkeep",
+      "**/index.html",
+      "**/__federation_shared_@react-three/drei-*.js",
+      "**/__federation_shared_@react-three/fiber-*.js",
+      "**/__federation_shared_@react-three/rapier-*.js",
+      "**/__federation_shared_@xrift/world-components-*.js",
+      "**/__federation_shared_three-*.js",
+      "**/__federation_shared_three/addons/**",
+      "**/__federation_shared_react-*.js",
+      "**/__federation_shared_react-dom-*.js",
+      "**/__federation_shared_react-dom/client-*.js",
+      "**/__federation_shared_react/jsx-runtime-*.js",
+      "**/rapier.es-*.js",
+      "**/hls-*.js"
+    ],
+    "physics": {
+      "gravity": 9.81,
+      "allowInfiniteJump": true
+    },
+    "camera": {
+      "near": 0.1,
+      "far": 1000
+    },
+    "permissions": {
+      "allowedDomains": ["127.0.0.1"],
+      "allowedCodeRules": ["no-network-without-permission"]
+    }
+  }
+}

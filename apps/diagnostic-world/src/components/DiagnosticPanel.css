@@ -1,0 +1,168 @@
+/* 診断パネル（開発文書内の自ツリーに描画する PC 向け操作盤）。 */
+
+.diag-panel {
+  position: fixed;
+  top: 12px;
+  right: 12px;
+  width: 380px;
+  max-height: calc(100vh - 24px);
+  overflow-y: auto;
+  z-index: 10;
+  padding: 12px 14px;
+  background: rgba(16, 18, 24, 0.92);
+  color: #f2f4f8;
+  border: 1px solid #4a5160;
+  border-radius: 8px;
+  font-family: system-ui, sans-serif;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.diag-title {
+  font-size: 16px;
+  margin-bottom: 8px;
+}
+
+.diag-section {
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid #343a46;
+}
+
+.diag-section h2 {
+  font-size: 13px;
+  margin-bottom: 6px;
+}
+
+.diag-endpoint {
+  font-family: monospace;
+  word-break: break-all;
+}
+
+.diag-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+}
+
+.diag-port {
+  width: 90px;
+}
+
+.diag-secret {
+  flex: 1;
+  min-width: 0;
+}
+
+.diag-panel input,
+.diag-panel textarea,
+.diag-panel button {
+  font-size: 13px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  border: 1px solid #6a7280;
+  background: #232833;
+  color: #f2f4f8;
+}
+
+.diag-panel button:disabled {
+  opacity: 0.45;
+}
+
+.diag-buttons {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.diag-dl {
+  display: grid;
+  grid-template-columns: 84px 1fr;
+  gap: 2px 8px;
+  margin-top: 6px;
+}
+
+.diag-dl dt {
+  color: #aeb6c4;
+}
+
+.diag-dl dd {
+  word-break: break-all;
+}
+
+.diag-note {
+  margin-top: 6px;
+  color: #aeb6c4;
+  font-size: 12px;
+}
+
+.diag-error {
+  margin-top: 6px;
+  color: #ff9d9d;
+}
+
+.diag-error-box {
+  margin-top: 6px;
+  padding: 6px 8px;
+  border: 1px solid #8c3d3d;
+  border-radius: 4px;
+  background: #2a1d1d;
+}
+
+.diag-hint {
+  margin-top: 4px;
+  color: #ffd9a0;
+}
+
+.diag-result {
+  width: 100%;
+  margin-top: 6px;
+  font-family: monospace;
+  font-size: 11px;
+  white-space: pre;
+}
+
+.diag-list {
+  margin: 6px 0 0 18px;
+}
+
+.diag-list li {
+  margin-top: 2px;
+}
+
+/* 開発用の文字入力の対話板（自ツリー内の重ね表示）。 */
+.diag-textinput-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(8, 10, 14, 0.6);
+}
+
+.diag-textinput-box {
+  width: 320px;
+  padding: 14px 16px;
+  background: #14171d;
+  color: #f2f4f8;
+  border: 1px solid #4a5160;
+  border-radius: 8px;
+  font-family: system-ui, sans-serif;
+  font-size: 13px;
+}
+
+.diag-textinput-title {
+  margin-bottom: 8px;
+}
+
+.diag-textinput-field {
+  width: 100%;
+  font-size: 14px;
+  padding: 6px 8px;
+  border-radius: 4px;
+  border: 1px solid #6a7280;
+  background: #232833;
+  color: #f2f4f8;
+}

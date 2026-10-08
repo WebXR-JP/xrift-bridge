@@ -7,9 +7,13 @@ catalogMode: prefer
 
 catalog:
   "@types/node": ^24
+  "@types/ws": ^8.18.2
+  happy-dom: ^20.14.5
   typescript: ^7.0.2
   vite: npm:@voidzero-dev/vite-plus-core@1.0.0
   vite-plus: 1.0.0
+  world-client: workspace:*
+  ws: 8.22.0
 overrides:
   vite@*: "catalog:"
 peerDependencyRules:

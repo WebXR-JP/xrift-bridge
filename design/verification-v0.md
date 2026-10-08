@@ -31,7 +31,25 @@
 - ストリーム数: 1本、8本、32本。
 - センサー、小コマンド、模擬 AI 逐次出力の混在。
 - 受信消費の停止、主スレッド停滞、切断、ブリッジ再起動、バックグラウンドタブを含める。
-- 待ち行列容量等の初期暫定値は検証実施前にここに記載する。
+- 待ち行列容量等の初期暫定値は下表のとおりである。これらは B1 到達性確認のための計測用の暫定値であり、利用者の合意値・性能保証ではない。測定結果から合意する（合意待ち）。
+- ペアリングの120秒・128ビット以上・一度だけ使用可能は確定要件であり、下表の暫定値とは区別する。
+
+| 項目                              |             B1 暫定値 |
+| --------------------------------- | --------------------: |
+| `maxMessageBytes`                 |          65,536 bytes |
+| `maxReliableQueueMessages`        |           256件／接続 |
+| `maxReliableQueueBytes`           | 1,048,576 bytes／接続 |
+| `maxStreamsPerConnection`         |              32／接続 |
+| `initialCreditWindow`             |                  32件 |
+| `authTimeoutMs`                   |             10,000 ms |
+| `maxAuthAttempts`                 |             3回／接続 |
+| `maxConnections`                  |                     8 |
+| world-client `requestTimeoutMs`   |             10,000 ms |
+| world-client `maxPendingReliable` |                 128件 |
+
+- 実装定義元と設定方法は以下である。サーバ側の8値は `apps/bridge/src/config.ts` の `DEFAULT_LIMITS` に置き、`BridgeOptions.limits` で上書きする。world-client の2値は `packages/world-client/src/client.ts` の既定値に置き、`WorldClientOptions` の `requestTimeoutMs`・`maxPendingReliable` で上書きする。ペアリングの確定値は `apps/bridge/src/config.ts` の `PAIRING_TTL_MS`・`PAIRING_SECRET_BYTES` に置く。
+- world-client の reliable 送信待機は件数上限（`maxPendingReliable`）のみであり、バイト上限は実装していない。件数上限しかない待機を「バイト上限も実装済み」と記述しない。
+- 試験で上書きした実効値の例は以下である。`apps/bridge/tests/server.test.ts` では `initialCreditWindow: 2`、`maxMessageBytes: 256・512`、`maxReliableQueueBytes: 16・実測応答バイト数・同−1`、`maxStreamsPerConnection: 2`、`maxConnections: 2`、`authTimeoutMs: 100`、`maxAuthAttempts: 1` を用いた。`packages/world-client/tests/client.test.ts` では `maxPendingReliable: 1` を用いた。
 
 ## 計測項目
 
