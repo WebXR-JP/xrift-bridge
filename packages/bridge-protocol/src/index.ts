@@ -8,9 +8,8 @@
  * @packageDocumentation
  */
 
-export { PROTOCOL_VERSION } from "./messages.ts";
+export { PAIRING_CODE_LENGTH, PROTOCOL_VERSION } from "./messages.ts";
 export type {
-  AuthMessage,
   AuthOkMessage,
   BridgeMessage,
   BridgeToClientMessage,
@@ -24,6 +23,10 @@ export type {
   EchoResponseMessage,
   ErrorMessage,
   MessageBase,
+  PairingCode,
+  PairingPendingMessage,
+  PairingRequestId,
+  PairingStartMessage,
   RequestId,
   SessionId,
   StreamId,
@@ -32,7 +35,10 @@ export type {
 export {
   MAX_ID_LENGTH,
   ProtocolError,
+  formatPairingCode,
   isJsonValue,
+  isPairingCode,
+  isPairingRequestId,
   parseBridgeMessage,
   stringifyBridgeMessage,
 } from "./validate.ts";

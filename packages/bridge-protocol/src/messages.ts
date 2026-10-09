@@ -1,5 +1,5 @@
 /**
- * ブリッジ v0 の wire メッセージ型。
+ * ブリッジ v0.2 の wire メッセージ型。
  *
  * フィールド名・型・必須/任意の共有定義はここに置く。外部入力の境界検証は
  * `validate.ts`、動的契約はテスト、上位の設計判断は `design/protocol.md`
@@ -9,7 +9,10 @@
  */
 
 /** プロトコルのバージョン。互換性のない変更時に上げる。 */
-export const PROTOCOL_VERSION = "0.1.0";
+export const PROTOCOL_VERSION = "0.2.0";
+
+/** 比較コードの文字数。ASCII 数字のみで先頭ゼロを保持する。 */
+export const PAIRING_CODE_LENGTH = 6;
 
 /** 接続セッション識別子。ブリッジが認証成功時に発行する。 */
 export type SessionId = string;
@@ -20,10 +23,16 @@ export type StreamId = string;
 /** 要求/応答を対応付ける識別子。送信側が生成する。 */
 export type RequestId = string;
 
+/** ペアリング要求の識別子。ブリッジが発行し業務の要求 ID とは別物。 */
+export type PairingRequestId = string;
+
+/** 比較コード。ASCII 数字 6 文字の文字列で数値型にしない。 */
+export type PairingCode = string;
+
 /** 配送種別。`reliable` が既定で `latest` は明示選択のみ。 */
 export type StreamKind = "reliable" | "latest";
 
-/** すべての v0 メッセージが持つ共通フィールド。 */
+/** すべての v0.2 メッセージが持つ共通フィールド。 */
 export interface MessageBase {
   /** プロトコルバージョン。`PROTOCOL_VERSION` と一致すること。 */
   readonly v: string;
@@ -32,19 +41,37 @@ export interface MessageBase {
 }
 
 /**
- * 認証要求。WebSocket 確立後の最初のアプリケーションメッセージで送る。
+ * ペアリング開始。接続最初のアプリケーションメッセージとして送る。
  *
- * 秘密値を URL・クエリ・Cookie に入れず JSON 本文でのみ送る。
+ * 追加フィールドは持たず `{v, type}` のみである。
  */
-export interface AuthMessage extends MessageBase {
-  readonly type: "auth";
-  /** CLI ペアリングで発行された秘密値。 */
-  readonly secret: string;
+export interface PairingStartMessage extends MessageBase {
+  readonly type: "pairing_start";
+}
+
+/**
+ * 比較コードの発行通知。ブリッジが両画面表示用のコードを送る。
+ *
+ * `requestId` は再利用しない要求識別子、`code` は ASCII 数字 6 文字、
+ * `expiresAt` は承認期限の絶対時刻、`expiresInMs` は残り時間である。
+ */
+export interface PairingPendingMessage extends MessageBase {
+  readonly type: "pairing_pending";
+  /** 再利用しないペアリング要求の識別子。 */
+  readonly requestId: PairingRequestId;
+  /** ASCII 数字 6 文字の比較コード。 */
+  readonly code: PairingCode;
+  /** 承認期限の絶対時刻。 */
+  readonly expiresAt: number;
+  /** 承認までの残り時間（ミリ秒）。 */
+  readonly expiresInMs: number;
 }
 
 /** 認証成功の応答。ブリッジが接続セッションを払い出す。 */
 export interface AuthOkMessage extends MessageBase {
   readonly type: "auth_ok";
+  /** 承認したペアリング要求の識別子。 */
+  readonly requestId: PairingRequestId;
   /** この接続に紐付くセッション識別子。 */
   readonly sessionId: SessionId;
   /** reliable 送信に使える初期クレジット（接続単位）。 */
@@ -148,13 +175,20 @@ export interface ErrorMessage extends MessageBase {
   readonly message: string;
   /** 対応する要求がある場合の識別子。 */
   readonly sessionId?: SessionId;
-  /** 対応する要求がある場合の識別子。 */
+  /**
+   * 対応する要求がある場合の識別子。
+   *
+   * 業務相関ID（汎用 `RequestId`）とペアリングID（`PairingRequestId`）の
+   * 両方を運ぶ。型は汎用の `RequestId` のままとし（`PairingRequestId` は
+   * その部分集合）、書式の厳格さは処理文脈で判断する。
+   */
   readonly requestId?: RequestId;
 }
 
-/** v0 の全メッセージの合併。 */
+/** v0.2 の全メッセージの合併。 */
 export type BridgeMessage =
-  | AuthMessage
+  | PairingStartMessage
+  | PairingPendingMessage
   | AuthOkMessage
   | EchoMessage
   | EchoResponseMessage
@@ -165,10 +199,15 @@ export type BridgeMessage =
   | ErrorMessage;
 
 /** クライアント→ブリッジ方向のメッセージ。 */
-export type ClientToBridgeMessage = AuthMessage | EchoMessage | CommandRequestMessage | DataMessage;
+export type ClientToBridgeMessage =
+  | PairingStartMessage
+  | EchoMessage
+  | CommandRequestMessage
+  | DataMessage;
 
 /** ブリッジ→クライアント方向のメッセージ。 */
 export type BridgeToClientMessage =
+  | PairingPendingMessage
   | AuthOkMessage
   | EchoResponseMessage
   | CommandResponseMessage

@@ -7,8 +7,8 @@
  * @packageDocumentation
  */
 import {
+  PAIRING_CODE_LENGTH,
   PROTOCOL_VERSION,
-  type AuthMessage,
   type AuthOkMessage,
   type BridgeMessage,
   type CommandRequestMessage,
@@ -18,6 +18,10 @@ import {
   type EchoMessage,
   type EchoResponseMessage,
   type ErrorMessage,
+  type PairingCode,
+  type PairingPendingMessage,
+  type PairingRequestId,
+  type PairingStartMessage,
 } from "./messages.ts";
 
 /** 検証失敗の符号。 */
@@ -45,6 +49,12 @@ export const MAX_ID_LENGTH = 128;
 /** ストリーム識別子の書式。 */
 const STREAM_ID_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
 
+/** 比較コードの書式。ASCII 数字のみで長さは `PAIRING_CODE_LENGTH` に従う。 */
+const PAIRING_CODE_PATTERN = new RegExp(`^[0-9]{${PAIRING_CODE_LENGTH}}$`);
+
+/** ペアリング要求 ID の書式。1〜128 文字の範囲は `readId` の長さ検査で担う。 */
+const PAIRING_REQUEST_ID_PATTERN = /^[A-Za-z0-9._-]+$/;
+
 /** JSON 値として送受信できるか判定する。 */
 export function isJsonValue(value: unknown): boolean {
   if (value === null) return true;
@@ -67,6 +77,49 @@ export function isJsonValue(value: unknown): boolean {
       // undefined・function・symbol・bigint は JSON 化できないため拒否する。
       return false;
   }
+}
+
+/**
+ * 比較コード（ASCII 数字 6 文字、`000000` を含む）か判定する。
+ *
+ * @param value - 検査する未知値。
+ * @returns ASCII 数字のみで `PAIRING_CODE_LENGTH` 文字の場合に真。
+ */
+export function isPairingCode(value: unknown): value is PairingCode {
+  return (
+    typeof value === "string" &&
+    value.length === PAIRING_CODE_LENGTH &&
+    PAIRING_CODE_PATTERN.test(value)
+  );
+}
+
+/**
+ * ペアリング要求 ID（1〜128 文字の `[A-Za-z0-9._-]`）か判定する。
+ *
+ * @param value - 検査する未知値。
+ * @returns 要求 ID 書式を満たす場合に真。
+ */
+export function isPairingRequestId(value: unknown): value is PairingRequestId {
+  return (
+    typeof value === "string" &&
+    value.length >= 1 &&
+    value.length <= MAX_ID_LENGTH &&
+    PAIRING_REQUEST_ID_PATTERN.test(value)
+  );
+}
+
+/**
+ * 比較コードを人間が照合しやすい共有形式に変換する。
+ *
+ * @param code - ASCII 数字 6 文字の比較コード。事前検証済みでも未検証でもよい。
+ * @returns 3 桁区切りの表示形（例: `"000123"` → `"000 123"`、半角スペース）。
+ * @throws `RangeError` — `code` が比較コード書式でない場合。
+ */
+export function formatPairingCode(code: string): string {
+  if (!isPairingCode(code)) {
+    throw new RangeError("比較コードは ASCII 数字 6 文字であること。");
+  }
+  return `${code.slice(0, 3)} ${code.slice(3)}`;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -95,6 +148,21 @@ function readId(value: Record<string, unknown>, field: string, pattern?: RegExp)
     throw new ProtocolError("INVALID_MESSAGE", `フィールド \`${field}\` の書式が不正である。`);
   }
   return raw;
+}
+
+function readPairingCode(value: Record<string, unknown>, field: string): PairingCode {
+  const raw: unknown = value[field];
+  if (!isPairingCode(raw)) {
+    throw new ProtocolError(
+      "INVALID_MESSAGE",
+      `フィールド \`${field}\` は ASCII 数字 ${PAIRING_CODE_LENGTH} 文字であること。`,
+    );
+  }
+  return raw;
+}
+
+function readPairingRequestId(value: Record<string, unknown>, field: string): PairingRequestId {
+  return readId(value, field, PAIRING_REQUEST_ID_PATTERN);
 }
 
 function readSeq(value: Record<string, unknown>): number {
@@ -142,7 +210,7 @@ function readOptionalPayload(value: Record<string, unknown>): unknown {
 }
 
 /**
- * 受信した生データ（文字列または未知値）を v0 メッセージとして検証する。
+ * 受信した生データ（文字列または未知値）を v0.2 メッセージとして検証する。
  *
  * @param raw - WebSocket 受信値。文字列は JSON として構文解析する。
  * @returns 検証済みのメッセージ。
@@ -165,18 +233,28 @@ export function parseBridgeMessage(raw: unknown): BridgeMessage {
   }
   const v = readVersion(value);
   switch (value["type"]) {
-    case "auth": {
+    case "pairing_start": {
       return {
         v,
-        type: "auth",
-        secret: readId(value, "secret"),
-      } satisfies AuthMessage;
+        type: "pairing_start",
+      } satisfies PairingStartMessage;
+    }
+    case "pairing_pending": {
+      return {
+        v,
+        type: "pairing_pending",
+        requestId: readPairingRequestId(value, "requestId"),
+        code: readPairingCode(value, "code"),
+        expiresAt: readCount(value, "expiresAt"),
+        expiresInMs: readPositiveCount(value, "expiresInMs"),
+      } satisfies PairingPendingMessage;
     }
     case "auth_ok": {
       const window = readWindow(value);
       return {
         v,
         type: "auth_ok",
+        requestId: readPairingRequestId(value, "requestId"),
         sessionId: readId(value, "sessionId"),
         window,
       } satisfies AuthOkMessage;
@@ -287,12 +365,17 @@ export function parseBridgeMessage(raw: unknown): BridgeMessage {
         code: value["code"],
         message: value["message"],
       };
+      // ADR: 任意の sessionId/requestId は存在すれば検証し、不正な値を黙って
+      // 省略しない。`undefined` は JSON 往復で消えるため欠落として扱う。
+      // `error.requestId` は業務相関ID（汎用 `RequestId`）とペアリングID
+      // （`PairingRequestId`）の両方を運ぶため、共通フィールドでは文字列・
+      // 長さ1〜128のみを検証し、ドメインは処理文脈で判断する。
       const withSession =
-        typeof value["sessionId"] === "string"
-          ? { ...message, sessionId: value["sessionId"] }
+        "sessionId" in value && value["sessionId"] !== undefined
+          ? { ...message, sessionId: readId(value, "sessionId") }
           : message;
-      return typeof value["requestId"] === "string"
-        ? { ...withSession, requestId: value["requestId"] }
+      return "requestId" in value && value["requestId"] !== undefined
+        ? { ...withSession, requestId: readId(value, "requestId") }
         : withSession;
     }
     default:
@@ -328,10 +411,27 @@ function readCount(value: Record<string, unknown>, field: string): number {
   return raw;
 }
 
+/** 残り時間などの件数を正の安全な整数として読む。 */
+function readPositiveCount(value: Record<string, unknown>, field: string): number {
+  const raw: unknown = value[field];
+  if (
+    typeof raw !== "number" ||
+    !Number.isInteger(raw) ||
+    raw <= 0 ||
+    raw > Number.MAX_SAFE_INTEGER
+  ) {
+    throw new ProtocolError(
+      "INVALID_MESSAGE",
+      `フィールド \`${field}\` は正の安全な整数であること。`,
+    );
+  }
+  return raw;
+}
+
 /**
  * 送信メッセージを wire 形式の文字列へ変換する。
  *
- * @param message - 送信する v0 メッセージ。
+ * @param message - 送信する v0.2 メッセージ。
  * @returns JSON 文字列。`payload` 等は JSON 値であることが前提。
  */
 export function stringifyBridgeMessage(message: BridgeMessage): string {
