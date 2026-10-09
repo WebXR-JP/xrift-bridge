@@ -85,38 +85,27 @@ test("認証・応答・コマンド・データ・クレジット・エラー�
   }
 });
 
-test("クレジットは累積付与の limit を持ち旧 window フィールドを拒否する", () => {
-  const message = parseBridgeMessage(
-    JSON.stringify({ v: PROTOCOL_VERSION, type: "credit", sessionId: "s", limit: 7 }),
-  );
-  expect(message.type).toBe("credit");
-  if (message.type === "credit") {
-    expect(message.limit).toBe(7);
-  }
-  // 残数上書きの旧フィールドだけでは受理しない。
-  expect(() =>
-    parseBridgeMessage(
-      JSON.stringify({ v: PROTOCOL_VERSION, type: "credit", sessionId: "s", window: 4 }),
-    ),
-  ).toThrowError(ProtocolError);
-  // limit の型不正も拒否する。
-  for (const limit of [-1, 1.5, "4", Number.NaN]) {
-    expect(() =>
-      parseBridgeMessage(
-        JSON.stringify({ v: PROTOCOL_VERSION, type: "credit", sessionId: "s", limit }),
-      ),
-    ).toThrowError(ProtocolError);
-  }
-});
-
 test("版不一致・未知種別・JSON 異常を拒否する", () => {
-  expect(() => parseBridgeMessage(JSON.stringify({ ...validEcho(), v: "9.9.9" }))).toThrowError(
-    ProtocolError,
-  );
-  expect(() =>
-    parseBridgeMessage(JSON.stringify({ ...validEcho(), type: "teleport" })),
-  ).toThrowError(ProtocolError);
-  expect(() => parseBridgeMessage("{not json")).toThrowError(ProtocolError);
+  const cases: Array<{ raw: unknown; code: ProtocolError["code"] }> = [
+    { raw: { ...validEcho(), v: "9.9.9" }, code: "VERSION_MISMATCH" },
+    // 旧版の credit 形式は版判定で拒否する（limit 欠落でも版不一致が先に検出される）。
+    {
+      raw: { v: "0.0.0", type: "credit", sessionId: "s", window: 4 },
+      code: "VERSION_MISMATCH",
+    },
+    { raw: { ...validEcho(), type: "teleport" }, code: "UNKNOWN_TYPE" },
+    { raw: "{not json", code: "INVALID_JSON" },
+  ];
+  for (const { raw, code } of cases) {
+    let error: unknown;
+    try {
+      parseBridgeMessage(typeof raw === "string" ? raw : JSON.stringify(raw));
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(ProtocolError);
+    expect((error as ProtocolError).code).toBe(code);
+  }
 });
 
 test("フィールド不足・型不正・不正連番・不正ストリーム名を拒否する", () => {
@@ -131,6 +120,11 @@ test("フィールド不足・型不正・不正連番・不正ストリーム�
     { ...validEcho(), requestId: "" },
     { ...validEcho(), type: "auth", secret: "" },
     { ...validEcho(), type: "data", kind: "sometimes" },
+    { v: PROTOCOL_VERSION, type: "credit", sessionId: "s" },
+    { v: PROTOCOL_VERSION, type: "credit", sessionId: "s", limit: -1 },
+    { v: PROTOCOL_VERSION, type: "credit", sessionId: "s", limit: 1.5 },
+    { v: PROTOCOL_VERSION, type: "credit", sessionId: "s", limit: "4" },
+    { v: PROTOCOL_VERSION, type: "credit", sessionId: "s", limit: null },
     42,
     null,
     [],
