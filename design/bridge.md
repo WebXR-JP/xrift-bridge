@@ -1,13 +1,13 @@
 # ブリッジ接続
 
-同一PC内でブラウザ（ワールド内コード）とローカルブリッジをつなぐための設計判断を決める。
+同一PC内でブラウザ（ワールド内コード）とローカルブリッジをつなぐための設計判断を定める。
 
-形状（字段名・型・必須/任意）は `packages/bridge-protocol/src/messages.ts`、外部入力の境界検証は `packages/bridge-protocol/src/validate.ts`、動的契約は各テストを正本とし、ここでは上位の設計判断・採用理由・不採用理由・構造のみを扱う。
+形状（フィールド名・型・必須/任意）は `packages/bridge-protocol/src/messages.ts`、外部入力の境界検証は `packages/bridge-protocol/src/validate.ts`、動的契約は各テストを正本とし、ここでは上位の設計判断・採用理由・不採用理由・構造のみを扱う。
 
 ## 担当範囲
 
 - 同じパソコン内でブラウザとローカルブリッジをつなぐ。
-- 対象物は以下
+- 対象は以下
   - `packages/world-client`（ワールド内から接続する側）
   - `apps/bridge`（パソコン上で動く中継）
   - `packages/bridge-protocol`（両者で共有する定義）
@@ -34,7 +34,7 @@ flowchart LR
 
 ## 輸送手段の判断
 
-- 初期の輸送手段は WebSocket に確定する。
+- 初期の輸送手段は WebSocket とする。
 - 平文 `ws://` とし、ループバックに限定する。
 - 正規の接続先は数値IPのループバック宛てとし、ブリッジの待ち受けもループバックに限定する。具体的なホスト・パスの値は `apps/bridge/src/verify.ts`（`BRIDGE_PATH`・`LOOPBACK_HOST`）と `packages/world-client/src/endpoint.ts` を、既定ポートは `apps/bridge/src/index.ts` を正本とする。
 - ポートは明示的に設定できる。競合時は探索せずエラーを表示するだけである。
