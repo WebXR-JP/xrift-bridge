@@ -1,7 +1,7 @@
 /**
  * ブリッジ v0 の wire メッセージ型。
  *
- * 字段名・型・必須/任意の共有定義はここに置く。外部入力の境界検証は
+ * フィールド名・型・必須/任意の共有定義はここに置く。外部入力の境界検証は
  * `validate.ts`、動的契約はテスト、上位の設計判断は `design/protocol.md`
  * を見る。型注釈だけでは外部入力を信用しない。
  *
@@ -23,7 +23,7 @@ export type RequestId = string;
 /** 配送種別。`reliable` が既定で `latest` は明示選択のみ。 */
 export type StreamKind = "reliable" | "latest";
 
-/** すべての v0 メッセージが持つ共通字段。 */
+/** すべての v0 メッセージが持つ共通フィールド。 */
 export interface MessageBase {
   /** プロトコルバージョン。`PROTOCOL_VERSION` と一致すること。 */
   readonly v: string;

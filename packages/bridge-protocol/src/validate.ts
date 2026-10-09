@@ -75,7 +75,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function readVersion(value: Record<string, unknown>): string {
   if (typeof value["v"] !== "string") {
-    throw new ProtocolError("INVALID_MESSAGE", "字段 `v` は文字列であること。");
+    throw new ProtocolError("INVALID_MESSAGE", "フィールド `v` は文字列であること。");
   }
   if (value["v"] !== PROTOCOL_VERSION) {
     throw new ProtocolError("VERSION_MISMATCH", `未対応の protocol version である: ${value["v"]}`);
@@ -88,11 +88,11 @@ function readId(value: Record<string, unknown>, field: string, pattern?: RegExp)
   if (typeof raw !== "string" || raw.length === 0 || raw.length > MAX_ID_LENGTH) {
     throw new ProtocolError(
       "INVALID_MESSAGE",
-      `字段 \`${field}\` は 1〜${MAX_ID_LENGTH} 文字の文字列であること。`,
+      `フィールド \`${field}\` は 1〜${MAX_ID_LENGTH} 文字の文字列であること。`,
     );
   }
   if (pattern !== undefined && !pattern.test(raw)) {
-    throw new ProtocolError("INVALID_MESSAGE", `字段 \`${field}\` の書式が不正である。`);
+    throw new ProtocolError("INVALID_MESSAGE", `フィールド \`${field}\` の書式が不正である。`);
   }
   return raw;
 }
@@ -105,7 +105,10 @@ function readSeq(value: Record<string, unknown>): number {
     raw < 0 ||
     raw > Number.MAX_SAFE_INTEGER
   ) {
-    throw new ProtocolError("INVALID_MESSAGE", "字段 `seq` は 0 以上の安全な整数であること。");
+    throw new ProtocolError(
+      "INVALID_MESSAGE",
+      "フィールド `seq` は 0 以上の安全な整数であること。",
+    );
   }
   return raw;
 }
@@ -115,7 +118,7 @@ function readKind(value: Record<string, unknown>): "reliable" | "latest" {
   if (raw !== "reliable" && raw !== "latest") {
     throw new ProtocolError(
       "INVALID_MESSAGE",
-      "字段 `kind` は `reliable` または `latest` であること。",
+      "フィールド `kind` は `reliable` または `latest` であること。",
     );
   }
   return raw;
@@ -123,7 +126,7 @@ function readKind(value: Record<string, unknown>): "reliable" | "latest" {
 
 function readPayload(value: Record<string, unknown>): unknown {
   if (!("payload" in value) || !isJsonValue(value["payload"])) {
-    throw new ProtocolError("INVALID_MESSAGE", "字段 `payload` は JSON 値であること。");
+    throw new ProtocolError("INVALID_MESSAGE", "フィールド `payload` は JSON 値であること。");
   }
   return value["payload"];
 }
@@ -133,7 +136,7 @@ function readOptionalPayload(value: Record<string, unknown>): unknown {
   const raw: unknown = "params" in value ? value["params"] : value["result"];
   if (raw === undefined) return undefined;
   if (!isJsonValue(raw)) {
-    throw new ProtocolError("INVALID_MESSAGE", "任意字段は JSON 値であること。");
+    throw new ProtocolError("INVALID_MESSAGE", "任意フィールドは JSON 値であること。");
   }
   return raw;
 }
@@ -143,7 +146,7 @@ function readOptionalPayload(value: Record<string, unknown>): unknown {
  *
  * @param raw - WebSocket 受信値。文字列は JSON として構文解析する。
  * @returns 検証済みのメッセージ。
- * @throws `ProtocolError` — JSON 異常・字段不足・型不正・版不一致・未知種別の場合。
+ * @throws `ProtocolError` — JSON 異常・フィールド不足・型不正・版不一致・未知種別の場合。
  */
 export function parseBridgeMessage(raw: unknown): BridgeMessage {
   let value: unknown = raw;
@@ -158,7 +161,7 @@ export function parseBridgeMessage(raw: unknown): BridgeMessage {
     throw new ProtocolError("INVALID_MESSAGE", "メッセージは JSON オブジェクトであること。");
   }
   if (typeof value["type"] !== "string") {
-    throw new ProtocolError("INVALID_MESSAGE", "字段 `type` は文字列であること。");
+    throw new ProtocolError("INVALID_MESSAGE", "フィールド `type` は文字列であること。");
   }
   const v = readVersion(value);
   switch (value["type"]) {
@@ -218,7 +221,7 @@ export function parseBridgeMessage(raw: unknown): BridgeMessage {
     }
     case "command_response": {
       if (typeof value["ok"] !== "boolean") {
-        throw new ProtocolError("INVALID_MESSAGE", "字段 `ok` は真偽値であること。");
+        throw new ProtocolError("INVALID_MESSAGE", "フィールド `ok` は真偽値であること。");
       }
       const message: CommandResponseMessage = {
         v,
@@ -229,7 +232,7 @@ export function parseBridgeMessage(raw: unknown): BridgeMessage {
       };
       if ("result" in value && value["result"] !== undefined) {
         if (!isJsonValue(value["result"])) {
-          throw new ProtocolError("INVALID_MESSAGE", "字段 `result` は JSON 値であること。");
+          throw new ProtocolError("INVALID_MESSAGE", "フィールド `result` は JSON 値であること。");
         }
         return { ...message, result: value["result"] };
       }
@@ -239,7 +242,7 @@ export function parseBridgeMessage(raw: unknown): BridgeMessage {
           typeof value["error"]["code"] !== "string" ||
           typeof value["error"]["message"] !== "string"
         ) {
-          throw new ProtocolError("INVALID_MESSAGE", "字段 `error` は符号と説明を持つこと。");
+          throw new ProtocolError("INVALID_MESSAGE", "フィールド `error` は符号と説明を持つこと。");
         }
         return {
           ...message,
@@ -276,7 +279,7 @@ export function parseBridgeMessage(raw: unknown): BridgeMessage {
         value["code"].length === 0 ||
         typeof value["message"] !== "string"
       ) {
-        throw new ProtocolError("INVALID_MESSAGE", "字段 `code`・`message` が不正である。");
+        throw new ProtocolError("INVALID_MESSAGE", "フィールド `code`・`message` が不正である。");
       }
       const message: ErrorMessage = {
         v,
@@ -319,7 +322,7 @@ function readCount(value: Record<string, unknown>, field: string): number {
   ) {
     throw new ProtocolError(
       "INVALID_MESSAGE",
-      `字段 \`${field}\` は 0 以上の安全な整数であること。`,
+      `フィールド \`${field}\` は 0 以上の安全な整数であること。`,
     );
   }
   return raw;

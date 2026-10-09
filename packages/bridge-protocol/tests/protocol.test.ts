@@ -85,7 +85,7 @@ test("認証・応答・コマンド・データ・クレジット・エラー�
   }
 });
 
-test("クレジットは累積付与の limit を持ち旧 window 字段を拒否する", () => {
+test("クレジットは累積付与の limit を持ち旧 window フィールドを拒否する", () => {
   const message = parseBridgeMessage(
     JSON.stringify({ v: PROTOCOL_VERSION, type: "credit", sessionId: "s", limit: 7 }),
   );
@@ -93,7 +93,7 @@ test("クレジットは累積付与の limit を持ち旧 window 字段を拒�
   if (message.type === "credit") {
     expect(message.limit).toBe(7);
   }
-  // 残数上書きの旧字段だけでは受理しない。
+  // 残数上書きの旧フィールドだけでは受理しない。
   expect(() =>
     parseBridgeMessage(
       JSON.stringify({ v: PROTOCOL_VERSION, type: "credit", sessionId: "s", window: 4 }),
@@ -119,7 +119,7 @@ test("版不一致・未知種別・JSON 異常を拒否する", () => {
   expect(() => parseBridgeMessage("{not json")).toThrowError(ProtocolError);
 });
 
-test("字段不足・型不正・不正連番・不正ストリーム名を拒否する", () => {
+test("フィールド不足・型不正・不正連番・不正ストリーム名を拒否する", () => {
   const bad: unknown[] = [
     { ...validEcho(), seq: undefined },
     { ...validEcho(), seq: -1 },
