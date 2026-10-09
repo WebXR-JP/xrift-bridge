@@ -8,3 +8,4 @@ dependencies:
   apm:
     - git: git@github.com:halby24/agent-common-package.git
       ref: main
+    - nanaism/yomiyasu

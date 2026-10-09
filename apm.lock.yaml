@@ -39,6 +39,45 @@ dependencies:
       .opencode/agents/reviewer.md: sha256:b02406c0b1652fccf9c6feb5b2cade566e6e9224620a48e4f068059464aac184
       .opencode/agents/verifier.md: sha256:837674a7298dab92f713f1a609d7b146d423cbcd2d9498469fdb6d4de485b6d0
     content_hash: sha256:30985015a5e9bf218aef0ee05316a5428b20a67a63b21976cd86acd2da59fe53
+  - repo_url: nanaism/yomiyasu
+    name: yomiyasu
+    host: github.com
+    resolved_commit: c2ffae670994fec96daef92e0bc219f5c1923113
+    version: 1.1.0
+    package_type: marketplace_plugin
+    deployed_files:
+      - .agents/skills/yomiyasu
+      - .agents/skills/yomiyasu/.claude-plugin/marketplace.json
+      - .agents/skills/yomiyasu/.claude-plugin/plugin.json
+      - .agents/skills/yomiyasu/LICENSE
+      - .agents/skills/yomiyasu/SKILL.md
+      - .agents/skills/yomiyasu/UNICODE-LICENSE.txt
+      - .agents/skills/yomiyasu/assets/algo-artis.png
+      - .agents/skills/yomiyasu/references/domains/business.md
+      - .agents/skills/yomiyasu/references/domains/essay.md
+      - .agents/skills/yomiyasu/references/domains/tech.md
+      - .agents/skills/yomiyasu/references/gemini-syntax.md
+      - .agents/skills/yomiyasu/references/slop-catalog.md
+      - .agents/skills/yomiyasu/scripts/markdown_visibility.py
+      - .agents/skills/yomiyasu/scripts/yomiyasu_diff.py
+      - .agents/skills/yomiyasu/scripts/yomiyasu_lint.py
+    deployed_file_hashes:
+      .agents/skills/yomiyasu/.claude-plugin/marketplace.json: sha256:660bdbfd3b13609da593a3159ec6a800f59defdba271d17c4ce31fbc66957465
+      .agents/skills/yomiyasu/.claude-plugin/plugin.json: sha256:3c1ef0a53d6654c71d55e3a360a4f591e30bc2ba23dd43efb26cd4e723d4dc64
+      .agents/skills/yomiyasu/LICENSE: sha256:79d802f15bc8caf67f1a83c1bdbe214ccb41a0a0275f9046b329b89c65ee1fca
+      .agents/skills/yomiyasu/SKILL.md: sha256:d588769e4e4550d6ba1317cc5730aec7c93b99069e7b1aa54514f272ab8ec3af
+      .agents/skills/yomiyasu/UNICODE-LICENSE.txt: sha256:e7a93b009565cfce55919a381437ac4db883e9da2126fa28b91d12732bc53d96
+      .agents/skills/yomiyasu/assets/algo-artis.png: sha256:57c7c204d43d0e2873e3b61221db3ac4ba75a7ce29271a6deaeb3bd09f26fdec
+      .agents/skills/yomiyasu/references/domains/business.md: sha256:b11d338a12205c94cd3d1d48478a11a3bb336596313c1c23a7c6e5e59932faa4
+      .agents/skills/yomiyasu/references/domains/essay.md: sha256:aaec0eae3da65e7f12e529d96a1e172fa727614cd8abe240140a480e028be50c
+      .agents/skills/yomiyasu/references/domains/tech.md: sha256:bfad82a08de02325b1e7339f23aef4ac29892b39babdb74a7ad7c3f1c6a36131
+      .agents/skills/yomiyasu/references/gemini-syntax.md: sha256:79adf4e308bc1a14bd89275c8cbb885542761d9ca93c6b2e7161cbf0bfc7eb23
+      .agents/skills/yomiyasu/references/slop-catalog.md: sha256:c146f079b67ac277396564b97acd9d718975f70b01d67697494be2c4ea10c5c2
+      .agents/skills/yomiyasu/scripts/markdown_visibility.py: sha256:e0cc01d3263d65f4c1ccddb939972b4098fdd1453fc0de8fc7e8e25522ec5c8d
+      .agents/skills/yomiyasu/scripts/yomiyasu_diff.py: sha256:a0b8a810f041cf7df9dd5742f1bcee6b79dc6243803d948db28bef9251475453
+      .agents/skills/yomiyasu/scripts/yomiyasu_lint.py: sha256:998ceb5b7f46a78b8d11cb4ef229f639b3b095e830f16cec80ea3a89c4755ec4
+    content_hash: sha256:9b83645d602786a57e928528f92258fe9d8cf0ff9def6ded7512c929fd307daf
+    declared_license: MIT
 deployments:
   - kind: project-relative
     target: opencode
@@ -148,6 +187,141 @@ deployments:
       - halby24/agent-common-package
     active_owner: halby24/agent-common-package
     content_hash: sha256:fa96b7f462130fef94554ed1d56cdeeb5758b2c0139eb734c87976b7ee01f05d
+  - kind: project-relative
+    target: opencode
+    value: .agents/skills/yomiyasu
+    runtime: null
+    scope: project
+    owners:
+      - nanaism/yomiyasu
+    active_owner: nanaism/yomiyasu
+    content_hash: null
+  - kind: project-relative
+    target: opencode
+    value: .agents/skills/yomiyasu/.claude-plugin/marketplace.json
+    runtime: null
+    scope: project
+    owners:
+      - nanaism/yomiyasu
+    active_owner: nanaism/yomiyasu
+    content_hash: sha256:660bdbfd3b13609da593a3159ec6a800f59defdba271d17c4ce31fbc66957465
+  - kind: project-relative
+    target: opencode
+    value: .agents/skills/yomiyasu/.claude-plugin/plugin.json
+    runtime: null
+    scope: project
+    owners:
+      - nanaism/yomiyasu
+    active_owner: nanaism/yomiyasu
+    content_hash: sha256:3c1ef0a53d6654c71d55e3a360a4f591e30bc2ba23dd43efb26cd4e723d4dc64
+  - kind: project-relative
+    target: opencode
+    value: .agents/skills/yomiyasu/LICENSE
+    runtime: null
+    scope: project
+    owners:
+      - nanaism/yomiyasu
+    active_owner: nanaism/yomiyasu
+    content_hash: sha256:79d802f15bc8caf67f1a83c1bdbe214ccb41a0a0275f9046b329b89c65ee1fca
+  - kind: project-relative
+    target: opencode
+    value: .agents/skills/yomiyasu/SKILL.md
+    runtime: null
+    scope: project
+    owners:
+      - nanaism/yomiyasu
+    active_owner: nanaism/yomiyasu
+    content_hash: sha256:d588769e4e4550d6ba1317cc5730aec7c93b99069e7b1aa54514f272ab8ec3af
+  - kind: project-relative
+    target: opencode
+    value: .agents/skills/yomiyasu/UNICODE-LICENSE.txt
+    runtime: null
+    scope: project
+    owners:
+      - nanaism/yomiyasu
+    active_owner: nanaism/yomiyasu
+    content_hash: sha256:e7a93b009565cfce55919a381437ac4db883e9da2126fa28b91d12732bc53d96
+  - kind: project-relative
+    target: opencode
+    value: .agents/skills/yomiyasu/assets/algo-artis.png
+    runtime: null
+    scope: project
+    owners:
+      - nanaism/yomiyasu
+    active_owner: nanaism/yomiyasu
+    content_hash: sha256:57c7c204d43d0e2873e3b61221db3ac4ba75a7ce29271a6deaeb3bd09f26fdec
+  - kind: project-relative
+    target: opencode
+    value: .agents/skills/yomiyasu/references/domains/business.md
+    runtime: null
+    scope: project
+    owners:
+      - nanaism/yomiyasu
+    active_owner: nanaism/yomiyasu
+    content_hash: sha256:b11d338a12205c94cd3d1d48478a11a3bb336596313c1c23a7c6e5e59932faa4
+  - kind: project-relative
+    target: opencode
+    value: .agents/skills/yomiyasu/references/domains/essay.md
+    runtime: null
+    scope: project
+    owners:
+      - nanaism/yomiyasu
+    active_owner: nanaism/yomiyasu
+    content_hash: sha256:aaec0eae3da65e7f12e529d96a1e172fa727614cd8abe240140a480e028be50c
+  - kind: project-relative
+    target: opencode
+    value: .agents/skills/yomiyasu/references/domains/tech.md
+    runtime: null
+    scope: project
+    owners:
+      - nanaism/yomiyasu
+    active_owner: nanaism/yomiyasu
+    content_hash: sha256:bfad82a08de02325b1e7339f23aef4ac29892b39babdb74a7ad7c3f1c6a36131
+  - kind: project-relative
+    target: opencode
+    value: .agents/skills/yomiyasu/references/gemini-syntax.md
+    runtime: null
+    scope: project
+    owners:
+      - nanaism/yomiyasu
+    active_owner: nanaism/yomiyasu
+    content_hash: sha256:79adf4e308bc1a14bd89275c8cbb885542761d9ca93c6b2e7161cbf0bfc7eb23
+  - kind: project-relative
+    target: opencode
+    value: .agents/skills/yomiyasu/references/slop-catalog.md
+    runtime: null
+    scope: project
+    owners:
+      - nanaism/yomiyasu
+    active_owner: nanaism/yomiyasu
+    content_hash: sha256:c146f079b67ac277396564b97acd9d718975f70b01d67697494be2c4ea10c5c2
+  - kind: project-relative
+    target: opencode
+    value: .agents/skills/yomiyasu/scripts/markdown_visibility.py
+    runtime: null
+    scope: project
+    owners:
+      - nanaism/yomiyasu
+    active_owner: nanaism/yomiyasu
+    content_hash: sha256:e0cc01d3263d65f4c1ccddb939972b4098fdd1453fc0de8fc7e8e25522ec5c8d
+  - kind: project-relative
+    target: opencode
+    value: .agents/skills/yomiyasu/scripts/yomiyasu_diff.py
+    runtime: null
+    scope: project
+    owners:
+      - nanaism/yomiyasu
+    active_owner: nanaism/yomiyasu
+    content_hash: sha256:a0b8a810f041cf7df9dd5742f1bcee6b79dc6243803d948db28bef9251475453
+  - kind: project-relative
+    target: opencode
+    value: .agents/skills/yomiyasu/scripts/yomiyasu_lint.py
+    runtime: null
+    scope: project
+    owners:
+      - nanaism/yomiyasu
+    active_owner: nanaism/yomiyasu
+    content_hash: sha256:998ceb5b7f46a78b8d11cb4ef229f639b3b095e830f16cec80ea3a89c4755ec4
   - kind: project-relative
     target: opencode
     value: .opencode/agents/advisor.md
