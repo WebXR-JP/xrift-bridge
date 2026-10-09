@@ -23,6 +23,7 @@ import {
   type StreamId,
 } from "bridge-protocol";
 import { resolveLimits, type BridgeLimits } from "./config.ts";
+import { AuthorizedSession, type AuthorizedSessionHost } from "./authorized-session.ts";
 import { defaultLogger, logEvent, type BridgeLogger } from "./log.ts";
 import { systemClock, type Clock } from "./clock.ts";
 import { AcceptanceController, PairingRateLimiter, PairingStore } from "./pairing.ts";
@@ -268,20 +269,14 @@ interface ConnectionState {
   expiryTimer: ReturnType<typeof setTimeout> | null;
   forceTimer: ReturnType<typeof setTimeout> | null;
   operatorDisconnected: boolean;
-  expectedSeq: Map<StreamId, number>;
-  latestSeq: Map<StreamId, number>;
+  /**
+   * 認可後の受信セッション。`authorized` と有無は一致する。
+   * 会計・採番・業務分岐の所有者はセッションであり、送出・切断の実体はサーバ側に置く。
+   */
+  session: AuthorizedSession | null;
   controlQueue: string[];
   responseQueue: Array<{ readonly text: string; readonly bytes: number }>;
   queuedBytes: number;
-  // クレジット会計（接続単位・全 reliable ストリーム共通）。
-  // C（件数容量）= limits.maxReliableQueueMessages に対し、
-  // 常に (grantedTotal − consumedTotal) + heldCount <= C を保つ。
-  // grantedTotal: 累積付与件数、consumedTotal: 消費済み受信件数、
-  // heldCount: 受信済みで容量未解放の件数（未送信・送信中の応答を含む）。
-  grantedTotal: number;
-  consumedTotal: number;
-  heldCount: number;
-  advertisedLimit: number;
   flushScheduled: boolean;
 }
 
@@ -571,15 +566,10 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
       expiryTimer: null,
       forceTimer: null,
       operatorDisconnected: false,
-      expectedSeq: new Map(),
-      latestSeq: new Map(),
+      session: null,
       controlQueue: [],
       responseQueue: [],
       queuedBytes: 0,
-      grantedTotal: 0,
-      consumedTotal: 0,
-      heldCount: 0,
-      advertisedLimit: 0,
       flushScheduled: false,
     };
     connections.add(state);
@@ -702,7 +692,7 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
         }
         if (isResponse) {
           state.queuedBytes = Math.max(0, state.queuedBytes - responseBytes);
-          releaseHold(state);
+          state.session?.releaseHold();
         }
       });
     } catch {
@@ -719,44 +709,50 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
     }
   }
 
-  /** 追加付与可能量。C − U − (G − R)。 */
-  function grantableCredit(state: ConnectionState): number {
-    return (
-      limits.maxReliableQueueMessages - state.heldCount - (state.grantedTotal - state.consumedTotal)
-    );
-  }
-
   /**
-   * 解放で生じた余裕を追加付与する。
+   * 認可後セッションが使う小さな操作を束ねる。`ConnectionState` 全体は渡さない。
    *
-   * 付与は累積件数の通知で行い、残数の上書きはしない。同じ `limit` の再通知は
-   * 権利を増やさない。送信callback完了はクライアントのアプリ処理完了を保証
-   * せず、ここで保証するのはブリッジ内の受付・応答保持容量のみである。
+   * 送出・切断・記録の実体はサーバ側に置き、セッションは状態と判定・会計だけを持つ。
+   * `latestMailbox` は接続をまたぐサーバ全体の記録であり、所有は移さず
+   * 書き込み操作だけを渡す。
    */
-  function advertiseCredit(state: ConnectionState): void {
-    if (state.phase !== "authorized") return;
-    const extra = grantableCredit(state);
-    if (extra <= 0) return;
-    state.grantedTotal += extra;
-    state.advertisedLimit = state.grantedTotal;
-    try {
-      state.socket.send(
-        stringifyBridgeMessage({
-          v: PROTOCOL_VERSION,
-          type: "credit",
-          sessionId: state.sessionId ?? "",
-          limit: state.grantedTotal,
-        }),
-      );
-    } catch {
-      terminateWithClose(state, 1011, "send failure");
-    }
-  }
-
-  /** 予約していた容量を解放し、生じた余裕を追加付与する。 */
-  function releaseHold(state: ConnectionState): void {
-    state.heldCount -= 1;
-    advertiseCredit(state);
+  function createAuthorizedHost(state: ConnectionState): AuthorizedSessionHost {
+    return {
+      isAuthorized: () => state.phase === "authorized",
+      enqueueResponse: (text) => enqueueResponse(state, text),
+      sendError: (code, message, requestId?, direct = false) =>
+        sendError(state, code, message, requestId, direct),
+      terminate: (code, message, requestId) => terminateConnection(state, code, message, requestId),
+      terminateWithClose: (code, reason) => terminateWithClose(state, code, reason),
+      notifyCredit: (limit) => {
+        if (state.phase !== "authorized") return;
+        try {
+          state.socket.send(
+            stringifyBridgeMessage({
+              v: PROTOCOL_VERSION,
+              type: "credit",
+              sessionId: state.sessionId ?? "",
+              limit,
+            }),
+          );
+        } catch {
+          terminateWithClose(state, 1011, "send failure");
+        }
+      },
+      recordEcho: () => {
+        stats.echoCount += 1;
+      },
+      recordCommand: () => {
+        stats.commandCount += 1;
+      },
+      recordLatestDropped: () => {
+        stats.latestDropped += 1;
+      },
+      storeLatest: (streamId, seq, payload: unknown) => {
+        stats.latestStored += 1;
+        latestMailbox.set(streamId, { seq, payload });
+      },
+    };
   }
 
   function sendError(
@@ -913,6 +909,7 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
     state.queuedBytes = 0;
     state.phase = "closed";
     state.sessionId = null;
+    state.session = null;
     connections.delete(state);
   }
 
@@ -949,19 +946,11 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
     state.responseQueue.length = 0;
     state.queuedBytes = 0;
     state.sessionId = null;
-    state.expectedSeq.clear();
-    state.latestSeq.clear();
+    // 認可ごとのセッションを捨てることで会計・採番も作り直しになる。
+    state.session = null;
     logger(logEvent("operator_disconnect", { connectionId: state.id }));
     closeSocket(state, 1008, OPERATOR_DISCONNECT_REASON);
     armForceClose(state);
-  }
-
-  /** ストリーム数上限を確認する。 */
-  function checkStream(state: ConnectionState, streamId: StreamId): boolean {
-    if (state.expectedSeq.has(streamId)) return true;
-    if (state.expectedSeq.size >= limits.maxStreamsPerConnection) return false;
-    state.expectedSeq.set(streamId, 0);
-    return true;
   }
 
   function handleMessage(state: ConnectionState, text: string | null): void {
@@ -988,7 +977,14 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
       return;
     }
     if (state.phase === "authorized") {
-      handleAuthorizedMessage(state, parsed);
+      // 認可判定は接続状態の所有者（サーバ）が行い、本体はセッションに委ねる。
+      // `authorized` とセッションの有無は一致する。不一致は到達しない。
+      const session = state.session;
+      if (session === null) {
+        sendError(state, "SESSION_MISMATCH", "セッション識別子が一致しない。", undefined);
+        return;
+      }
+      session.handleAuthorizedMessage(parsed);
       return;
     }
     handlePairingMessage(state, parsed);
@@ -1114,145 +1110,6 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
     terminateConnection(state, result.status, message, undefined);
   }
 
-  function handleAuthorizedMessage(
-    state: ConnectionState,
-    parsed: ReturnType<typeof parseBridgeMessage>,
-  ): void {
-    switch (parsed.type) {
-      case "pairing_start":
-        // 認可後の開始は受け付けず終了する（開始は接続につき1回）。
-        terminateConnection(
-          state,
-          "DUPLICATE_PAIRING_START",
-          "開始メッセージは接続につき1回である。",
-          undefined,
-        );
-        return;
-      case "pairing_pending":
-      case "auth_ok":
-      case "echo_response":
-      case "command_response":
-      case "credit":
-      case "error":
-        // 逆方向の型は受け付けない。
-        sendError(state, "UNEXPECTED_DIRECTION", "その方向のメッセージは受け付けない。");
-        return;
-      case "echo":
-      case "command_request":
-      case "data":
-        break;
-      default:
-        sendError(state, "UNKNOWN_TYPE", "未知のメッセージ種別である。");
-        return;
-    }
-    if (parsed.sessionId !== state.sessionId) {
-      sendError(state, "SESSION_MISMATCH", "セッション識別子が一致しない。", undefined);
-      return;
-    }
-    const requestId = parsed.type === "data" ? undefined : parsed.requestId;
-    // クレジットは接続単位・全 reliable ストリーム共通で、受け付けた reliable に
-    // 対し1件消費する。latest・認証・制御フレームは消費しない。
-    const consumesCredit = parsed.kind === "reliable";
-    if (consumesCredit) {
-      if (state.consumedTotal >= state.grantedTotal) {
-        // 付与超過の reliable は業務処理前に明示拒否して切断する。
-        sendError(
-          state,
-          "CREDIT_EXHAUSTED",
-          "クレジットの付与を超えた reliable である。",
-          requestId,
-          true,
-        );
-        terminateWithClose(state, 1011, "credit exhausted");
-        return;
-      }
-      state.consumedTotal += 1;
-      state.heldCount += 1;
-    }
-    if (!checkStream(state, parsed.streamId)) {
-      // 消費済みの予約は解放し、枠を永久に失わせない。
-      if (consumesCredit) releaseHold(state);
-      sendError(state, "STREAM_LIMIT", "ストリーム数が上限を超えた。", requestId);
-      return;
-    }
-    if (parsed.kind === "reliable") {
-      const expected = state.expectedSeq.get(parsed.streamId) ?? 0;
-      if (parsed.seq !== expected) {
-        // 消費済みの予約は解放し、枠を永久に失わせない。
-        releaseHold(state);
-        sendError(state, "UNEXPECTED_SEQ", "ストリーム内連番が期待値と一致しない。", requestId);
-        return;
-      }
-      state.expectedSeq.set(parsed.streamId, expected + 1);
-    } else {
-      const last = state.latestSeq.get(parsed.streamId) ?? -1;
-      if (parsed.seq < last) {
-        stats.latestDropped += 1;
-        return;
-      }
-      state.latestSeq.set(parsed.streamId, parsed.seq);
-    }
-    if (parsed.type === "echo") {
-      stats.echoCount += 1;
-      const text = stringifyBridgeMessage({
-        v: PROTOCOL_VERSION,
-        type: "echo_response",
-        sessionId: state.sessionId ?? "",
-        streamId: parsed.streamId,
-        kind: "reliable",
-        seq: parsed.seq,
-        requestId: parsed.requestId,
-        payload: parsed.payload,
-      });
-      if (!enqueueResponse(state, text)) {
-        // 消費済みの予約を解放したうえで切断し、枠を永久に失わせない。
-        state.heldCount -= 1;
-        sendError(state, "QUEUE_FULL", "応答キューが満杯である。", parsed.requestId, true);
-        terminateWithClose(state, 1011, "queue full");
-      }
-      return;
-    }
-    if (parsed.type === "command_request") {
-      stats.commandCount += 1;
-      const known = parsed.command === "ping";
-      const text = stringifyBridgeMessage(
-        known
-          ? {
-              v: PROTOCOL_VERSION,
-              type: "command_response",
-              sessionId: state.sessionId ?? "",
-              requestId: parsed.requestId,
-              ok: true,
-              result: "pong",
-            }
-          : {
-              v: PROTOCOL_VERSION,
-              type: "command_response",
-              sessionId: state.sessionId ?? "",
-              requestId: parsed.requestId,
-              ok: false,
-              error: {
-                code: "UNKNOWN_COMMAND",
-                message: `未知のコマンドである: ${parsed.command}`,
-              },
-            },
-      );
-      if (!enqueueResponse(state, text)) {
-        // 消費済みの予約を解放したうえで切断し、枠を永久に失わせない。
-        state.heldCount -= 1;
-        sendError(state, "QUEUE_FULL", "応答キューが満杯である。", parsed.requestId, true);
-        terminateWithClose(state, 1011, "queue full");
-      }
-      return;
-    }
-    stats.latestStored += 1;
-    latestMailbox.set(parsed.streamId, { seq: parsed.seq, payload: parsed.payload });
-    // ADR: `data(kind: reliable)` が latest 受信箱へ入る扱いは別項目として残し、
-    // ここでは直さない。応答を保持しない reliable は予約を即時解放し、
-    // 枠を失わせない（解放で生じた余裕は追加付与する）。
-    if (consumesCredit) releaseHold(state);
-  }
-
   function findById(connectionId: string): ConnectionState | undefined {
     for (const state of connections) {
       if (state.id === connectionId) return state;
@@ -1338,15 +1195,20 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
           return { status: "CONNECTION_GONE" };
         }
         // 認可成立時のみ session を発行し、初期 credit 会計を設定する。
+        // 会計・採番の実体は認可ごとの新規セッションが持つ。送出・切断の実体はサーバ側のままである。
         state.phase = "authorized";
         state.sessionId = randomUUID();
+        state.session = new AuthorizedSession(
+          state.sessionId,
+          limits.initialCreditWindow,
+          limits,
+          createAuthorizedHost(state),
+        );
         state.pendingRequestId = null;
         if (state.expiryTimer !== null) {
           clearTimeout(state.expiryTimer);
           state.expiryTimer = null;
         }
-        state.grantedTotal = limits.initialCreditWindow;
-        state.advertisedLimit = limits.initialCreditWindow;
         stats.pairingSuccess += 1;
         logger(logEvent("pairing_approved", { connectionId: state.id }));
         emitManagement({ kind: "pending-ended", requestId, reason: "approved" });
