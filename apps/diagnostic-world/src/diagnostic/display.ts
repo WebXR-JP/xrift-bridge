@@ -2,18 +2,19 @@
  * 診断状態の表示文言。React・R3F に依存しない。
  *
  * DOM パネルと in-world 操作盤で文言をそろえるための共用部品である。
- * 秘密値・業務 payload は扱わない。入力が秘密値を含む場合も、そのまま
- * 表示文言に混ぜず、呼び出し側で渡さないこと。
+ * 比較コード本文・業務 payload は扱いに注意する。比較コードは画面表示の
+ * ために整形するだけで、証拠 JSON・ログ・永続保存には混ぜないこと。
  *
  * @packageDocumentation
  */
+import { formatPairingCode as formatPairingCodeCanonical, isPairingCode } from "bridge-protocol";
 import type { DiagnosticSnapshot } from "./session.ts";
 
 /** 表示1行の上限文字数。3D 板の幅に収めるための目安である。 */
 export const DISPLAY_LINE_LIMIT = 48;
 
 /**
- * 表示1行を指定幅に収める。秘密値の有無で切り詰め方は変えない。
+ * 表示1行を指定幅に収める。
  *
  * @param line - 表示する1行。
  * @returns 上限を超える場合は末尾を省略記号に置き換えた行。
@@ -31,9 +32,26 @@ export function truncateLine(line: string): string {
  */
 export function phaseLabel(phase: string): string {
   if (phase === "connecting") return "接続中";
+  if (phase === "awaiting_approval") return "承認待ち";
   if (phase === "authorized") return "認証済み";
   if (phase === "ended") return "終了（切断・失敗）";
   return "未接続";
+}
+
+/**
+ * 比較コードを区切り表示にそろえる。ASCII 数字 6 文字は3桁区切りにする。
+ *
+ * 画面表示のための整形であり、証拠・ログに残す用途ではない。
+ *
+ * @param code - ブリッジが発行した比較コード。
+ * @returns 6 桁数字の場合は `123 456` 形式、それ以外はそのまま。
+ */
+export function formatPairingCode(code: string): string {
+  // 書式判定は正本（`bridge-protocol`）に寄せる。不正時は入力をそのまま返す。
+  if (!isPairingCode(code)) {
+    return code;
+  }
+  return formatPairingCodeCanonical(code);
 }
 
 /**
@@ -64,10 +82,10 @@ export function pingLabel(ping: DiagnosticSnapshot["ping"]): string {
 }
 
 /**
- * 快照を表示用の行にそろえる。秘密値・payload 本文は含まない。
+ * 快照を表示用の行にそろえる。比較コード本文は画面表示の行にのみ含める。
  *
- * 呼び出し側は秘密値をこの関数に渡さないこと。快照自体が秘密値を
- * 持たない設計であり、ここでの整形で混入の余地を作らない。
+ * 呼び出し側はこの戻り値を証拠・ログ・永続保存に混ぜないこと。証拠用の
+ * JSON は `toResultJson` を使い、比較コード本文を含めない。
  *
  * @param snapshot - 診断の写し。
  * @param portError - ポート入力の誤り。無い場合は `null`。
@@ -81,6 +99,9 @@ export function formatDiagnosticLines(
     `接続先 ${snapshot.endpoint}`,
     `進行 ${phaseLabel(snapshot.phase)} / 接続 ${snapshot.connectionState}`,
   ];
+  if (snapshot.pairing !== null) {
+    lines.push(`比較コード ${formatPairingCode(snapshot.pairing.code)} 照合して承認`);
+  }
   if (snapshot.lastError === null) {
     lines.push("エラーなし");
   } else {

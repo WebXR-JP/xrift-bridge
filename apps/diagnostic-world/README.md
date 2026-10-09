@@ -12,8 +12,8 @@ XRift とローカルブリッジの接続を診断するワールド（開発�
   操作盤は XRift 公開 API（`Interactable`・`TextInput`・3Dメッシュ＋文字板）で作り、
   通信・集計は UI 非依存の `DiagnosticSession` を共用する。
 - `src/components/DiagnosticBoard.tsx` — 本番の in-world 操作盤。接続先表示・
-  ポート変更・秘密入力による明示的接続・認証状態と失敗理由・echo／ping・明示的切断・
-  環境とビルド識別子の表示を持つ。秘密値を表示状態・同期状態に保持しない。
+  ポート変更・接続開始と比較コード表示・認証状態と失敗理由・echo／ping・明示的切断・
+  環境とビルド識別子の表示を持つ。比較コードは表示のみに使い、表示状態・同期状態・証拠に保持しない。
 - `src/dev.tsx` — 開発エントリ（`XRiftProvider`＋`DevEnvironment`＋診断パネル）。
   文字入力は既定実装（console・`window.prompt`）ではなく、自ツリーの対話板で
   受け付ける開発用アダプター（ログなし・覆い隠し）を注入する。
@@ -35,15 +35,15 @@ XRift とローカルブリッジの接続を診断するワールド（開発�
 # 1) ブリッジ（明示開発モードで開発 Origin を許可）
 vp run bridge#build
 node apps/bridge/dist/index.mjs --dev --origin http://localhost:5173
-# 別端末で pair <origin> を入力し、秘密値を受け取る
-#   pair http://localhost:5173
+# ブリッジの対話命令で受付を開く
+#   accept open
 
 # 2) 診断ワールド（http://localhost:5173 固定。競合時は失敗し退避しない）
 vp run diagnostic-world#dev
 ```
 
-ブラウザで `http://localhost:5173` を開き、パネルで秘密値を入力して接続する。
-接続待機は診断用に 120 秒。期限切れ・使用済みの秘密値は新規ペアリングを発行すること。
+ブラウザで `http://localhost:5173` を開き、パネルで接続を開始するとワールド画面に比較コードが表示される。ブリッジの `pending` 表示と照合し、ブリッジ側で `approve <requestId> <code>` を入力して承認する。
+接続待機は診断用に 120 秒。期限切れ・拒否・切断後は新規に接続を開始すること（再接続の自動承認はしない）。
 
 ## 検証
 

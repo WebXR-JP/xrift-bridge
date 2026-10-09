@@ -2,8 +2,9 @@
  * ブリッジ接続の診断手順。React・R3F に依存しない。
  *
  * 接続は `connect` 呼び出し時のみ行い、自動接続・自動再接続・自動再送は
- * しない。ペアリング秘密値は呼び出し引数として受け渡すだけで保持せず、
- * 診断結果（`toResultJson`）には秘密値と業務 payload を含めない。
+ * しない。秘密値は扱わない（ワールド側で入力・保持しない）。ブリッジが
+ * 発行する比較コードは画面表示のみに使い、診断結果（`toResultJson`）・
+ * ログ・永続保存には含めない（表示した事実のみ残してよい）。
  *
  * @packageDocumentation
  */
@@ -11,13 +12,14 @@ import {
   WorldClientError,
   createWorldClient,
   type ConnectionState,
+  type PairingInfo,
   type Unsubscribe,
   type WorldClient,
   type WorldClientEvent,
 } from "world-client";
 import type { DiagnosticBuildInfo } from "../build-info.ts";
 
-/** 診断画面の接続待機（ミリ秒）。初回 LNA 許可操作を妨げないよう長めにする。 */
+/** 診断画面の接続待機（ミリ秒）。比較コード受信前の待機上限である。 */
 export const DIAGNOSTIC_CONNECT_TIMEOUT_MS = 120_000;
 
 /** echo 往復に使うストリーム。 */
@@ -27,7 +29,19 @@ export const ECHO_STREAM_ID = "diag-echo";
 export const PING_STREAM_ID = "diag-ping";
 
 /** 診断のおおまかな進行。 */
-export type DiagnosticPhase = "idle" | "connecting" | "authorized" | "ended";
+export type DiagnosticPhase = "idle" | "connecting" | "awaiting_approval" | "authorized" | "ended";
+
+/** 比較コードの表示用情報。画面表示のみに使い、証拠には含めない。 */
+export interface PairingView {
+  /** 再利用しないペアリング要求の識別子。 */
+  readonly requestId: string;
+  /** ASCII 数字 6 文字の比較コード。 */
+  readonly code: string;
+  /** 承認期限の絶対時刻。 */
+  readonly expiresAt: number;
+  /** 承認までの残り時間（ミリ秒）。 */
+  readonly expiresInMs: number;
+}
 
 /** 診断実行時の自ウィンドウの環境。呼び出し側が一度だけ採取する。 */
 export interface DiagnosticEnv {
@@ -67,12 +81,14 @@ export interface PingView {
   readonly error?: DiagnosticErrorView;
 }
 
-/** 購読者へ配る診断の写し。秘密値・payload 本文は含まない。 */
+/** 購読者へ配る診断の写し。秘密値・payload 本文・比較コード本文は含まない。 */
 export interface DiagnosticSnapshot {
   readonly phase: DiagnosticPhase;
   readonly connectionState: ConnectionState;
   readonly endpoint: string;
   readonly connectTimeoutMs: number;
+  /** 表示中の比較コード。画面表示のみに使う。証拠には含めない。 */
+  readonly pairing: PairingView | null;
   readonly lastError: DiagnosticErrorView | null;
   readonly echo: EchoView;
   readonly ping: PingView;
@@ -100,23 +116,104 @@ export interface DiagnosticSessionOptions {
  * @returns 次の一手。該当なしは `undefined`。
  */
 export function errorHint(code: string): string | undefined {
-  if (code === "UNAUTHORIZED" || code === "AUTH_TIMEOUT" || code === "INVALID_SECRET") {
+  if (code === "PAIRING_REJECTED") {
     return (
-      "秘密値が無効・期限切れ（120秒）・使用済みの可能性。" +
-      "bridge CLI の `pair` で新規ペアリングを発行して再試行すること。"
+      "bridge 側で承認が拒否された。新規に接続開始して表示された比較コードを照合し、" +
+      "bridge 側で承認し直すこと。"
+    );
+  }
+  if (code === "PAIRING_EXPIRED") {
+    return "比較コードの承認期限が切れた。新規に接続開始して新しい比較コードで再試行すること。";
+  }
+  if (code === "ACCEPTANCE_CLOSED") {
+    return "bridge の受付が閉じている。bridge の状態を確認してから再試行すること。";
+  }
+  if (code === "PENDING_FULL") {
+    return "bridge の承認待ちが満杯である。不要な承認待ちを片付けてから新規に接続開始すること。";
+  }
+  if (code === "CODE_GENERATION_FAILED") {
+    return "比較コードの生成に失敗した。bridge の状態を確認して新規に接続開始すること。";
+  }
+  if (code === "PAIRING_START_TIMEOUT") {
+    return "開始待ちが時間切れになった。bridge との接続を確認して新規に接続開始すること。";
+  }
+  if (code === "DUPLICATE_PAIRING_START") {
+    return "開始要求が重複した。接続状態を確認し、必要なら取消してから再試行すること。";
+  }
+  if (code === "APPROVAL_RESPONSE_TIMEOUT") {
+    return (
+      "承認応答が時間内に届かない。bridge 側の表示と診断側の比較コードを照合し、" +
+      "期限切れなら新規に接続開始すること。"
     );
   }
   if (code === "CONNECT_TIMEOUT") {
     return (
-      "120秒待機でも認証が完了しない。初回 LNA 許可ダイアログの応答、" +
-      "bridge の起動と Origin 許可（`--dev --origin`）を確認し、新規ペアリングで再試行すること。"
+      "120秒待機でも比較コードが届かない。bridge の起動と Origin 許可（`--dev --origin`）を" +
+      "確認し、再試行すること。"
     );
   }
+  if (code === "CONNECT_CANCELLED") {
+    return "接続試行を取り消した。再試行する場合は新規に接続開始すること。";
+  }
+  if (code === "ORIGIN_RATE_LIMITED") {
+    return "同一 Origin からの接続試行が多い。少し待ってから新規に接続開始すること。";
+  }
+  if (code === "TOTAL_RATE_LIMITED") {
+    return "bridge への接続試行が多い。少し待ってから新規に接続開始すること。";
+  }
+  if (code === "TOO_MANY_CONNECTIONS") {
+    return "bridge の同時接続数が上限である。不要な接続を閉じてから再試行すること。";
+  }
+  if (code === "TOO_MANY_UNAUTHORIZED") {
+    return "bridge の未認可接続数が上限である。承認待ちを片付けてから再試行すること。";
+  }
+  if (code === "NOT_PENDING") {
+    return "対象の承認待ちが見当たらない。既に失効・処理済みのため新規に接続開始すること。";
+  }
+  if (code === "INVALID_CODE") {
+    return "比較コードの書式が正しくない。正しい6桁で承認し直すか、新規に接続開始すること。";
+  }
+  if (code === "CODE_MISMATCH") {
+    return "比較コードが一致しない。両画面のコードを照合し、正しいコードで承認し直すこと。";
+  }
+  if (code === "CONNECTION_GONE") {
+    return "承認対象の接続が失われた。新規に接続開始すること。";
+  }
+  if (code === "CONNECTION_CHECK_ERROR") {
+    return "接続確認に失敗した。bridge の状態を確認して新規に接続開始すること。";
+  }
+  if (code === "UNEXPECTED_SEQ") {
+    return "ストリーム内連番が期待値と一致しない。新規に接続開始すること（自動再接続はしない）。";
+  }
+  if (code === "UNEXPECTED_DIRECTION") {
+    return "想定外の方向のメッセージである。bridge と診断の版を確認して新規に接続開始すること。";
+  }
+  if (code === "SESSION_MISMATCH") {
+    return "セッション識別子が一致しない。新規に接続開始すること。";
+  }
+  if (code === "CREDIT_EXHAUSTED") {
+    return "クレジットの付与を超えた送信である。新規に接続開始すること。";
+  }
+  if (code === "STREAM_LIMIT") {
+    return "ストリーム数が上限を超えた。不要なストリームを減らすか、新規に接続開始すること。";
+  }
+  if (code === "QUEUE_FULL") {
+    return "bridge の応答キューが満杯である。少し待ってから新規に接続開始すること。";
+  }
+  if (code === "INVALID_JSON" || code === "INVALID_MESSAGE") {
+    return "受信メッセージが不正である。版の一致を確認して新規に接続開始すること。";
+  }
+  if (code === "VERSION_MISMATCH") {
+    return "protocol の版が一致しない。bridge と診断の版を確認してそろえること。";
+  }
+  if (code === "UNKNOWN_TYPE") {
+    return "未知のメッセージ種別である。bridge と診断の版を確認して新規に接続開始すること。";
+  }
   if (code === "CONNECTION_CLOSED" || code.startsWith("CLOSED_")) {
-    return "切断された。再接続には再ペアリングが必要である（自動再接続はしない）。";
+    return "切断された。再接続には新規の接続開始が必要である（自動再接続はしない）。";
   }
   if (code === "NOT_AUTHORIZED" || code === "NOT_CONNECTED") {
-    return "未認証のため操作できない。先に接続・認証すること。";
+    return "未認証のため操作できない。先に接続開始し、比較コードを承認して認証すること。";
   }
   return undefined;
 }
@@ -129,6 +226,7 @@ export class DiagnosticSession {
   private readonly listeners = new Set<DiagnosticListener>();
   private readonly unsubscribeClient: Unsubscribe;
   private phase: DiagnosticPhase = "idle";
+  private pairing: PairingView | null = null;
   private lastError: DiagnosticErrorView | null = null;
   private echo: EchoView = { status: "none" };
   private ping: PingView = { status: "none" };
@@ -150,13 +248,14 @@ export class DiagnosticSession {
     });
   }
 
-  /** 現在の診断の写しを返す。秘密値・payload 本文は含まない。 */
+  /** 現在の診断の写しを返す。秘密値・payload 本文・比較コード本文は含まない。 */
   getSnapshot(): DiagnosticSnapshot {
     return {
       phase: this.phase,
       connectionState: this.client.getState(),
       endpoint: this.client.endpoint,
       connectTimeoutMs: DIAGNOSTIC_CONNECT_TIMEOUT_MS,
+      pairing: this.pairing === null ? null : { ...this.pairing },
       lastError: this.lastError,
       echo: { ...this.echo },
       ping: { ...this.ping },
@@ -180,30 +279,31 @@ export class DiagnosticSession {
   }
 
   /**
-   * 接続してペアリング秘密値で認証する。ボタン操作時のみ呼ぶこと。
+   * 接続を開始し、比較コードの発行を受けて人間の承認成立を待つ。ボタン操作時のみ呼ぶこと。
    *
-   * 秘密値は引数として受け渡すだけで保持しない。接続待機は診断用に
-   * 120秒を指定する（bridge の認証待ち制限・秘密値の有効期限は変えない）。
+   * 秘密値は扱わない。接続待機の 120 秒は比較コード受信前の待機上限である
+   * （bridge の認証待ち制限は変えない）。承認成立で成功する。
    *
-   * @param secret - ペアリング秘密値。空にできない。
-   * @throws `WorldClientError` — 進行中・認証済み・破棄済み・秘密値不正の場合。
+   * @returns 認可成立時に解決する。
+   * @throws `WorldClientError` — 進行中・認証済み・破棄済みの場合。
    */
-  async connect(secret: string): Promise<void> {
+  async connect(): Promise<void> {
     this.assertActive();
-    if (this.phase === "connecting") {
+    if (this.phase === "connecting" || this.phase === "awaiting_approval") {
       throw new WorldClientError("SESSION_BUSY", "接続処理が進行中である。");
     }
     if (this.phase === "authorized") {
       throw new WorldClientError("ALREADY_CONNECTED", "既に認証済みである。");
     }
     this.phase = "connecting";
+    this.pairing = null;
     this.lastError = null;
     this.echo = { status: "none" };
     this.ping = { status: "none" };
     this.closeInitiated = false;
     this.emit();
     try {
-      await this.client.connect(secret, { timeoutMs: DIAGNOSTIC_CONNECT_TIMEOUT_MS });
+      await this.client.connect({ timeoutMs: DIAGNOSTIC_CONNECT_TIMEOUT_MS });
     } catch (error) {
       if (this.disposed) throw error;
       this.phase = "ended";
@@ -211,6 +311,20 @@ export class DiagnosticSession {
       this.emit();
       throw error;
     }
+  }
+
+  /**
+   * 待機中の接続試行を取り消す。承認待ちの表示は消える。
+   *
+   * @throws `WorldClientError` — 破棄済み・待機中でない場合。
+   */
+  cancel(): void {
+    this.assertActive();
+    if (this.phase !== "connecting" && this.phase !== "awaiting_approval") {
+      throw new WorldClientError("NOT_CONNECTING", "取り消せる接続試行がない。");
+    }
+    this.closeInitiated = true;
+    this.client.close(1000, "diagnostic cancel");
   }
 
   /**
@@ -290,7 +404,9 @@ export class DiagnosticSession {
   }
 
   /**
-   * 証拠用の診断結果を返す。秘密値・業務 payload を含まない。
+   * 証拠用の診断結果を返す。秘密値・業務 payload・比較コード本文を含まない。
+   *
+   * 比較コードは画面表示のみとし、ここには表示した事実だけを残す。
    *
    * @returns 保存・コピー用の JSON 値。
    */
@@ -302,6 +418,7 @@ export class DiagnosticSession {
       phase: snapshot.phase,
       connectionState: snapshot.connectionState,
       connectTimeoutMs: snapshot.connectTimeoutMs,
+      pairingShown: snapshot.pairing !== null,
       lastError: snapshot.lastError,
       echo: snapshot.echo,
       ping: snapshot.ping,
@@ -325,13 +442,24 @@ export class DiagnosticSession {
 
   private handleClientEvent(event: WorldClientEvent): void {
     if (this.disposed) return;
+    if (event.kind === "pairing") {
+      // ADR: 比較コードは画面表示用に写しへ載せるだけにし、証拠・ログへ混ぜない。
+      // 購読遅れの UI も `getSnapshot()` で表示できるよう保存を先に行う。
+      this.pairing = toPairingView(event.pairing);
+      this.emit();
+      return;
+    }
     if (event.kind === "state") {
       if (event.state === "authorized") {
         this.phase = "authorized";
-      } else if (event.state === "connecting" || event.state === "authenticating") {
+        this.pairing = null;
+      } else if (event.state === "awaiting_approval") {
+        this.phase = "awaiting_approval";
+      } else if (event.state === "connecting" || event.state === "requesting_pairing") {
         if (this.phase === "idle" || this.phase === "ended") this.phase = "connecting";
       } else if (event.state === "closed") {
         this.phase = "ended";
+        this.pairing = null;
       }
       this.emit();
       return;
@@ -351,6 +479,7 @@ export class DiagnosticSession {
       };
     }
     this.phase = "ended";
+    this.pairing = null;
     this.emit();
   }
 
@@ -368,7 +497,23 @@ export class DiagnosticSession {
 }
 
 /**
- * 失敗を診断表示用の形にそろえる。秘密値・payload は取り込まない。
+ * クライアントの比較コード通知を診断の表示用にそろえる。
+ *
+ * @param pairing - クライアントの比較コード。表示なしは `null`。
+ * @returns 診断の写しに載せる表示用情報。表示なしは `null`。
+ */
+function toPairingView(pairing: PairingInfo | null): PairingView | null {
+  if (pairing === null) return null;
+  return {
+    requestId: pairing.requestId,
+    code: pairing.code,
+    expiresAt: pairing.expiresAt,
+    expiresInMs: pairing.expiresInMs,
+  };
+}
+
+/**
+ * 失敗を診断表示用の形にそろえる。秘密値・payload・比較コード本文は取り込まない。
  *
  * @param error - 捕捉した失敗。
  * @returns 表示用の内容。

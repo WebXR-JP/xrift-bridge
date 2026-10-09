@@ -4,8 +4,9 @@
  *
  * 既定実装（request を console に出し `window.prompt` を使う）の代わりに、
  * 開発文書の自ツリー内の対話板で入力を受け付ける。request・入力値の console
- * 出力はしない。入力欄は `password` で覆い隠し、確定・取消の直後に入力状態を
- * 消す。完了値は呼び出し元の `onSubmit` に直接渡し、ここに残さない。
+ * 出力はしない。確定・取消の直後に入力状態を消す。完了値は呼び出し元の
+ * `onSubmit` に直接渡し、ここに残さない。秘密値の入力には使わず、覆い隠し
+ * 表示はしない（ポート番号などの通常入力用である）。
  *
  * @packageDocumentation
  */
@@ -56,7 +57,7 @@ export function useDevTextInputAdapter(): DevTextInputAdapter {
     event.preventDefault();
     const request = pendingRef.current;
     const input = value;
-    // ADR: 秘密値かもしれない完了値は状態に残さず、引数のまま渡して消す。
+    // ADR: 完了値は状態に残さず、引数のまま渡して消す。
     clear();
     request?.onSubmit(input);
   };
@@ -76,7 +77,7 @@ export function useDevTextInputAdapter(): DevTextInputAdapter {
           <p className="diag-textinput-title">{pending.placeholder ?? "文字を入力"}</p>
           <input
             className="diag-textinput-field"
-            type="password"
+            type="text"
             autoComplete="off"
             maxLength={pending.maxLength}
             value={value}

@@ -50,9 +50,12 @@
   width: 90px;
 }
 
-.diag-secret {
-  flex: 1;
-  min-width: 0;
+.diag-pairing-code {
+  margin-top: 8px;
+  font-family: monospace;
+  font-size: 28px;
+  letter-spacing: 4px;
+  text-align: center;
 }
 
 .diag-panel input,

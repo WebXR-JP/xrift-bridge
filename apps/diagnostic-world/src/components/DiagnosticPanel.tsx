@@ -4,17 +4,16 @@
  * 本番 `./World` の in-world 操作盤（`DiagnosticBoard`）とは別物であり、
  * 開発エントリ専用である。ホスト DOM の探索・改変はしない。自ツリーの要素と、
  * 呼び出し側から渡る自ウィンドウの環境値・ビルド識別子だけを使う。接続は
- * ボタン操作時のみ行い、自動接続・自動再接続はしない。秘密値は入力直後に消し、
- * 永続保存・URL・console・証拠に残さない。コピーは手動選択式とし、clipboard API・
- * storage API は使わない。
+ * ボタン操作時のみ行い、自動接続・自動再接続はしない。比較コードは画面表示
+ * のみに使い、永続保存・URL・console・証拠に残さない。コピーは手動選択式とし、
+ * clipboard API・storage API は使わない。
  *
  * @packageDocumentation
  */
 import { useMemo, useRef, useState } from "react";
-import type { FormEvent } from "react";
 import { useDiagnosticSession } from "../diagnostic/useDiagnosticSession.ts";
 import { DEFAULT_PORT, buildEndpoint, parsePortInput } from "../diagnostic/endpoint.ts";
-import { echoLabel, phaseLabel, pingLabel } from "../diagnostic/display.ts";
+import { echoLabel, formatPairingCode, phaseLabel, pingLabel } from "../diagnostic/display.ts";
 import type { DiagnosticEnv } from "../diagnostic/session.ts";
 import type { DiagnosticSession } from "../diagnostic/session.ts";
 import type { DiagnosticBuildInfo } from "../build-info.ts";
@@ -29,7 +28,7 @@ export interface DiagnosticPanelRootProps {
 }
 
 /**
- * 診断パネル全体。接続先・秘密値・操作・結果を自ツリーに描く。
+ * 診断パネル全体。接続先・接続開始・比較コード・操作・結果を自ツリーに描く。
  *
  * @param props - 自ウィンドウの環境とビルド識別子。
  * @returns パネル要素。
@@ -75,7 +74,7 @@ export function DiagnosticPanelRoot(props: DiagnosticPanelRootProps): React.JSX.
         editable={snapshot.phase === "idle" || snapshot.phase === "ended"}
         onPortChange={handlePortChange}
       />
-      <ConnectSection session={session} phase={snapshot.phase} />
+      <ConnectSection session={session} snapshot={snapshot} />
       <StatusSection snapshot={snapshot} />
       <ProbeSection session={session} snapshot={snapshot} />
       <EnvSection snapshot={snapshot} />
@@ -119,65 +118,69 @@ function EndpointSection(props: {
   );
 }
 
-/** 秘密値の入力と接続・切断。 */
+/** 接続開始・比較コード表示・取消・切断。 */
 function ConnectSection(props: {
   readonly session: DiagnosticSession | null;
-  readonly phase: string;
+  readonly snapshot: ReturnType<DiagnosticSession["getSnapshot"]>;
 }): React.JSX.Element {
-  const [secret, setSecret] = useState<string>("");
+  const { session, snapshot } = props;
+  const busy = snapshot.phase === "connecting" || snapshot.phase === "awaiting_approval";
+  const connected = snapshot.phase === "authorized";
 
-  const handleSubmit = (event: FormEvent): void => {
-    event.preventDefault();
-    const value = secret;
-    // ADR: 秘密値は送信直後に入力欄から消す。以降は非同期処理の引数としてのみ
-    // 渡り、state・写し・証拠・ログに残さない。
-    setSecret("");
-    if (value === "" || props.session === null) return;
-    void props.session.connect(value).catch(() => {
+  const handleConnect = (): void => {
+    if (session === null) return;
+    void session.connect().catch(() => {
       // 失敗は写し（lastError）に反映済み。未処理拒否にしないためのみ catch する。
     });
   };
 
-  const busy = props.phase === "connecting";
-  const connected = props.phase === "authorized";
+  const handleCancel = (): void => {
+    try {
+      session?.cancel();
+    } catch {
+      // 待機なし・破棄済みの操作は写しに反映しないため無視する。
+    }
+  };
+
   return (
     <section className="diag-section" aria-label="接続操作">
       <h2>接続</h2>
-      <form onSubmit={handleSubmit}>
-        <label className="diag-row">
-          ペアリング秘密値
-          <input
-            className="diag-secret"
-            type="password"
-            autoComplete="off"
-            value={secret}
-            disabled={props.session === null || busy || connected}
-            onChange={(event) => {
-              setSecret(event.target.value);
-            }}
-          />
-        </label>
-        <div className="diag-buttons">
-          <button
-            type="submit"
-            disabled={props.session === null || busy || connected || secret === ""}
-          >
-            接続
-          </button>
-          <button
-            type="button"
-            disabled={props.session === null || (!busy && !connected)}
-            onClick={() => {
-              props.session?.disconnect();
-            }}
-          >
-            切断
-          </button>
+      <div className="diag-buttons">
+        <button
+          type="button"
+          disabled={session === null || busy || connected}
+          onClick={handleConnect}
+        >
+          接続開始
+        </button>
+        <button type="button" disabled={session === null || !busy} onClick={handleCancel}>
+          取消
+        </button>
+        <button
+          type="button"
+          disabled={session === null || (!busy && !connected)}
+          onClick={() => {
+            session?.disconnect();
+          }}
+        >
+          切断
+        </button>
+      </div>
+      {snapshot.pairing === null ? (
+        <p className="diag-note">
+          接続開始で比較コードを表示する。bridge 側の表示と照合して承認すること。
+        </p>
+      ) : (
+        <div className="diag-pairing" role="status" aria-label="比較コード">
+          <p className="diag-pairing-code">{formatPairingCode(snapshot.pairing.code)}</p>
+          <p className="diag-note">
+            bridge 側の表示と照合して承認すること。承認待ちのまま放置しないこと。
+          </p>
         </div>
-      </form>
+      )}
       <p className="diag-note">
-        接続待機は診断用に120秒。秘密値の有効期限（120秒）と bridge
-        の認証待ち制限は変えない。期限切れは新規ペアリングを依頼すること。
+        接続待機（比較コード受信前）は診断用に120秒。bridge
+        の認証待ち制限は変えない。期限切れは新規に接続開始すること。
       </p>
     </section>
   );
@@ -278,7 +281,7 @@ function EnvSection(props: {
   );
 }
 
-/** 診断結果の保存・コピー。秘密値・payload は含まない。 */
+/** 診断結果の保存・コピー。比較コード・payload は含まない。 */
 function ResultSection(props: { readonly session: DiagnosticSession | null }): React.JSX.Element {
   const areaRef = useRef<HTMLTextAreaElement>(null);
   if (props.session === null) {
@@ -297,7 +300,7 @@ function ResultBody(props: {
   readonly session: DiagnosticSession;
   readonly areaRef: React.RefObject<HTMLTextAreaElement | null>;
 }): React.JSX.Element {
-  // 親の再描画（写しの更新）ごとに最新の証拠 JSON を作る。秘密値・payload は含まない。
+  // 親の再描画（写しの更新）ごとに最新の証拠 JSON を作る。比較コード本文・payload は含まない。
   const liveText = JSON.stringify(props.session.toResultJson(), null, 2);
 
   const handleSelectAll = (): void => {
@@ -321,7 +324,9 @@ function ResultBody(props: {
   return (
     <section className="diag-section" aria-label="診断結果">
       <h2>診断結果</h2>
-      <p className="diag-note">秘密値・業務 payload を含まない。手動で選択してコピーすること。</p>
+      <p className="diag-note">
+        比較コード・業務 payload を含まない。手動で選択してコピーすること。
+      </p>
       <textarea ref={props.areaRef} className="diag-result" readOnly rows={12} value={liveText} />
       <div className="diag-buttons">
         <button type="button" onClick={handleSelectAll}>
@@ -342,8 +347,8 @@ function NotesSection(): React.JSX.Element {
       <h2>注意</h2>
       <ul className="diag-list">
         <li>接続はボタン操作時のみ。自動接続・自動再ペアリングはしない。</li>
-        <li>秘密値は入力後に消し、永続保存・URL・console・証拠に残さない。</li>
-        <li>期限切れ・使用済み・失敗上限の後は新規ペアリングを依頼すること。</li>
+        <li>比較コードは画面表示のみとし、永続保存・URL・console・証拠に残さない。</li>
+        <li>期限切れ・拒否・失敗上限の後は新規に接続開始すること。</li>
         <li>
           開発許可なしでは localhost Origin が拒否される（bridge は `--dev --origin
           http://localhost:5173` で起動すること）。

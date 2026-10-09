@@ -1,8 +1,9 @@
 // @vitest-environment happy-dom
 /**
- * 開発用の文字入力の対話板の検証。入力・取消と秘密値の扱いを確かめる。
+ * 開発用の文字入力の対話板の検証。入力・取消の扱いを確かめる。
  *
  * 自ツリーの要素だけを使い、console・`window.prompt` を使わない。
+ * 秘密値の入力には使わないため、覆い隠し表示はしない。
  */
 import { afterEach, expect, test, vi } from "vite-plus/test";
 import { act } from "react";
@@ -65,8 +66,8 @@ test("入力の決定で完了値を渡し、対話板を閉じる", () => {
   const onSubmitCalls: string[] = [];
   act(() => {
     adapter?.implementation.requestTextInput({
-      id: "diag-secret-input",
-      placeholder: "ペアリング秘密値を入力",
+      id: "diag-port-input",
+      placeholder: "ポート番号を入力",
       onSubmit: (value) => {
         onSubmitCalls.push(value);
       },
@@ -74,16 +75,16 @@ test("入力の決定で完了値を渡し、対話板を閉じる", () => {
   });
   const field = findField();
   expect(field).not.toBeNull();
-  // 覆い隠しであり、初期値に秘密が入らない。
-  expect(field?.type).toBe("password");
+  // 通常入力のため覆い隠しにせず、初期値を持たない。
+  expect(field?.type).toBe("text");
   expect(field?.value).toBe("");
-  typeInto(field as HTMLInputElement, "s3cr3t-value");
+  typeInto(field as HTMLInputElement, "3101");
   act(() => {
     document
       .querySelector(".diag-textinput-box")
       ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
   });
-  expect(onSubmitCalls).toEqual(["s3cr3t-value"]);
+  expect(onSubmitCalls).toEqual(["3101"]);
   expect(findField()).toBeNull();
 });
 
@@ -93,7 +94,7 @@ test("取消では完了を渡さず、対話板を閉じる", () => {
   let cancelled = 0;
   act(() => {
     adapter?.implementation.requestTextInput({
-      id: "diag-secret-input",
+      id: "diag-port-input",
       onSubmit: () => {
         submitted += 1;
       },
@@ -104,7 +105,7 @@ test("取消では完了を渡さず、対話板を閉じる", () => {
   });
   const field = findField();
   expect(field).not.toBeNull();
-  typeInto(field as HTMLInputElement, "s3cr3t-value");
+  typeInto(field as HTMLInputElement, "3101");
   act(() => {
     document
       .querySelector(".diag-textinput-box")
@@ -123,21 +124,21 @@ test("入力の要求・完了で console に出さない", () => {
   });
   act(() => {
     adapter?.implementation.requestTextInput({
-      id: "diag-secret-input",
-      placeholder: "ペアリング秘密値を入力",
+      id: "diag-port-input",
+      placeholder: "ポート番号を入力",
       onSubmit: () => {},
     });
   });
   const field = findField();
   expect(field).not.toBeNull();
-  typeInto(field as HTMLInputElement, "s3cr3t-value");
+  typeInto(field as HTMLInputElement, "3101");
   act(() => {
     document
       .querySelector(".diag-textinput-box")
       ?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
   });
   expect(spy).not.toHaveBeenCalled();
-  expect(JSON.stringify(logged)).not.toContain("s3cr3t-value");
+  expect(JSON.stringify(logged)).not.toContain("3101");
 });
 
 test("要求の置き換えでは旧要求を取り消す", () => {

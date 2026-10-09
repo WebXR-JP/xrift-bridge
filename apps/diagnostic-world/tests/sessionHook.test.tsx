@@ -111,7 +111,7 @@ test("アンマウントで接続・購読を終え、以降の操作を拒否�
   unsubscribe();
   expect(isDisposed(latest)).toBe(true);
   expect(notified).toBe(0);
-  await expect(latest.connect("s3cr3t-value")).rejects.toMatchObject({ code: "DISPOSED" });
+  await expect(latest.connect()).rejects.toMatchObject({ code: "DISPOSED" });
 });
 
 test("接続先の変更で旧個体を破棄して新規生成する", () => {

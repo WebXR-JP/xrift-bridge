@@ -2,12 +2,13 @@
  * in-world 診断操作盤。本番 `./World` に含める3D内の操作・表示である。
  *
  * XRift 公開 API だけを使う。ボタンは `Interactable`、入力は `TextInput`
- * （ポート変更は値表示可の `TextInput`、秘密値は値を持たせない `TextInput`）、
- * 表示は3Dメッシュ＋自前 `CanvasTexture` の文字板で行う。
- * 新しい Canvas・Physics・XRiftProvider は生成しない。DOM 要素の探索・
- * 追加・変更もしない（表示用 canvas は文書に追加しない分離物である）。
- * 診断の通信・集計は `DiagnosticSession` を共用し、UI 層に通信を持たない。
- * 秘密値・診断状態を `useInstanceState` 等で他利用者へ同期しない。
+ * （ポート変更は値表示可の `TextInput`）、表示は3Dメッシュ＋自前
+ * `CanvasTexture` の文字板で行う。秘密値の入力は持たず、接続開始→比較コード
+ * の表示→取消・切断の操作だけを持つ。新しい Canvas・Physics・XRiftProvider は
+ * 生成しない。DOM 要素の探索・追加・変更もしない（表示用 canvas は文書に
+ * 追加しない分離物である）。診断の通信・集計は `DiagnosticSession` を共用し、
+ * UI 層に通信を持たない。比較コード・診断状態を `useInstanceState` 等で
+ * 他利用者へ同期しない。
  *
  * @packageDocumentation
  */
@@ -45,7 +46,7 @@ const BUTTONS_X = [-1.36, -0.68, 0, 0.68, 1.36] as const;
  */
 function phaseColor(phase: string | null): string {
   if (phase === "authorized") return "#69db7c";
-  if (phase === "connecting") return "#ffd43b";
+  if (phase === "connecting" || phase === "awaiting_approval") return "#ffd43b";
   if (phase === "ended") return "#ff6b6b";
   return "#9aa0a6";
 }
@@ -180,7 +181,7 @@ function ButtonLabel(props: {
 }
 
 /**
- * in-world 診断操作盤。接続先・秘密入力・状態・応答確認・切断を3D内に置く。
+ * in-world 診断操作盤。接続先・接続開始・比較コード表示・応答確認・取消・切断を3D内に置く。
  *
  * @param props - 自ウィンドウの環境とビルド識別子。
  * @returns 操作盤の要素。Canvas・Physics・Provider は生成しない。
@@ -201,17 +202,14 @@ export function DiagnosticBoard(props: DiagnosticBoardProps): React.JSX.Element 
     [snapshot, portError],
   );
 
-  // ADR: 秘密値は完了値のまま `connect` に渡すだけにし、盤の表示状態・
-  // 同期状態に保持しない。`TextInput` にも `value` を渡さない。
-  const handleSecretSubmit = useCallback(
-    (value: string) => {
-      if (session === null || value === "") return;
-      void session.connect(value).catch(() => {
-        // 失敗は快照（lastError）に反映済み。未処理拒否にしないためのみ catch する。
-      });
-    },
-    [session],
-  );
+  // ADR: 比較コードは表示のみに使い、盤の同期状態・証拠に残さない。
+  // 接続開始は引数なしで行い、承認待ちの取消は `cancel` で閉じる。
+  const handleConnect = useCallback(() => {
+    if (session === null) return;
+    void session.connect().catch(() => {
+      // 失敗は快照（lastError）に反映済み。未処理拒否にしないためのみ catch する。
+    });
+  }, [session]);
 
   const handlePortSubmit = useCallback((value: string) => {
     const parsed = parsePortInput(value);
@@ -238,13 +236,24 @@ export function DiagnosticBoard(props: DiagnosticBoardProps): React.JSX.Element 
   }, [session]);
 
   const handleDisconnect = useCallback(() => {
-    session?.disconnect();
-  }, [session]);
+    if (session === null || snapshot === null) return;
+    try {
+      if (snapshot.phase === "connecting" || snapshot.phase === "awaiting_approval") {
+        session.cancel();
+      } else {
+        session.disconnect();
+      }
+    } catch {
+      // 待機なし・破棄済みの操作は快照に反映しないため無視する。
+    }
+  }, [session, snapshot]);
 
   const ready = session !== null && snapshot !== null;
-  const busy = phase === "connecting";
+  const busy = phase === "connecting" || phase === "awaiting_approval";
   const connected = phase === "authorized";
   const operable = connected && ready;
+  const cancelLabel = busy ? "取消" : "切断";
+  const cancelText = busy ? "接続試行を取消" : "切断";
 
   return (
     <group position={[BOARD_POSITION[0], BOARD_POSITION[1], BOARD_POSITION[2]]}>
@@ -257,12 +266,11 @@ export function DiagnosticBoard(props: DiagnosticBoardProps): React.JSX.Element 
         <meshStandardMaterial color={phaseColor(phase)} />
       </mesh>
       <StatusPlane lines={lines} />
-      <TextInput
-        id="diag-secret-input"
-        placeholder="ペアリング秘密値を入力"
-        onSubmit={handleSecretSubmit}
-        interactionText="秘密値を入力して接続"
-        disabled={!ready || busy || connected}
+      <Interactable
+        id="diag-connect"
+        onInteract={handleConnect}
+        interactionText="接続開始（比較コード表示）"
+        enabled={ready && !busy && !connected}
       >
         <group position={[BUTTONS_X[0], -1.25, 0.06]}>
           <mesh>
@@ -271,7 +279,7 @@ export function DiagnosticBoard(props: DiagnosticBoardProps): React.JSX.Element 
           </mesh>
           <ButtonLabel text="接続" background="#e8e8e8" />
         </group>
-      </TextInput>
+      </Interactable>
       <TextInput
         id="diag-port-input"
         placeholder="ポート番号を入力"
@@ -320,7 +328,7 @@ export function DiagnosticBoard(props: DiagnosticBoardProps): React.JSX.Element 
       <Interactable
         id="diag-disconnect"
         onInteract={handleDisconnect}
-        interactionText="切断"
+        interactionText={cancelText}
         enabled={ready && (busy || connected)}
       >
         <group position={[BUTTONS_X[4], -1.25, 0.06]}>
@@ -328,7 +336,7 @@ export function DiagnosticBoard(props: DiagnosticBoardProps): React.JSX.Element 
             <boxGeometry args={[0.62, 0.3, 0.08]} />
             <meshStandardMaterial color="#ff6b6b" />
           </mesh>
-          <ButtonLabel text="切断" background="#ff6b6b" />
+          <ButtonLabel text={cancelLabel} background="#ff6b6b" />
         </group>
       </Interactable>
     </group>
