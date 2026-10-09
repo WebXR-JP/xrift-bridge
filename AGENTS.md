@@ -30,3 +30,4 @@ TypeScriptメインで作る
 ## 参照
 
 - [XRiftのSDKドキュメント](https://docs.xrift.net/sdk/overview)
+  - 特にワールド上でのスクリプト関係エラーはxrift.jsonのpermissionsで解決することがある
