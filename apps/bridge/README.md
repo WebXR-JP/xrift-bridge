@@ -2,7 +2,7 @@
 
 PC上で動作するワールドとローカルをつなぐ中継アプリ。
 
-仕様の正本は `../../design/bridge-v0.md`、`../../design/protocol-v0.md`、`../../design/verification-v0.md` とする。
+形状の正本は `../../packages/bridge-protocol/src/messages.ts` の型、境界検証は `../../packages/bridge-protocol/src/validate.ts`、動的契約はテストとする。上位の設計判断は `../../design/bridge.md`・`../../design/protocol.md`、検証計画は `../../docs/verification/bridge.md` を見る。制限値の正本は `src/config.ts` の `DEFAULT_LIMITS` とする。
 
 ## 起動
 
@@ -23,22 +23,13 @@ node dist/index.mjs --dev --origin http://localhost:5173
 
 ## B1 の計測用暫定値
 
-有限・設定可能な値であり、合意値ではない。`design/verification-v0.md` の
-試作条件へ転記し測定結果から合意することが前提である。定義場所は
-`src/config.ts` の `DEFAULT_LIMITS` で、`BridgeOptions.limits` で上書きできる。
+有限・設定可能な値であり、合意値・性能保証ではない。値の正本は
+`src/config.ts` の `DEFAULT_LIMITS` とし、ここでは値を再掲しない。
+`BridgeOptions.limits` で上書きでき、計測時の実効設定は証拠に記録する。
+検証計画は `../../docs/verification/bridge.md` を見る。
 
-| 項目                       | 既定値  | 意味                                     |
-| -------------------------- | ------- | ---------------------------------------- |
-| `maxMessageBytes`          | 65536   | 1メッセージの最大長（UTF-8 JSON バイト） |
-| `maxReliableQueueMessages` | 256     | 接続ごとの reliable 未応答キュー上限件数 |
-| `maxReliableQueueBytes`    | 1048576 | 同上・上限バイト数（UTF-8 バイトで計上） |
-| `maxStreamsPerConnection`  | 32      | 接続ごとのストリーム数上限               |
-| `initialCreditWindow`      | 32      | 認証直後の reliable 送信クレジット       |
-| `authTimeoutMs`            | 10000   | 認証待ちの制限時間（ミリ秒）             |
-| `maxAuthAttempts`          | 3       | 接続ごとの認証試行上限                   |
-| `maxConnections`           | 8       | 同時接続数上限                           |
-
-固定値（設計で確定）: ペアリング秘密値は128ビット乱数・120秒有効・一度だけ・許可 Origin 紐付け。
+固定値: ペアリング秘密値の乱数長・有効期間は `src/config.ts` の
+`PAIRING_SECRET_BYTES`・`PAIRING_TTL_MS` を見る。一度だけ使い、許可 Origin に紐付ける。
 
 ## Development
 

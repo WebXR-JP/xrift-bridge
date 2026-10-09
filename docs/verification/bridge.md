@@ -1,4 +1,4 @@
-# 検証
+# ブリッジ検証計画
 
 本番経路と審査で必要な証拠、配送と負荷の試作条件、計測項目、判定後の分岐を決める。
 
@@ -7,11 +7,12 @@
 - 実際の `location.origin`、`isSecureContext`、フレーム構造を記録する。
 - ブラウザと OS の正確な版、実行ビルドの識別子を記録する。
 - 本番 XRift からの昇格、認証、双方向の応答確認の成功を記録する。
-- 実際の宛先に対応する `allowedDomains` とコード規則の宣言、審査結果を記録する。
+- 実際の宛先に対応する `allowedDomains` とコード規則の宣言、審査結果を記録する。宣言要件の正本は[ブリッジ接続](../../design/bridge.md)である。
+- 実測のコンテンツセキュリティポリシー（`connect-src` など）を記録する。これまでの実測値は `connect-src * blob: data:` である。
 - ローカル網アクセスの初回許可、拒否、権限取消後の挙動を記録する。
-- 不許可 `Origin`、欠落 `Origin`、再利用と期限切れの秘密値の拒否を記録する。
+- 不許可 `Origin`、欠落 `Origin`、再利用と期限切れの秘密値の拒否を記録する。要件の正本は[プロトコル](../../design/protocol.md)である。
 - 待ち受けが LAN 側に露出していない証拠を残す。
-- 対象は XRift が動くパソコン版であり、必須は Google Chrome のみである。他は最善努力とする。対応表は観測結果で作る。
+- 対応表は観測結果で作る。対象ブラウザの必須範囲（必須は Google Chrome のみ）の判断は[ブリッジ接続](../../design/bridge.md)を正本とする。
 - ブラウザの安全機能を無効化した成功は合格にしない。
 
 ## 配送と負荷の試作条件
@@ -19,12 +20,13 @@
 確定事項である。試作は本番経路の成立後に行う。結果は検証待ちであり、全組み合わせは不要で代表点から段階的に負荷を上げる。
 
 - センサー周期: 60Hz、120Hz、240Hz、負荷探索として 1000Hz。
-- 送達物の大きさ: 64バイト、512バイト、4KiB。
+- 送達物の大きさ: 64バイト、512バイト、4KiB。いずれも UTF-8 にシリアライズした JSON 全体のバイト数とし、`maxMessageBytes` と同じ尺で測る。
 - ストリーム数: 1本、8本、32本。
 - センサー、小コマンド、模擬 AI 逐次出力の混在。
 - 受信消費の停止、主スレッド停滞、切断、ブリッジ再起動、バックグラウンドタブを含める。
+- 周期・ストリーム数の発生方法は未定義である（診断ワールドに生成処理はなく、誰がその周期・本数を出すかは未確定）。大きさ以外の単位も未確認である。これらは UNRESOLVED とし、推測で埋めない。
 - 待ち行列容量等の初期暫定値は下表のとおりである。これらは B1 到達性確認のための計測用の暫定値であり、利用者の合意値・性能保証ではない。測定結果から合意する（合意待ち）。
-- ペアリングの120秒・128ビット以上・一度だけ使用可能は確定要件であり、下表の暫定値とは区別する。
+- ペアリングの120秒・128ビット以上・一度だけ使用可能は確定要件であり、下表の暫定値とは区別する。正本は[プロトコル](../../design/protocol.md)である。
 
 | 項目                              |             B1 暫定値 |
 | --------------------------------- | --------------------: |
@@ -40,10 +42,9 @@
 | world-client `maxPendingReliable` |                 128件 |
 | world-client `maxMessageBytes`    |          65,536 bytes |
 
-- 実装定義元と設定方法は以下である。サーバ側の8値は `apps/bridge/src/config.ts` の `DEFAULT_LIMITS` に置き、`BridgeOptions.limits` で上書きする。world-client の3値は `packages/world-client/src/client.ts` の既定値に置き、`WorldClientOptions` の `requestTimeoutMs`・`maxPendingReliable`・`maxMessageBytes` で上書きする。ペアリングの確定値は `apps/bridge/src/config.ts` の `PAIRING_TTL_MS`・`PAIRING_SECRET_BYTES` に置く。件数容量 `maxReliableQueueMessages` は [プロトコル](protocol.md) の流れ制御における `C`（`reliable` 受付の件数容量で応答保持を含む）に対応し、初期付与 `initialCreditWindow` はその範囲内の累積付与である。
-- 意味論は [プロトコル](protocol.md) の流れ制御に従う。表値はその `C`・初期付与の暫定値である。
-- 待機 bound の意味論は[プロトコル](protocol.md)の流れ制御に従う。件数上限だけの待機を「総バイト上限も実装済み」と記述しない。
-- 試験で上書きした実効値の例は以下のとおりである（1つの試験が複数項目を上書きする場合を含む）。`apps/bridge/tests/server.test.ts` では受信上限の各試験で `maxMessageBytes: 256`、切断通知の試験で `maxMessageBytes: 512`、応答保持の下限試験で `maxReliableQueueBytes: 16`、応答バイト境界の2条件で `maxReliableQueueBytes: 実測応答バイト数` と `同−1` を使い分け、`maxStreamsPerConnection: 2`、`maxConnections: 2`（接続枠の回復試験では `1`）、`authTimeoutMs: 100`、`maxAuthAttempts: 1` を各試験で用いた。付与超過試験では `initialCreditWindow: 2`・`maxReliableQueueMessages: 4`、連番誤りの枠試験では `1`・`2`、初期付与超過の設定検証では `5`・`4` を用いた。小容量の回帰試験（10往復）では `initialCreditWindow: 2`、`maxReliableQueueMessages: 4` で進行継続・切断なし・容量不足なし（`apps/bridge/src/server.ts` の `BridgeStats`／`getStats()` による `queueFull === 0`）を確認する。容量解放ごとの累積 `limit` 通知と応答の対応は、3周期試験（`initialCreditWindow: 2`・`maxReliableQueueMessages: 4`）と送信完了保留試験（`initialCreditWindow: 2`・`maxReliableQueueMessages: 2`）で確認する。`packages/world-client/tests/client.test.ts` では `maxPendingReliable: 1` を用いた。
+- 値の正本はコードである。サーバ側の8値は `apps/bridge/src/config.ts` の `DEFAULT_LIMITS` に置き、`BridgeOptions.limits` で上書きする。world-client の3値は `packages/world-client/src/client.ts` の既定値に置き、`WorldClientOptions` の `requestTimeoutMs`・`maxPendingReliable`・`maxMessageBytes` で上書きする。ペアリングの確定値は `apps/bridge/src/config.ts` の `PAIRING_TTL_MS`・`PAIRING_SECRET_BYTES` に置く。件数容量 `maxReliableQueueMessages` は[プロトコル](../../design/protocol.md)の流れ制御における `C`（`reliable` 受付の件数容量で応答保持を含む）に対応し、初期付与 `initialCreditWindow` はその範囲内の累積付与である。
+- 意味論は[プロトコル](../../design/protocol.md)の流れ制御に従う。表値はその `C`・初期付与の暫定値である。
+- 待機 bound の意味論は[プロトコル](../../design/protocol.md)の流れ制御に従う。件数上限だけの待機を「総バイト上限も実装済み」と記述しない。
 
 ## 計測項目
 
@@ -78,10 +79,14 @@
 | 性能不足                   | まず待ち行列、処理、描画の問題を切り分け、輸送手段が原因の場合だけ WebTransport 比較へ進む                                                                         |
 | 同一実行基盤を信頼できない | ローカル権限や隔離構造の再設計へ進む                                                                                                                               |
 
+- 設計判断の正本は Design 側である。ループバック限定の待ち受け追加の許可範囲と WebTransport 比較へ進む条件は[ブリッジ接続](../../design/bridge.md)、審査の宣言要件は[ブリッジ接続](../../design/bridge.md)、同一実行基盤の前提は[プロトコル](../../design/protocol.md)を正本とする。
+
 ## 区分表
 
-| 区分     | 内容                                                                                                                                                         | 参照先                                                                                       |
-| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------- |
-| 確定     | 実行条件、試作条件、計測項目、証拠の残し方、判定後の分岐                                                                                                     | 本文                                                                                         |
-| 検証待ち | 条件ごとの観測結果、対応表、時計差の誤差評価                                                                                                                 | 本文の項目に記録する                                                                         |
-| 合意待ち | 必須対応範囲の将来拡大、ストリームごとの欠落許容、必要鮮度・遅延・負荷範囲、待ち行列容量等の初期暫定値、開発モードの許可Originの列挙場所、配送順決定の具体則 | 観測後に合意し [ブリッジ接続 v0](bridge-v0.md) と [プロトコル v0](protocol-v0.md) に反映する |
+| 区分     | 内容                                                                                                                                                         | 参照先                                                                                                 |
+| -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
+| 確定     | 実行手順、試作条件、計測項目、証拠の残し方、判定後の分岐                                                                                                     | 本文                                                                                                   |
+| 検証待ち | 条件ごとの観測結果、対応表、時計差の誤差評価                                                                                                                 | 本文の項目に記録する                                                                                   |
+| 合意待ち | 必須対応範囲の将来拡大、ストリームごとの欠落許容、必要鮮度・遅延・負荷範囲、待ち行列容量等の初期暫定値、開発モードの許可Originの列挙場所、配送順決定の具体則 | 観測後に合意し[ブリッジ接続](../../design/bridge.md)と[プロトコル](../../design/protocol.md)に反映する |
+
+- 対象ブラウザの必須範囲（必須は Google Chrome のみ）の判断自体は[ブリッジ接続](../../design/bridge.md)の確定事項であり、この表の「確定」は手順の確定を指す。

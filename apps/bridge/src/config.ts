@@ -1,10 +1,10 @@
 /**
  * ブリッジの有限・設定可能な暫定値。
  *
- * ここに置く数値は B1 到達性確認のための**計測用の暫定値**であり、合意値では
- * ない。`design/verification-v0.md` の試作条件へ転記し、測定結果から合意する
- * ことが設計上の前提である（合意待ち）。すべての値は `BridgeOptions.limits`
- * で上書きできる。
+ * 値の正本は下の `DEFAULT_LIMITS` とする。B1 到達性確認のための計測用暫定値
+ * であり、合意値・性能保証ではない。計測時の実効設定は証拠に記録する。
+ * 検証計画は `docs/verification/bridge.md` を見る。すべての値は
+ * `BridgeOptions.limits` で上書きできる。
  *
  * @packageDocumentation
  */

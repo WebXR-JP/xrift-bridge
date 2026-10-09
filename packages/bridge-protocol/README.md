@@ -2,7 +2,7 @@
 
 ワールド内クライアントとブリッジ間で共有するプロトコル定義。
 
-仕様の正本は `../../design/bridge-v0.md`、`../../design/protocol-v0.md`、`../../design/verification-v0.md` とする。
+形状の正本は `src/messages.ts` の型、境界検証は `src/validate.ts`、動的契約はテストとする。上位の設計判断は `../../design/protocol.md`・`../../design/bridge.md`、検証計画は `../../docs/verification/bridge.md` を見る。
 
 ## Development
 

@@ -2,8 +2,7 @@
 
 XRift とローカルブリッジの接続を診断するワールド（開発検証用、C1）。
 
-仕様の正本は `../../design/bridge-v0.md`、`../../design/protocol-v0.md`、
-`../../design/verification-v0.md` とする。ここでは契約の複製を作らない。
+上位の設計判断は `../../design/bridge.md`・`../../design/protocol.md`、検証計画は `../../docs/verification/bridge.md` を見る。ここでは契約の複製を作らない。
 
 ## 構成
 

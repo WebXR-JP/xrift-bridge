@@ -479,6 +479,23 @@ function echoMessage(sessionId: string, streamId: string, seq: number, requestId
   });
 }
 
+function dataLatestMessage(
+  sessionId: string,
+  streamId: string,
+  seq: number,
+  payload: unknown,
+): string {
+  return JSON.stringify({
+    v: PROTOCOL_VERSION,
+    type: "data",
+    sessionId,
+    streamId,
+    kind: "latest",
+    seq,
+    payload,
+  });
+}
+
 test("world-client が接続・認証・reliable echo を往復できる", async () => {
   const captured = capture();
   const server = await startServer({}, captured);
@@ -1479,4 +1496,179 @@ test("初期付与が件数容量を超える設定は拒否する", async () =>
       limits: { initialCreditWindow: 5, maxReliableQueueMessages: 4 },
     }),
   ).rejects.toThrow(RangeError);
+});
+
+test("latest と制御フレームはクレジットを消費せず reliable の送信枠を減らさない", async () => {
+  // 初期 2・上限 4。latest を3件と逆方向の制御フレームを送っても、
+  // reliable の付与枠は減らず2件を通常どおり送れて切断も明示エラーも起きない。
+  // latest や制御が消費側に数えられていたら合計が初期付与を超え CREDIT_EXHAUSTED になる。
+  const server = await startServer({
+    limits: { initialCreditWindow: 2, maxReliableQueueMessages: 4 },
+  });
+  const issued = server.issuePairing(DEV_ORIGIN);
+  const { socket, collector } = await openHistoryCollected(server.endpoint, DEV_ORIGIN);
+  socket.send(authMessage(issued.secret));
+  const ok = await collector.waitFor((message) => message.type === "auth_ok");
+  if (ok.message.type !== "auth_ok") throw new Error("認証応答ではない。");
+  const sessionId = ok.message.sessionId;
+  socket.send(dataLatestMessage(sessionId, "pose", 0, { x: 0 }));
+  socket.send(dataLatestMessage(sessionId, "pose", 1, { x: 1 }));
+  socket.send(dataLatestMessage(sessionId, "pose", 2, { x: 2 }));
+  // クライアント→サーバ向きではない制御フレーム（明示エラーになるが枠は消費しない）。
+  socket.send(
+    JSON.stringify({
+      v: PROTOCOL_VERSION,
+      type: "credit",
+      sessionId,
+      limit: 99,
+    }),
+  );
+  socket.send(echoMessage(sessionId, "main", 0, "r-nc-0"));
+  socket.send(echoMessage(sessionId, "main", 1, "r-nc-1"));
+  const directionError = await collector.waitFor(
+    (message) => message.type === "error" && message.code === "UNEXPECTED_DIRECTION",
+  );
+  expect(directionError.message.type).toBe("error");
+  for (const requestId of ["r-nc-0", "r-nc-1"]) {
+    const echoed = await collector.waitFor(
+      (message) => message.type === "echo_response" && message.requestId === requestId,
+    );
+    expect(echoed.message.type).toBe("echo_response");
+  }
+  // latest は3件とも受信箱に計数され、reliable は2件とも業務処理されている。
+  expect(server.getLatest("pose")).toEqual({ x: 2 });
+  expect(server.getStats().latestStored).toBe(3);
+  expect(server.getStats().echoCount).toBe(2);
+  expect(collector.closeState()).toBeNull();
+});
+
+test("受信側は古い連番の latest を落として欠番に数える", async () => {
+  // seq=5 の後に seq=3 を送ると後者は受信箱に入らず欠番として計数され、
+  // 最新値は seq=5 のまま残る。
+  const server = await startServer();
+  const issued = server.issuePairing(DEV_ORIGIN);
+  const { socket, collector } = await openHistoryCollected(server.endpoint, DEV_ORIGIN);
+  socket.send(authMessage(issued.secret));
+  const ok = await collector.waitFor((message) => message.type === "auth_ok");
+  if (ok.message.type !== "auth_ok") throw new Error("認証応答ではない。");
+  const sessionId = ok.message.sessionId;
+  socket.send(dataLatestMessage(sessionId, "pose", 5, { x: 5 }));
+  socket.send(dataLatestMessage(sessionId, "pose", 3, { x: 3 }));
+  // latest に応答はないため、後続の reliable 往復で受信処理の完了を確定させる。
+  socket.send(echoMessage(sessionId, "main", 0, "r-drop-flush"));
+  const echoed = await collector.waitFor(
+    (message) => message.type === "echo_response" && message.requestId === "r-drop-flush",
+  );
+  expect(echoed.message.type).toBe("echo_response");
+  expect(server.getLatest("pose")).toEqual({ x: 5 });
+  expect(server.getStats().latestStored).toBe(1);
+  expect(server.getStats().latestDropped).toBe(1);
+});
+
+test("送出完了通知の失敗は切断として扱い残キューを破棄する", async () => {
+  // 応答の完了通知で失敗を返す差し替え送信路。先行応答の送出失敗で
+  // 対象接続が 1011 で閉じ、後続に queued された応答が破棄されることを確かめる。
+  const transport: BridgeTransport = {
+    send: (socket, text, done) => {
+      let isResponse = false;
+      try {
+        const parsed = parseBridgeMessage(text);
+        isResponse = parsed.type === "echo_response" || parsed.type === "command_response";
+      } catch {
+        // 非準拠フレームは試験対象外のため即時完了扱いにする。
+      }
+      socket.send(text);
+      if (isResponse) {
+        done(new Error("send failure"));
+        return;
+      }
+      done(null);
+    },
+  };
+  const server = await startServer({ transport });
+  const issued = server.issuePairing(DEV_ORIGIN);
+  const { socket, collector } = await openHistoryCollected(server.endpoint, DEV_ORIGIN);
+  socket.send(authMessage(issued.secret));
+  const ok = await collector.waitFor((message) => message.type === "auth_ok");
+  if (ok.message.type !== "auth_ok") throw new Error("認証応答ではない。");
+  const sessionId = ok.message.sessionId;
+  const closed = collector.waitClose();
+  socket.send(echoMessage(sessionId, "main", 0, "r-fail-0"));
+  socket.send(echoMessage(sessionId, "main", 1, "r-fail-1"));
+  const result = await closed;
+  expect(result.code).toBe(1011);
+  // 後続に queued された応答は破棄され届かない。
+  const received = collector.allFrames().map((raw) => parseBridgeMessage(raw));
+  expect(
+    received.some(
+      (message) => message.type === "echo_response" && message.requestId === "r-fail-1",
+    ),
+  ).toBe(false);
+  await waitForCondition(() => server.getConnectionCount() === 0);
+});
+
+test("ストリーム数超過で拒否した要求の枠は失われず後続の reliable が通る", async () => {
+  // 初期 1・上限 2・ストリーム数上限 1。超過した新ストリームの要求が拒否された後、
+  // 解放された付与で既存ストリームの送信が通る。解放がなければ CREDIT_EXHAUSTED で閉じる。
+  const server = await startServer({
+    limits: { initialCreditWindow: 1, maxReliableQueueMessages: 2, maxStreamsPerConnection: 1 },
+  });
+  const issued = server.issuePairing(DEV_ORIGIN);
+  const { socket, collector } = await openHistoryCollected(server.endpoint, DEV_ORIGIN);
+  socket.send(authMessage(issued.secret));
+  const ok = await collector.waitFor((message) => message.type === "auth_ok");
+  if (ok.message.type !== "auth_ok") throw new Error("認証応答ではない。");
+  const sessionId = ok.message.sessionId;
+  socket.send(echoMessage(sessionId, "s1", 0, "r-sl-ok1"));
+  const first = await collector.waitFor(
+    (message) => message.type === "echo_response" && message.requestId === "r-sl-ok1",
+  );
+  expect(first.message.type).toBe("echo_response");
+  // 先行応答の容量解放による追加付与を待ってから超過要求を送り、順序依存を避ける。
+  await collector.waitForCreditAbove(1);
+  socket.send(echoMessage(sessionId, "s2", 0, "r-sl-over"));
+  const error = await collector.waitFor(
+    (message) => message.type === "error" && message.code === "STREAM_LIMIT",
+  );
+  if (error.message.type !== "error") throw new Error("明示エラーではない。");
+  expect(error.message.requestId).toBe("r-sl-over");
+  // 解放されていなければ CREDIT_EXHAUSTED になる既存ストリームの送信が通る。
+  socket.send(echoMessage(sessionId, "s1", 1, "r-sl-ok2"));
+  const second = await collector.waitFor(
+    (message) => message.type === "echo_response" && message.requestId === "r-sl-ok2",
+  );
+  expect(second.message.type).toBe("echo_response");
+  // 超過分は業務処理されていない。
+  expect(server.getStats().echoCount).toBe(2);
+  expect(collector.closeState()).toBeNull();
+});
+
+test("クレジット会計は接続単位で全 reliable ストリームに共通する", async () => {
+  // 初期 2・上限 4。応答の送信完了を保留できる差し替え送信路で補充経路を塞ぎ、
+  // 2ストリームの合計が初期付与で止まることを確かめる。
+  // ストリーム単位の会計なら各2件ずつ送れるため、3件目の拒否が共通会計の証明になる。
+  const held = createHeldTransport();
+  const server = await startServer({
+    limits: { initialCreditWindow: 2, maxReliableQueueMessages: 4 },
+    transport: held.transport,
+  });
+  const issued = server.issuePairing(DEV_ORIGIN);
+  const { socket, collector } = await openHistoryCollected(server.endpoint, DEV_ORIGIN);
+  socket.send(authMessage(issued.secret));
+  const ok = await collector.waitFor((message) => message.type === "auth_ok");
+  if (ok.message.type !== "auth_ok") throw new Error("認証応答ではない。");
+  const sessionId = ok.message.sessionId;
+  const closed = collector.waitClose();
+  socket.send(echoMessage(sessionId, "main", 0, "r-shared-0"));
+  socket.send(echoMessage(sessionId, "other", 0, "r-shared-1"));
+  socket.send(echoMessage(sessionId, "main", 1, "r-shared-2"));
+  const error = await collector.waitFor(
+    (message) => message.type === "error" && message.code === "CREDIT_EXHAUSTED",
+  );
+  if (error.message.type !== "error") throw new Error("明示エラーではない。");
+  expect(error.message.requestId).toBe("r-shared-2");
+  const result = await closed;
+  expect(result.code).toBe(1011);
+  // 超過分は業務処理されていない。
+  expect(server.getStats().echoCount).toBe(2);
 });
