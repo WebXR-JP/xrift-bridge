@@ -1943,6 +1943,74 @@ test("未決着 connect のタイマーは ref を維持し成功・終了時に
   }
 });
 
+test("決着後に発火した watchdog は再武装せずタイマーを残さない", async () => {
+  // 承認 watchdog は長時間 deadline を分割タイマーで待つ。決着時の解除後に
+  // 既キュー済みコールバックが実行されても、死んだ試行が新たな setTimeout を
+  // 武装し ref を保持し続けないことを確かめる。時間待ちに依存せず確定的に判定する。
+  const originalSetTimeout = globalThis.setTimeout;
+  const originalClearTimeout = globalThis.clearTimeout;
+  const calls: Array<{
+    handle: unknown;
+    delay: number;
+    callback: Parameters<typeof setTimeout>[0];
+  }> = [];
+  const cleared = new Set<unknown>();
+  const setTimeoutSpy = ((...args: Parameters<typeof setTimeout>) => {
+    const original = originalSetTimeout as (
+      ...call: Parameters<typeof setTimeout>
+    ) => ReturnType<typeof setTimeout>;
+    const handle = original(...args);
+    const delay = args[1];
+    if (typeof delay === "number") calls.push({ handle, delay, callback: args[0] });
+    return handle;
+  }) as typeof setTimeout;
+  const clearTimeoutSpy = ((...args: Parameters<typeof clearTimeout>) => {
+    cleared.add(args[0]);
+    const original = originalClearTimeout as (
+      ...call: Parameters<typeof clearTimeout>
+    ) => ReturnType<typeof clearTimeout>;
+    return original(...args);
+  }) as typeof clearTimeout;
+  globalThis.setTimeout = setTimeoutSpy;
+  globalThis.clearTimeout = clearTimeoutSpy;
+  // 再武装で生まれた長時間タイマーは試験終了時に必ず解除する。
+  let rearmedHandles: unknown[] = [];
+  try {
+    const controllable = await startControllableStub({ expiresInMs: 3_000_000_000 });
+    const client = createWorldClient({
+      endpoint: `ws://127.0.0.1:${controllable.port}/v1`,
+      requestTimeoutMs: 50,
+    });
+    clients.push(client);
+    const pending = client.connect();
+    await waitForPairing(client);
+    // watchdog 初回分割（タイマー安全上限に切り詰めた遅延）を特定する。
+    const first = calls.filter((call) => call.delay === 2_147_483_647).at(-1);
+    if (first === undefined) throw new Error("watchdog タイマーを特定できない。");
+    if (typeof first.callback !== "function") {
+      throw new Error("watchdog コールバックを特定できない。");
+    }
+    // 承認で決着させる。初回分割は解除される。
+    controllable.approve();
+    await pending;
+    expect(client.getState()).toBe("authorized");
+    expect(cleared.has(first.handle)).toBe(true);
+    // 解除後に既キュー済みだった初回コールバックが実行された状況を再現する。
+    const scheduledBefore = calls.length;
+    (first.callback as () => void)();
+    // 死んだ試行は再武装しない。新たな setTimeout 発行がなく状態も動かない。
+    expect(calls.length).toBe(scheduledBefore);
+    expect(client.getState()).toBe("authorized");
+    rearmedHandles = calls.slice(scheduledBefore).map((call) => call.handle);
+  } finally {
+    for (const handle of rearmedHandles) {
+      originalClearTimeout(handle as Parameters<typeof clearTimeout>[0]);
+    }
+    globalThis.setTimeout = originalSetTimeout;
+    globalThis.clearTimeout = originalClearTimeout;
+  }
+});
+
 test("同一インスタンスの再接続でストリーム連番が0から始まる", async () => {
   // 新接続のサーバ期待値は接続ごとに 0 始まりのため、旧接続の連番を引き継ぐと
   // UNEXPECTED_SEQ になる。新試行の開始で採番を作り直すことを確かめる。

@@ -19,7 +19,12 @@ import {
   type SessionId,
   type StreamId,
 } from "bridge-protocol";
+import { AuthorizedSession, type LatestSentStore } from "./authorized-session.ts";
+import { WorldClientError } from "./errors.ts";
+import { PairingAttempt, assertConnectTimeoutMs } from "./pairing-attempt.ts";
 import { parseBridgeEndpoint } from "./endpoint.ts";
+
+export { WorldClientError };
 
 /** クライアントの接続状態。 */
 export type ConnectionState =
@@ -128,18 +133,6 @@ export interface EchoResult {
   readonly payload: unknown;
 }
 
-/** クライアント操作の失敗。 */
-export class WorldClientError extends Error {
-  /** 機械可読の符号。 */
-  readonly code: string;
-
-  constructor(code: string, message: string) {
-    super(message);
-    this.name = "WorldClientError";
-    this.code = code;
-  }
-}
-
 /** ブリッジへ接続するためのクライアント。WebSocket は内部に隠す。 */
 export interface WorldClient {
   /** 正規化した接続先。 */
@@ -192,44 +185,6 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 10_000;
 const DEFAULT_MAX_PENDING_RELIABLE = 128;
 /** 送信メッセージ1件の既定上限（UTF-8バイト）。ブリッジの受信上限と同値の別設定である。 */
 const DEFAULT_MAX_MESSAGE_BYTES = 65_536;
-/**
- * `setTimeout` に安全に渡せる上限（ミリ秒）。
- *
- * Node・ブラウザともに 2^31−1 を超える遅延はオーバーフローし、即時発火や
- * 警告の原因になる。承認待ちの watchdog は期限再判定付きの分割で扱い、
- * 接続開始タイマーの入力はこの範囲に収める。
- */
-const MAX_TIMER_DELAY_MS = 2_147_483_647;
-
-/**
- * 接続開始タイマーの入力を検証する。有限の正の整数かつタイマー安全範囲であること。
- *
- * @param timeoutMs - 検証対象の候補値。
- */
-function assertConnectTimeoutMs(timeoutMs: number): void {
-  if (!Number.isInteger(timeoutMs) || timeoutMs <= 0 || timeoutMs > MAX_TIMER_DELAY_MS) {
-    throw new RangeError("timeoutMs は1以上2147483647以下の整数（ミリ秒）であること。");
-  }
-}
-
-/**
- * 文字列の UTF-8 バイト数を量る。
- *
- * `text.length` では多バイト文字を扱えない。生成物はブラウザでも動かすため
- * `Buffer` ではなく `TextEncoder` を使う。計測用の符号化は一時領域であり、
- * 待機データの bound には含めない。
- */
-const utf8Encoder = new TextEncoder();
-
-function utf8ByteLength(text: string): number {
-  return utf8Encoder.encode(text).length;
-}
-
-interface PendingRequest {
-  readonly resolve: (value: BridgeToClientMessage) => void;
-  readonly reject: (error: WorldClientError) => void;
-  readonly timer: ReturnType<typeof setTimeout>;
-}
 
 /**
  * ソケットを開く。`origin` 指定は Node 診断用途に限定する。
@@ -279,26 +234,17 @@ export function createWorldClient(options: WorldClientOptions): WorldClient {
 
   let state: ConnectionState = "disconnected";
   let socket: WebSocket | null = null;
-  let sessionId: SessionId | null = null;
-  let pairing: PairingInfo | null = null;
-  // クレジット会計（接続単位）。送信可能残数 = grantedLimit − sentReliableTotal。
-  // grantedLimit: 累積付与件数（auth_ok.window が初期値、credit.limit で更新）。
-  // sentReliableTotal: 実際に送出した reliable の累積件数。待機への追加では増やさない。
-  // 応答の受信だけでは回復しない。
-  let grantedLimit = 0;
-  let sentReliableTotal = 0;
+  // 認可済みセッション。`auth_ok` で作り、`terminateAuthorized`・`handleClose` で捨てる。
+  // `authorized` と有無は一致する。会計・採番・要求待機の所有者はセッションである。
+  let session: AuthorizedSession | null = null;
+  // 生存中の接続試行。未決着の試行と有無は一致する。認証状態（比較コード・
+  // タイマー・取消・決着手段）の所有者は試行であり、状態の正本は `state` のままである。
+  let liveAttempt: PairingAttempt | null = null;
   const listeners = new Set<WorldClientListener>();
-  const pending = new Map<RequestId, PendingRequest>();
-  const reliableQueue: Array<() => void> = [];
-  const streamSeq = new Map<StreamId, number>();
-  const latestSent = new Map<StreamId, { seq: number; payload: unknown }>();
-  let connectSettled: {
-    resolve: (value: ConnectResult) => void;
-    reject: (error: WorldClientError) => void;
-  } | null = null;
-  let connectTimer: ReturnType<typeof setTimeout> | null = null;
-  let abortSignal: AbortSignal | null = null;
-  let abortHandler: (() => void) | null = null;
+  // 直近 latest 記録は接続をまたぐローカル記録のため、ここで所有して再接続で維持する。
+  // 認可ごとのセッションへ参照を渡し、書き込みはセッション経由で行う。
+  // 切断中（セッションなし）の読み取りはこの実体から行う。
+  const latestSent: LatestSentStore = new Map();
   // 接続試行の同一性。`connect()` ごとに加算し、通知中の `close()`→再 `connect()` で
   // 試行が入れ替わったことを区別する。単なる状態確認では close→再connect を区別できず、
   // 旧試行の継続処理（stale な pairing 通知・旧タイマー発火）が新試行へ作用するため試行IDで区別する。
@@ -327,91 +273,24 @@ export function createWorldClient(options: WorldClientOptions): WorldClient {
     return state;
   }
 
-  function clearConnectTimer(): void {
-    if (connectTimer !== null) {
-      clearTimeout(connectTimer);
-      connectTimer = null;
-    }
-  }
-
-  /**
-   * 承認待ち watchdog を期限再判定付きの分割タイマーで仕掛ける。
-   *
-   * `expiresInMs + requestTimeoutMs` がタイマー安全範囲を超える場合、単発の
-   * `setTimeout` はオーバーフローして早期発火するため、期限時刻まで残量ごとに
-   * 分割して待ち直す。独自の短い上限で承認待ちを切り詰めない。
-   * 未決着 `connect` のタイマーは既定で ref を維持し、`unref` しない。
-   * 終了・成功時は呼び出し側が `clearConnectTimer()` で必ず解除すること。
-   *
-   * @param attempt - 仕掛けた接続試行のID。入れ替わっていたら発火時に何もしない。
-   * @param deadlineMs - 承認応答の期限時刻（`Date.now()` 基準）。
-   */
-  function startApprovalWatchdog(attempt: number, deadlineMs: number): void {
-    clearConnectTimer();
-    const schedule = (delayMs: number): void => {
-      // ADR: ref を維持するため `unref` を呼ばない。終了・成功時の解除は呼び出し側が行う。
-      connectTimer = setTimeout(() => {
-        // 旧試行のタイマー発火を新試行へ作用させない。状態だけでは close→再connect を
-        // 区別できないため試行IDで区別する。解除済み・決着済みも何もしない。
-        if (attempt !== connectAttempt || connectSettled === null) return;
-        if (connectTimer === null) return;
-        const remaining = deadlineMs - Date.now();
-        if (remaining <= 0) {
-          terminateConnect(
-            new WorldClientError("APPROVAL_RESPONSE_TIMEOUT", "承認応答が時間内に届かない。"),
-            false,
-          );
-          return;
-        }
-        schedule(Math.min(remaining, MAX_TIMER_DELAY_MS));
-      }, delayMs);
-    };
-    const remaining = deadlineMs - Date.now();
-    if (remaining <= 0) {
-      terminateConnect(
-        new WorldClientError("APPROVAL_RESPONSE_TIMEOUT", "承認応答が時間内に届かない。"),
-        false,
-      );
-      return;
-    }
-    schedule(Math.min(remaining, MAX_TIMER_DELAY_MS));
-  }
-
-  function detachAbort(): void {
-    if (abortSignal !== null && abortHandler !== null) {
-      abortSignal.removeEventListener("abort", abortHandler);
-    }
-    abortSignal = null;
-    abortHandler = null;
-  }
-
-  function failPending(error: WorldClientError): void {
-    for (const entry of pending.values()) {
-      clearTimeout(entry.timer);
-      entry.reject(error);
-    }
-    pending.clear();
-    reliableQueue.length = 0;
-  }
-
   /**
    * 接続試行を特定の符号で打ち切る。Promise 決着と内部状態を購読者通知より先に確定する。
    *
-   * ADR: 通知中の `close()` 等による二重決着を防ぐため、`connectSettled` の回収・
-   * タイマー解除・ソケット切り離し・状態更新を先に行い、その後に決着と通知を行う。
+   * ADR: 通知中の `close()` 等による二重決着を防ぐため、試行の回収・決着・
+   * ソケット切り離し・状態更新を先に行い、その後に通知を行う。
    * ソケットを切り離すため遅れて届く close は旧ソケットとして捨てる。
    *
    * @param error - `connect` の拒否理由。
    * @param emitError - 異常系の理由を `error` 通知でも配送するか。
    */
   function terminateConnect(error: WorldClientError, emitError: boolean): void {
-    const settled = connectSettled;
-    if (settled === null) return;
-    connectSettled = null;
-    clearConnectTimer();
-    detachAbort();
-    const hadPairing = pairing !== null;
-    pairing = null;
+    const attempt = liveAttempt;
+    if (attempt === null) return;
+    // 決着（Promise 拒否・タイマー解除・取消分離・比較コード破棄）を
+    // ソケット切断・状態更新・通知より先に確定する。拒否の配送は
+    // マイクロタスクのため、同期観測上の順序は変わらない。
+    const hadPairing = attempt.fail(error);
+    liveAttempt = null;
     const current = socket;
     socket = null;
     if (current !== null) {
@@ -421,11 +300,9 @@ export function createWorldClient(options: WorldClientOptions): WorldClient {
         // 閉塞時の例外は無視し下の拒否を優先する。
       }
     }
-    grantedLimit = 0;
-    sentReliableTotal = 0;
-    failPending(new WorldClientError("CONNECTION_CLOSED", "接続試行の失敗により待機を破棄した。"));
+    // 接続試行の失敗時は認可前でありセッションを持たない。業務待機の破棄は
+    // セッション所有側（`terminateAuthorized`・`handleClose`）が担う。
     state = "closed";
-    settled.reject(error);
     emit({ kind: "state", state });
     if (hadPairing) {
       emit({ kind: "pairing", pairing: null });
@@ -451,16 +328,13 @@ export function createWorldClient(options: WorldClientOptions): WorldClient {
         // 閉塞時の例外は無視し状態遷移を優先する。
       }
     }
-    sessionId = null;
-    grantedLimit = 0;
-    sentReliableTotal = 0;
-    failPending(
+    session?.failPending(
       new WorldClientError(
         "CONNECTION_CLOSED",
         "切断のため結果不明の要求を破棄した。処理済みかは確定しない。",
       ),
     );
-    reliableQueue.length = 0;
+    session = null;
     state = "closed";
     emit({ kind: "error", code: error.code, message: error.message });
     emit({ kind: "state", state });
@@ -470,61 +344,34 @@ export function createWorldClient(options: WorldClientOptions): WorldClient {
   function handleClose(code: number, reason: string): void {
     // ADR: 終了済みの重複 close で closed 通知を重ねない。`close()` の再入や
     // 後処理の多重呼び出しで購読者の集計がずれないようにするため。
-    if (state === "closed" && socket === null && connectSettled === null) return;
+    if (state === "closed" && socket === null && liveAttempt === null) return;
     socket = null;
-    sessionId = null;
-    const hadPairing = pairing !== null;
-    pairing = null;
-    // 切断で会計をリセットする。再接続時は認証応答から作り直す。
-    grantedLimit = 0;
-    sentReliableTotal = 0;
-    reliableQueue.length = 0;
     // ADR: Promise 決着と内部状態を通知より先に確定する。通知中の `close()` が
-    // 再入しても `connectSettled` 回収済みのため二重決着しない。
-    const settled = connectSettled;
-    connectSettled = null;
-    clearConnectTimer();
-    detachAbort();
-    state = "closed";
-    if (settled !== null) {
-      settled.reject(new WorldClientError("CONNECTION_CLOSED", "承認前に接続が閉じた。"));
+    // 再入しても試行回収済みのため二重決着しない。未決着の試行は生存試行と
+    // 有無が一致するため、保持の有無で判定する。
+    const attempt = liveAttempt;
+    liveAttempt = null;
+    const hadPairing = (attempt?.getPairing() ?? null) !== null;
+    if (attempt !== null) {
+      attempt.fail(new WorldClientError("CONNECTION_CLOSED", "承認前に接続が閉じた。"));
     }
+    state = "closed";
     // ADR: 切断時の未完了要求は結果不明として破棄し上位へ通知する。close code を
     // 通知に含め、処理済みか不明な要求を「未実行」とは断定しない。
-    failPending(
+    // セッションを捨てることで会計・採番・待機も作り直しになる。再接続時は
+    // 認証応答から新規セッションを作る。直近 latest 記録だけは維持する。
+    session?.failPending(
       new WorldClientError(
         "CONNECTION_CLOSED",
         `切断（code=${code}）のため結果不明の要求を破棄した。処理済みかは確定しない。`,
       ),
     );
+    session = null;
     emit({ kind: "state", state });
     if (hadPairing) {
       emit({ kind: "pairing", pairing: null });
     }
     emit({ kind: "closed", code, reason });
-  }
-
-  /**
-   * 次に使う連番を読む。寸法検査・受付可否判定で落とす要求で消費しないよう、
-   * 受付確定後に書き込む。
-   */
-  function peekSeq(streamId: StreamId): number {
-    return streamSeq.get(streamId) ?? 0;
-  }
-
-  /**
-   * 送信メッセージの寸法を検査する。超過は会計・待機枠・採番に触れずに投げる。
-   *
-   * @param text - 送出予定の JSON 文字列。
-   */
-  function assertMessageSize(text: string): void {
-    if (utf8ByteLength(text) > maxMessageBytes) {
-      // credit・待機枠を消費しない純粋なローカル拒否であり、切断しない。
-      throw new WorldClientError(
-        "MESSAGE_TOO_LARGE",
-        `送信メッセージが上限（${maxMessageBytes} bytes）を超えている。`,
-      );
-    }
   }
 
   function sendRaw(text: string): void {
@@ -533,94 +380,6 @@ export function createWorldClient(options: WorldClientOptions): WorldClient {
       throw new WorldClientError("NOT_CONNECTED", "送信できる接続がない。");
     }
     current.send(text);
-  }
-
-  /** 送信可能残数。累積付与から累積送信を引いた値。 */
-  function sendableReliable(): number {
-    return grantedLimit - sentReliableTotal;
-  }
-
-  function drainReliableQueue(): void {
-    while (sendableReliable() > 0 && reliableQueue.length > 0) {
-      const send = reliableQueue.shift();
-      if (send === undefined) break;
-      // 実際に送出するときに1件消費する。待機への追加では消費しない。
-      sentReliableTotal += 1;
-      send();
-    }
-  }
-
-  /**
-   * reliable 送信の受付可否を判定する。会計・待機枠・連番のいずれも消費しない。
-   *
-   * 受付可能な場合は即時送出か待機かだけを返し、満杯の場合は投げる。
-   * 呼び出し側は受付成功後に採番を確定し、間を空けず同期待ちなしで
-   * {@link dispatchReliable} へ渡すこと。途中で会計は変わらない。
-   */
-  function admitReliable(): "send" | "queue" {
-    if (sendableReliable() > 0) {
-      return "send";
-    }
-    if (reliableQueue.length >= maxPendingReliable) {
-      // 黙って捨てず明示エラーにする（設計どおり）。
-      throw new WorldClientError("LOCAL_QUEUE_FULL", "reliable の送信待機が満杯である。");
-    }
-    return "queue";
-  }
-
-  /**
-   * 受付済みの reliable 送信を振り分ける。即時は会計を消費して送出し、
-   * 枯渇時は待機に積む（消費は送出時に持ち越す）。
-   *
-   * @param admission - 直前の {@link admitReliable} の判定結果。
-   * @param send - クレジット消費時に一度だけ実行する送信処理。
-   */
-  function dispatchReliable(admission: "send" | "queue", send: () => void): void {
-    if (admission === "send") {
-      // 実際に送出するときに1件消費する。待機への追加では消費しない。
-      sentReliableTotal += 1;
-      send();
-      return;
-    }
-    reliableQueue.push(send);
-  }
-
-  function waitForResponse(
-    requestId: RequestId,
-    timeoutMs: number | undefined,
-  ): { promise: Promise<BridgeToClientMessage>; cancel: () => void } {
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    const promise = new Promise<BridgeToClientMessage>((resolve, reject) => {
-      timer = setTimeout(() => {
-        pending.delete(requestId);
-        reject(new WorldClientError("REQUEST_TIMEOUT", "応答の待ち時間が過ぎた。"));
-      }, timeoutMs ?? requestTimeoutMs);
-      pending.set(requestId, {
-        resolve,
-        reject,
-        timer,
-      });
-    });
-    return {
-      promise,
-      cancel: () => {
-        pending.delete(requestId);
-        if (timer !== null) clearTimeout(timer);
-      },
-    };
-  }
-
-  function settleResponse(message: BridgeToClientMessage): void {
-    const requestId =
-      message.type === "echo_response" || message.type === "command_response"
-        ? message.requestId
-        : null;
-    if (requestId === null) return;
-    const entry = pending.get(requestId);
-    if (entry === undefined) return;
-    pending.delete(requestId);
-    clearTimeout(entry.timer);
-    entry.resolve(message);
   }
 
   function handleMessage(data: unknown): void {
@@ -645,8 +404,10 @@ export function createWorldClient(options: WorldClientOptions): WorldClient {
     }
     if (message.type === "pairing_pending") {
       // ADR: コード通知は `requesting_pairing` の1回のみ受け付ける。重複・順序違いは
-      // 取り違え防止のため終了扱いにし、黙って置換しない。
-      if (state !== "requesting_pairing" || connectSettled === null) {
+      // 取り違え防止のため終了扱いにし、黙って置換しない。段階の判定は状態の
+      // 正本（調停役）が行い、試行は保持と watchdog 切替だけを行う。
+      const attempt = liveAttempt;
+      if (state !== "requesting_pairing" || attempt === null) {
         if (state === "authorized") {
           terminateAuthorized(
             new WorldClientError("UNEXPECTED_MESSAGE", "認可後の比較コード通知は扱わない。"),
@@ -660,33 +421,21 @@ export function createWorldClient(options: WorldClientOptions): WorldClient {
         return;
       }
       // ADR: 購読が遅れた UI も `getPairing()` で表示できるよう、保存を状態・通知より先に行う。
-      const info: PairingInfo = {
-        requestId: message.requestId,
-        code: message.code,
-        expiresAt: message.expiresAt,
-        expiresInMs: message.expiresInMs,
-      };
-      pairing = info;
+      const info = attempt.acceptPairingCode(message);
       const attemptAtReceipt = connectAttempt;
-      // ADR: `timeoutMs` は接続開始からコード受信までであり、人間の承認待ちを
-      // 打ち切らない。コード受信で解除し、承認応答待ちの watchdog へ切り替える。
-      // ADR: 承認応答の watchdog は `expiresInMs + requestTimeoutMs` とし、
-      // ブリッジ側の期限切れと断定しない符号で打ち切る。長時間は期限再判定付きの
-      // 分割タイマーで扱い、独自の短い上限で承認待ちを切り詰めない。
-      startApprovalWatchdog(attemptAtReceipt, Date.now() + message.expiresInMs + requestTimeoutMs);
       setState("awaiting_approval");
       // ADR: 状態通知中に `close()` されると `handleClose()` が決着・状態・保存を
       // 先に確定する（コード受信段階は未決着のため `CONNECTION_CLOSED` で拒否）。
       // その後に stale な pairing（コード）を再通知しないよう、試行ID・状態・
-      // 保存中の pairing を再確認してから通知する。単なる状態確認では
+      // 試行の保持を再確認してから通知する。単なる状態確認では
       // close→再connect を区別できないため試行IDを用いる。
       // narrowing 回避のため関数境界で読み直して比較する。
       const stateAfterNotify = currentState();
       if (
         attemptAtReceipt !== connectAttempt ||
-        connectSettled === null ||
+        liveAttempt === null ||
         stateAfterNotify !== "awaiting_approval" ||
-        pairing !== info
+        attempt.getPairing() !== info
       ) {
         return;
       }
@@ -696,7 +445,9 @@ export function createWorldClient(options: WorldClientOptions): WorldClient {
     if (message.type === "auth_ok") {
       // ADR: 承認は `awaiting_approval` かつ要求 ID 一致の場合のみ適用する。
       // 異なる要求の認可を取り違えないため終了扱いにする。
-      if (state !== "awaiting_approval" || connectSettled === null || pairing === null) {
+      const attempt = liveAttempt;
+      const code = attempt?.getPairing() ?? null;
+      if (state !== "awaiting_approval" || attempt === null || code === null) {
         if (state === "authorized") {
           terminateAuthorized(
             new WorldClientError("UNEXPECTED_MESSAGE", "想定外の認証応答である。"),
@@ -709,7 +460,7 @@ export function createWorldClient(options: WorldClientOptions): WorldClient {
         );
         return;
       }
-      if (message.requestId !== pairing.requestId) {
+      if (message.requestId !== code.requestId) {
         terminateConnect(
           new WorldClientError("UNEXPECTED_MESSAGE", "認証応答の要求が一致しない。"),
           true,
@@ -719,23 +470,25 @@ export function createWorldClient(options: WorldClientOptions): WorldClient {
       // ADR: Promise 決着と内部状態を通知より先に確定する。通知中の `close()` が
       // 再入しても決着済みのため二重決着せず、認可成功を通知前に確定済みなら
       // 成功結果を拒否へ変更しない（`handleClose()` の二重決着防止で守られる）。
-      const settled = connectSettled;
-      connectSettled = null;
-      clearConnectTimer();
-      detachAbort();
       const attemptAtApproval = connectAttempt;
+      const approved = attempt.acceptAuthOk(message);
       const result: ConnectResult = {
-        requestId: message.requestId,
-        sessionId: message.sessionId,
+        requestId: approved.requestId,
+        sessionId: approved.sessionId,
       };
-      sessionId = message.sessionId;
-      // 接続ごとに会計を作り直す。初期付与は auth_ok.window が担う。
-      grantedLimit = message.window;
-      sentReliableTotal = 0;
-      pairing = null;
+      // 認可成立時に試行を消費し、セッションを有効化する。初期 window は会計初期化であり、
+      // 認可後送信の前提である。公開通知より先に確定する。
+      liveAttempt = null;
+      session = new AuthorizedSession(
+        approved.sessionId,
+        approved.window,
+        { requestTimeoutMs, maxPendingReliable, maxMessageBytes },
+        (text) => sendRaw(text),
+        latestSent,
+      );
+      // 新規セッションのため待機はなく、流す対象はない。
       state = "authorized";
-      settled.resolve(result);
-      drainReliableQueue();
+      attempt.succeed(result);
       // 通知中の `close()`→再 `connect()` で試行が入れ替わっていたら、旧試行の
       // 残り通知を新試行へ混ぜない。試行IDで区別し、状態でも再確認する。
       // narrowing 回避のため関数境界で読み直して比較する。
@@ -752,26 +505,26 @@ export function createWorldClient(options: WorldClientOptions): WorldClient {
       return;
     }
     if (message.type === "error") {
-      const pendingEntry =
-        message.requestId !== undefined ? pending.get(message.requestId) : undefined;
       // ADR: ペアリング要求への失敗は接続試行の失敗として返す。業務待機への相関は
       // 認可後の応答経路と同じく要求 ID で行う。
-      if (
-        connectSettled !== null &&
-        (state === "requesting_pairing" || state === "awaiting_approval")
-      ) {
+      const attempt = liveAttempt;
+      if (attempt !== null && (state === "requesting_pairing" || state === "awaiting_approval")) {
+        const code = attempt.getPairing();
         if (
-          pairing !== null &&
+          code !== null &&
           message.requestId !== undefined &&
-          message.requestId === pairing.requestId
+          message.requestId === code.requestId
         ) {
           terminateConnect(new WorldClientError(message.code, message.message), false);
           return;
         }
-        if (pendingEntry !== undefined && message.requestId !== undefined) {
-          pending.delete(message.requestId);
-          clearTimeout(pendingEntry.timer);
-          pendingEntry.reject(new WorldClientError(message.code, message.message));
+        // 認可前は業務待機を持たない（送信は認可後のみ受け付ける）ため、
+        // 要求 ID が付いていても接続試行の失敗として扱う。
+        if (
+          message.requestId !== undefined &&
+          session !== null &&
+          session.rejectRequest(message.requestId, message.code, message.message)
+        ) {
           return;
         }
         terminateConnect(new WorldClientError(message.code, message.message), false);
@@ -781,14 +534,12 @@ export function createWorldClient(options: WorldClientOptions): WorldClient {
         terminateConnect(new WorldClientError(message.code, message.message), false);
         return;
       }
-      if (message.requestId !== undefined) {
-        const entry = pending.get(message.requestId);
-        if (entry !== undefined) {
-          pending.delete(message.requestId);
-          clearTimeout(entry.timer);
-          entry.reject(new WorldClientError(message.code, message.message));
-          return;
-        }
+      if (
+        message.requestId !== undefined &&
+        session !== null &&
+        session.rejectRequest(message.requestId, message.code, message.message)
+      ) {
+        return;
       }
       emit({ kind: "error", code: message.code, message: message.message });
       return;
@@ -802,25 +553,23 @@ export function createWorldClient(options: WorldClientOptions): WorldClient {
       );
       return;
     }
-    if (message.type === "credit") {
-      // セッション不一致の credit は会計へ適用しない。同じ limit の再通知は
-      // 差分が生じないため追加付与にならない。応答の受信だけでは回復しない。
-      if (sessionId === null || message.sessionId !== sessionId) return;
-      // 減少通知は古い会計値の誤再通知として無視し、付与済みの送信権を撤回しない。
-      // エラー通知・切断はしない。
-      if (message.limit < grantedLimit) return;
-      grantedLimit = message.limit;
-      drainReliableQueue();
+    // `authorized` とセッションの有無は一致する。不一致は到達しない。
+    const active = session;
+    if (active === null) {
       return;
     }
-    settleResponse(message);
+    if (message.type === "credit") {
+      active.handleCredit(message);
+      return;
+    }
+    active.settleResponse(message);
   }
 
   const client: WorldClient = {
     endpoint,
     protocolVersion: PROTOCOL_VERSION,
     getState: () => state,
-    getPairing: () => pairing,
+    getPairing: () => liveAttempt?.getPairing() ?? null,
     onEvent: (listener: WorldClientListener): Unsubscribe => {
       listeners.add(listener);
       return () => {
@@ -855,145 +604,81 @@ export function createWorldClient(options: WorldClientOptions): WorldClient {
       } catch (error) {
         return Promise.reject(error);
       }
-      return new Promise<ConnectResult>((resolve, reject) => {
-        let current: WebSocket;
+      let current: WebSocket;
+      try {
+        current = openSocket(endpoint, origin);
+      } catch (error) {
+        return Promise.reject(
+          error instanceof WorldClientError
+            ? error
+            : new WorldClientError("SOCKET_ERROR", "ソケットを開けない。"),
+        );
+      }
+      connectAttempt += 1;
+      // ストリーム連番は接続単位で 0 始まりにする。サーバの `expectedSeq` は
+      // 接続ごとに 0 始まりのため、旧接続の連番を引き継ぐと `UNEXPECTED_SEQ`
+      // になる。連番は認可ごとの新規セッションが持つため、ここでの作り直しは
+      // 不要である。`latestSent` は直近送信値のローカル記録（API の意味）
+      // のため維持する。
+      socket = current;
+      // 試行内部の失敗（開始タイマー・承認 watchdog・取消）は調停役へ通知し、
+      // 終了順序は調停役が行う。旧試行の遅延通知を新試行へ作用させないよう、
+      // 生存試行の同一性とソケットの同一性で区別する。
+      const attempt = new PairingAttempt({
+        timeoutMs,
+        requestTimeoutMs,
+        ...(signal === undefined ? {} : { signal }),
+        callbacks: {
+          onAttemptFailed: (failed, error) => {
+            if (liveAttempt !== failed) return;
+            if (socket !== current) return;
+            terminateConnect(error, false);
+          },
+        },
+      });
+      liveAttempt = attempt;
+      setState("connecting");
+      current.addEventListener("open", () => {
+        if (socket !== current) return;
+        setState("requesting_pairing");
         try {
-          current = openSocket(endpoint, origin);
-        } catch (error) {
-          reject(
-            error instanceof WorldClientError
-              ? error
-              : new WorldClientError("SOCKET_ERROR", "ソケットを開けない。"),
-          );
-          return;
-        }
-        connectAttempt += 1;
-        const attempt = connectAttempt;
-        // 新しい接続試行では接続単位のストリーム連番を作り直す。サーバの
-        // `expectedSeq` は接続ごとに 0 始まりのため、旧接続の連番を引き継ぐと
-        // `UNEXPECTED_SEQ` になる。`latestSent` は直近送信値のローカル記録
-        // （API の意味）のため維持する。
-        streamSeq.clear();
-        socket = current;
-        connectSettled = { resolve, reject };
-        setState("connecting");
-        // ADR: 未決着 `connect` のタイマーは既定で ref を維持し、`unref` しない。
-        // 終了・成功時は `connectSettled` のラッパー・`terminateConnect`・`handleClose`・
-        // 認可確定のいずれかで必ず解除する。
-        connectTimer = setTimeout(() => {
-          if (connectSettled === null) return;
-          if (attempt !== connectAttempt) return;
-          if (socket !== current) return;
+          current.send(stringifyBridgeMessage({ v: PROTOCOL_VERSION, type: "pairing_start" }));
+        } catch {
           terminateConnect(
-            new WorldClientError("CONNECT_TIMEOUT", "比較コードが時間内に届かない。"),
+            new WorldClientError("SEND_FAILED", "開始メッセージを送れない。"),
             false,
           );
-        }, timeoutMs);
-        const originalResolve = resolve;
-        const originalReject = reject;
-        connectSettled = {
-          resolve: (value: ConnectResult) => {
-            clearConnectTimer();
-            detachAbort();
-            originalResolve(value);
-          },
-          reject: (error: WorldClientError) => {
-            clearConnectTimer();
-            detachAbort();
-            originalReject(error);
-          },
-        };
-        if (signal !== undefined) {
-          abortSignal = signal;
-          abortHandler = (): void => {
-            if (connectSettled === null) return;
-            if (attempt !== connectAttempt) return;
-            if (socket !== current) return;
-            terminateConnect(
-              new WorldClientError("CONNECT_CANCELLED", "接続試行が取り消された。"),
-              false,
-            );
-          };
-          signal.addEventListener("abort", abortHandler, { once: true });
         }
-        current.addEventListener("open", () => {
-          if (socket !== current) return;
-          setState("requesting_pairing");
-          try {
-            current.send(stringifyBridgeMessage({ v: PROTOCOL_VERSION, type: "pairing_start" }));
-          } catch {
-            terminateConnect(
-              new WorldClientError("SEND_FAILED", "開始メッセージを送れない。"),
-              false,
-            );
-          }
-        });
-        current.addEventListener("message", (event: MessageEvent) => {
-          if (socket !== current) return;
-          handleMessage(event.data);
-        });
-        current.addEventListener("error", () => {
-          emit({ kind: "error", code: "SOCKET_ERROR", message: "ソケット異常を検出した。" });
-        });
-        current.addEventListener("close", (event: CloseEvent) => {
-          // ADR: open・message と同様にソケット同一性で旧ソケットの通知を捨てる。
-          // close() は socket を外して自前で閉塞処理するため、遅れて届く旧 close を
-          // 現行接続の状態に適用しない。状態条件を混ぜると再接続の接続処理中に旧 close が
-          // 新接続を誤って閉じるため、状態では判定しない。
-          if (socket !== current) return;
-          clearConnectTimer();
-          handleClose(event.code, event.reason);
-        });
       });
+      current.addEventListener("message", (event: MessageEvent) => {
+        if (socket !== current) return;
+        handleMessage(event.data);
+      });
+      current.addEventListener("error", () => {
+        emit({ kind: "error", code: "SOCKET_ERROR", message: "ソケット異常を検出した。" });
+      });
+      current.addEventListener("close", (event: CloseEvent) => {
+        // ADR: open・message と同様にソケット同一性で旧ソケットの通知を捨てる。
+        // close() は socket を外して自前で閉塞処理するため、遅れて届く旧 close を
+        // 現行接続の状態に適用しない。状態条件を混ぜると再接続の接続処理中に旧 close が
+        // 新接続を誤って閉じるため、状態では判定しない。
+        if (socket !== current) return;
+        handleClose(event.code, event.reason);
+      });
+      // `connect` の返却 Promise は試行の Promise そのものである。以降の決着は
+      // 試行の `succeed`・`fail` が行い、調停役は終了順序で試行を消費・破棄する。
+      return attempt.promise;
     },
     sendEcho: (
       streamId: StreamId,
       payload: unknown,
       options?: { readonly timeoutMs?: number },
     ): Promise<EchoResult> => {
-      if (state !== "authorized" || sessionId === null) {
+      // 認可判定は接続状態の所有者（クライアント）が行い、本体はセッションに委ねる。
+      if (state !== "authorized" || session === null) {
         return Promise.reject(new WorldClientError("NOT_AUTHORIZED", "認証後にのみ送信できる。"));
       }
-      const activeSession = sessionId;
-      const seq = peekSeq(streamId);
-      const requestId: RequestId = crypto.randomUUID();
-      const text = stringifyBridgeMessage({
-        v: PROTOCOL_VERSION,
-        type: "echo",
-        sessionId: activeSession,
-        streamId,
-        kind: "reliable",
-        seq,
-        requestId,
-        payload,
-      });
-      // 寸法検査→受付可否判定の順で、拒否時は採番・待機枠・会計のいずれも消費しない。
-      let echoAdmission: "send" | "queue";
-      try {
-        assertMessageSize(text);
-        echoAdmission = admitReliable();
-      } catch (error) {
-        // 本 API は Promise で結果を返す契約のため、同期の検査落ちも拒否に載せる。
-        return Promise.reject(error);
-      }
-      // 受付確定時に採番する。待機中の複数件は異なる増加連番を持ち、
-      // ローカル拒否ではここに到達しないため連番を消費しない。
-      streamSeq.set(streamId, seq + 1);
-      const waiting = waitForResponse(requestId, options?.timeoutMs);
-      try {
-        dispatchReliable(echoAdmission, () => {
-          sendRaw(text);
-        });
-      } catch (error) {
-        waiting.cancel();
-        return Promise.reject(error);
-      }
-      return waiting.promise.then((message) => {
-        if (message.type !== "echo_response") {
-          throw new WorldClientError("UNEXPECTED_MESSAGE", "echo 応答ではない。");
-        }
-        return { seq: message.seq, requestId: message.requestId, payload: message.payload };
-      });
+      return session.sendEcho(streamId, payload, options);
     },
     sendCommand: (
       streamId: StreamId,
@@ -1001,73 +686,25 @@ export function createWorldClient(options: WorldClientOptions): WorldClient {
       params?: unknown,
       options?: { readonly timeoutMs?: number },
     ): Promise<CommandResponseMessage> => {
-      if (state !== "authorized" || sessionId === null) {
+      // 認可判定は接続状態の所有者（クライアント）が行い、本体はセッションに委ねる。
+      if (state !== "authorized" || session === null) {
         return Promise.reject(new WorldClientError("NOT_AUTHORIZED", "認証後にのみ送信できる。"));
       }
-      const activeSession = sessionId;
-      const seq = peekSeq(streamId);
-      const requestId: RequestId = crypto.randomUUID();
-      const text = stringifyBridgeMessage({
-        v: PROTOCOL_VERSION,
-        type: "command_request",
-        sessionId: activeSession,
-        streamId,
-        kind: "reliable",
-        seq,
-        requestId,
-        command,
-        ...(params === undefined ? {} : { params }),
-      });
-      // 寸法検査→受付可否判定の順で、拒否時は採番・待機枠・会計のいずれも消費しない。
-      let commandAdmission: "send" | "queue";
-      try {
-        assertMessageSize(text);
-        commandAdmission = admitReliable();
-      } catch (error) {
-        // 本 API は Promise で結果を返す契約のため、同期の検査落ちも拒否に載せる。
-        return Promise.reject(error);
-      }
-      // 受付確定時に採番する。待機中の複数件は異なる増加連番を持ち、
-      // ローカル拒否ではここに到達しないため連番を消費しない。
-      streamSeq.set(streamId, seq + 1);
-      const waiting = waitForResponse(requestId, options?.timeoutMs);
-      try {
-        dispatchReliable(commandAdmission, () => {
-          sendRaw(text);
-        });
-      } catch (error) {
-        waiting.cancel();
-        return Promise.reject(error);
-      }
-      return waiting.promise.then((message) => {
-        if (message.type !== "command_response") {
-          throw new WorldClientError("UNEXPECTED_MESSAGE", "command 応答ではない。");
-        }
-        return message;
-      });
+      return session.sendCommand(streamId, command, params, options);
     },
     sendLatest: (streamId: StreamId, payload: unknown): number => {
-      if (state !== "authorized" || sessionId === null) {
+      // 認可判定は接続状態の所有者（クライアント）が行い、本体はセッションに委ねる。
+      if (state !== "authorized" || session === null) {
         throw new WorldClientError("NOT_AUTHORIZED", "認証後にのみ送信できる。");
       }
-      const seq = peekSeq(streamId);
-      const text = stringifyBridgeMessage({
-        v: PROTOCOL_VERSION,
-        type: "data",
-        sessionId,
-        streamId,
-        kind: "latest",
-        seq,
-        payload,
-      });
-      // 受付前に検査し、超過は保持の更新・採番をせずに投げる。
-      assertMessageSize(text);
-      streamSeq.set(streamId, seq + 1);
-      latestSent.set(streamId, { seq, payload });
-      sendRaw(text);
-      return seq;
+      return session.sendLatest(streamId, payload);
     },
     getLatestSent: (streamId: StreamId): unknown => {
+      // 直近記録は接続をまたぐローカル記録である。認可中はセッション経由で読み、
+      // 切断中（セッションなし）はクライアント所有の実体から読む。指す実体は同一である。
+      if (session !== null) {
+        return session.getLatestSent(streamId);
+      }
       return latestSent.get(streamId)?.payload;
     },
     close: (code?: number, reason?: string): void => {
