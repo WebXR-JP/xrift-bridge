@@ -11,7 +11,7 @@
 - ローカル網アクセスの初回許可、拒否、権限取消後の挙動を記録する。
 - 不許可 `Origin`、欠落 `Origin`、再利用と期限切れの秘密値の拒否を記録する。
 - 待ち受けが LAN 側に露出していない証拠を残す。
-- 対象は XRift が動くパソコン版であり、必須は Chromium 系（Chrome、Edge）である。他は最善努力とする。対応表は観測結果で作る。
+- 対象は XRift が動くパソコン版であり、必須は Google Chrome のみである。他は最善努力とする。対応表は観測結果で作る。
 - ブラウザの安全機能を無効化した成功は合格にしない。
 
 ## 配送と負荷の試作条件
@@ -38,10 +38,12 @@
 | `maxConnections`                  |                     8 |
 | world-client `requestTimeoutMs`   |             10,000 ms |
 | world-client `maxPendingReliable` |                 128件 |
+| world-client `maxMessageBytes`    |          65,536 bytes |
 
-- 実装定義元と設定方法は以下である。サーバ側の8値は `apps/bridge/src/config.ts` の `DEFAULT_LIMITS` に置き、`BridgeOptions.limits` で上書きする。world-client の2値は `packages/world-client/src/client.ts` の既定値に置き、`WorldClientOptions` の `requestTimeoutMs`・`maxPendingReliable` で上書きする。ペアリングの確定値は `apps/bridge/src/config.ts` の `PAIRING_TTL_MS`・`PAIRING_SECRET_BYTES` に置く。
-- world-client の reliable 送信待機は件数上限（`maxPendingReliable`）のみであり、バイト上限は実装していない。件数上限しかない待機を「バイト上限も実装済み」と記述しない。
-- 試験で上書きした実効値の例は以下である。`apps/bridge/tests/server.test.ts` では `initialCreditWindow: 2`、`maxMessageBytes: 256・512`、`maxReliableQueueBytes: 16・実測応答バイト数・同−1`、`maxStreamsPerConnection: 2`、`maxConnections: 2`、`authTimeoutMs: 100`、`maxAuthAttempts: 1` を用いた。`packages/world-client/tests/client.test.ts` では `maxPendingReliable: 1` を用いた。
+- 実装定義元と設定方法は以下である。サーバ側の8値は `apps/bridge/src/config.ts` の `DEFAULT_LIMITS` に置き、`BridgeOptions.limits` で上書きする。world-client の3値は `packages/world-client/src/client.ts` の既定値に置き、`WorldClientOptions` の `requestTimeoutMs`・`maxPendingReliable`・`maxMessageBytes` で上書きする。ペアリングの確定値は `apps/bridge/src/config.ts` の `PAIRING_TTL_MS`・`PAIRING_SECRET_BYTES` に置く。件数容量 `maxReliableQueueMessages` は [プロトコル](protocol.md) の流れ制御における `C`（`reliable` 受付の件数容量で応答保持を含む）に対応し、初期付与 `initialCreditWindow` はその範囲内の累積付与である。
+- 意味論は [プロトコル](protocol.md) の流れ制御に従う。表値はその `C`・初期付与の暫定値である。
+- 待機 bound の意味論は[プロトコル](protocol.md)の流れ制御に従う。件数上限だけの待機を「総バイト上限も実装済み」と記述しない。
+- 試験で上書きした実効値の例は以下のとおりである（1つの試験が複数項目を上書きする場合を含む）。`apps/bridge/tests/server.test.ts` では受信上限の各試験で `maxMessageBytes: 256`、切断通知の試験で `maxMessageBytes: 512`、応答保持の下限試験で `maxReliableQueueBytes: 16`、応答バイト境界の2条件で `maxReliableQueueBytes: 実測応答バイト数` と `同−1` を使い分け、`maxStreamsPerConnection: 2`、`maxConnections: 2`（接続枠の回復試験では `1`）、`authTimeoutMs: 100`、`maxAuthAttempts: 1` を各試験で用いた。付与超過試験では `initialCreditWindow: 2`・`maxReliableQueueMessages: 4`、連番誤りの枠試験では `1`・`2`、初期付与超過の設定検証では `5`・`4` を用いた。小容量の回帰試験（10往復）では `initialCreditWindow: 2`、`maxReliableQueueMessages: 4` で進行継続・切断なし・容量不足なし（`apps/bridge/src/server.ts` の `BridgeStats`／`getStats()` による `queueFull === 0`）を確認する。容量解放ごとの累積 `limit` 通知と応答の対応は、3周期試験（`initialCreditWindow: 2`・`maxReliableQueueMessages: 4`）と送信完了保留試験（`initialCreditWindow: 2`・`maxReliableQueueMessages: 2`）で確認する。`packages/world-client/tests/client.test.ts` では `maxPendingReliable: 1` を用いた。
 
 ## 計測項目
 

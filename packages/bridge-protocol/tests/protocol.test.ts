@@ -72,7 +72,7 @@ test("認証・応答・コマンド・データ・クレジット・エラー�
       type: "data",
     },
     {
-      raw: { v: PROTOCOL_VERSION, type: "credit", sessionId: "s", window: 4 },
+      raw: { v: PROTOCOL_VERSION, type: "credit", sessionId: "s", limit: 4 },
       type: "credit",
     },
     {
@@ -82,6 +82,30 @@ test("認証・応答・コマンド・データ・クレジット・エラー�
   ];
   for (const sample of samples) {
     expect(parseBridgeMessage(JSON.stringify(sample.raw)).type).toBe(sample.type);
+  }
+});
+
+test("クレジットは累積付与の limit を持ち旧 window 字段を拒否する", () => {
+  const message = parseBridgeMessage(
+    JSON.stringify({ v: PROTOCOL_VERSION, type: "credit", sessionId: "s", limit: 7 }),
+  );
+  expect(message.type).toBe("credit");
+  if (message.type === "credit") {
+    expect(message.limit).toBe(7);
+  }
+  // 残数上書きの旧字段だけでは受理しない。
+  expect(() =>
+    parseBridgeMessage(
+      JSON.stringify({ v: PROTOCOL_VERSION, type: "credit", sessionId: "s", window: 4 }),
+    ),
+  ).toThrowError(ProtocolError);
+  // limit の型不正も拒否する。
+  for (const limit of [-1, 1.5, "4", Number.NaN]) {
+    expect(() =>
+      parseBridgeMessage(
+        JSON.stringify({ v: PROTOCOL_VERSION, type: "credit", sessionId: "s", limit }),
+      ),
+    ).toThrowError(ProtocolError);
   }
 });
 

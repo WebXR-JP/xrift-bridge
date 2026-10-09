@@ -47,6 +47,13 @@ export interface BridgeOptions {
   readonly allowedOrigins: readonly string[];
   /** 流れ制御・制限の暫定値の上書き。 */
   readonly limits?: Partial<BridgeLimits>;
+  /**
+   * 送信処理の差し替え点。未指定なら WebSocket へ直接送る。
+   *
+   * 応答の保持容量は完了通知で解放するため、差し替え実装も完了・失敗の
+   * いずれかで必ず一度だけ `done` を呼ぶこと。
+   */
+  readonly transport?: BridgeTransport;
   /** 構造化ログの出力先。 */
   readonly logger?: BridgeLogger;
   /** 現在時刻（ミリ秒）。試験で差し替えできる。 */
@@ -126,9 +133,43 @@ interface ConnectionState {
   controlQueue: string[];
   responseQueue: Array<{ readonly text: string; readonly bytes: number }>;
   queuedBytes: number;
-  advertisedWindow: number;
+  // クレジット会計（接続単位・全 reliable ストリーム共通）。
+  // C（件数容量）= limits.maxReliableQueueMessages に対し、
+  // 常に (grantedTotal − consumedTotal) + heldCount <= C を保つ。
+  // grantedTotal: 累積付与件数、consumedTotal: 消費済み受信件数、
+  // heldCount: 受信済みで容量未解放の件数（未送信・送信中の応答を含む）。
+  grantedTotal: number;
+  consumedTotal: number;
+  heldCount: number;
+  advertisedLimit: number;
   flushScheduled: boolean;
 }
+
+/**
+ * ブリッジ→クライアント方向の送信を担う境界。
+ *
+ * 既定では WebSocket へ直接送り、書出し完了（または失敗）を `done` で返す。
+ * 内部試験では完了通知の保留・解放を操作するために差し替える。
+ */
+export interface BridgeTransport {
+  /**
+   * フレームを送る。
+   *
+   * @param socket - 送信先の接続ソケット。
+   * @param text - wire 形式のメッセージ。
+   * @param done - 書出し完了時は `null`、失敗時は理由で一度だけ呼ぶ。
+   */
+  send(socket: WebSocket, text: string, done: (error: Error | null) => void): void;
+}
+
+/** 既定の送信処理。WebSocket へ直接送る。 */
+const defaultTransport: BridgeTransport = {
+  send: (socket, text, done) => {
+    socket.send(text, (error?: Error) => {
+      done(error ?? null);
+    });
+  },
+};
 
 /** 運用切断の固定 reason。 */
 export const OPERATOR_DISCONNECT_REASON = "operator disconnect";
@@ -158,6 +199,7 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
   }
   const allowedOrigins = new Set(options.allowedOrigins.map(parseAllowedOrigin));
   const limits = resolveLimits(options.limits);
+  const transport = options.transport ?? defaultTransport;
   const logger: BridgeLogger = options.logger ?? defaultLogger;
   const pairing = new PairingStore(options.now);
   const latestMailbox = new Map<StreamId, { seq: number; payload: unknown }>();
@@ -240,7 +282,10 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
       controlQueue: [],
       responseQueue: [],
       queuedBytes: 0,
-      advertisedWindow: 0,
+      grantedTotal: 0,
+      consumedTotal: 0,
+      heldCount: 0,
+      advertisedLimit: 0,
       flushScheduled: false,
     };
     connections.add(state);
@@ -284,10 +329,6 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
     return Buffer.from(data).toString("utf-8");
   }
 
-  function currentWindow(state: ConnectionState): number {
-    return Math.max(0, limits.maxReliableQueueMessages - state.responseQueue.length);
-  }
-
   function enqueueControl(state: ConnectionState, message: BridgeToClientMessage): void {
     state.controlQueue.push(stringifyBridgeMessage(message));
     scheduleFlush(state);
@@ -328,7 +369,6 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
       return;
     }
     // 制御を優先し、応答は FIFO で流す（B1 の最小配送順）。
-    // auth_ok 直後の credit 送出順は変えない。
     let next = state.controlQueue.shift();
     let responseBytes = 0;
     let isResponse = false;
@@ -341,11 +381,31 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
       }
     }
     if (next === undefined) {
-      advertiseCredit(state);
       return;
     }
+    // ADR: 送信キューからの取出しでは容量を解放しない。未送信応答と送信中応答を
+    // 容量に含め、書出し完了の通知で枠と保持バイトを解放する。通知と送信の交差は
+    // 累積付与で安全にするため、完了前の追加付与は解放時の advertise に任せ、
+    // ここでは送らない。
+    let settled = false;
     try {
-      state.socket.send(next);
+      transport.send(state.socket, next, (error) => {
+        // 差し替え境界の多重通知では二重解放しない。
+        if (settled) return;
+        settled = true;
+        if (error !== null) {
+          // 送信失敗は切断として扱い、残りは破棄する。
+          state.controlQueue.length = 0;
+          state.responseQueue.length = 0;
+          state.queuedBytes = 0;
+          closeSocket(state, 1011, "send failure");
+          return;
+        }
+        if (isResponse) {
+          state.queuedBytes = Math.max(0, state.queuedBytes - responseBytes);
+          releaseHold(state);
+        }
+      });
     } catch {
       // 送信失敗は切断として扱い、残りは破棄する。
       state.controlQueue.length = 0;
@@ -354,34 +414,50 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
       closeSocket(state, 1011, "send failure");
       return;
     }
-    if (isResponse) {
-      state.queuedBytes = Math.max(0, state.queuedBytes - responseBytes);
-    }
     if (state.controlQueue.length > 0 || state.responseQueue.length > 0) {
       scheduleFlush(state);
       return;
     }
-    state.queuedBytes = 0;
-    advertiseCredit(state);
   }
 
+  /** 追加付与可能量。C − U − (G − R)。 */
+  function grantableCredit(state: ConnectionState): number {
+    return (
+      limits.maxReliableQueueMessages - state.heldCount - (state.grantedTotal - state.consumedTotal)
+    );
+  }
+
+  /**
+   * 解放で生じた余裕を追加付与する。
+   *
+   * 付与は累積件数の通知で行い、残数の上書きはしない。同じ `limit` の再通知は
+   * 権利を増やさない。送信callback完了はクライアントのアプリ処理完了を保証
+   * せず、ここで保証するのはブリッジ内の受付・応答保持容量のみである。
+   */
   function advertiseCredit(state: ConnectionState): void {
     if (!state.authorized) return;
-    const window = currentWindow(state);
-    if (window <= state.advertisedWindow) return;
-    state.advertisedWindow = window;
+    const extra = grantableCredit(state);
+    if (extra <= 0) return;
+    state.grantedTotal += extra;
+    state.advertisedLimit = state.grantedTotal;
     try {
       state.socket.send(
         stringifyBridgeMessage({
           v: PROTOCOL_VERSION,
           type: "credit",
           sessionId: state.sessionId ?? "",
-          window,
+          limit: state.grantedTotal,
         }),
       );
     } catch {
       closeSocket(state, 1011, "send failure");
     }
+  }
+
+  /** 予約していた容量を解放し、生じた余裕を追加付与する。 */
+  function releaseHold(state: ConnectionState): void {
+    state.heldCount -= 1;
+    advertiseCredit(state);
   }
 
   function sendError(
@@ -553,7 +629,10 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
     }
     state.authorized = true;
     state.sessionId = randomUUID();
-    state.advertisedWindow = limits.initialCreditWindow;
+    // 初期付与は累積件数として会計へ載せる。ここでは追加の credit 通知を送らず、
+    // `auth_ok.window` が初期付与を担う。容量への top-up はしない。
+    state.grantedTotal = limits.initialCreditWindow;
+    state.advertisedLimit = limits.initialCreditWindow;
     if (state.authTimer !== null) {
       clearTimeout(state.authTimer);
       state.authTimer = null;
@@ -595,13 +674,36 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
       return;
     }
     const requestId = parsed.type === "data" ? undefined : parsed.requestId;
+    // クレジットは接続単位・全 reliable ストリーム共通で、受け付けた reliable に
+    // 対し1件消費する。latest・認証・制御フレームは消費しない。
+    const consumesCredit = parsed.kind === "reliable";
+    if (consumesCredit) {
+      if (state.consumedTotal >= state.grantedTotal) {
+        // 付与超過の reliable は業務処理前に明示拒否して切断する。
+        sendError(
+          state,
+          "CREDIT_EXHAUSTED",
+          "クレジットの付与を超えた reliable である。",
+          requestId,
+          true,
+        );
+        closeSocket(state, 1011, "credit exhausted");
+        return;
+      }
+      state.consumedTotal += 1;
+      state.heldCount += 1;
+    }
     if (!checkStream(state, parsed.streamId)) {
+      // 消費済みの予約は解放し、枠を永久に失わせない。
+      if (consumesCredit) releaseHold(state);
       sendError(state, "STREAM_LIMIT", "ストリーム数が上限を超えた。", requestId);
       return;
     }
     if (parsed.kind === "reliable") {
       const expected = state.expectedSeq.get(parsed.streamId) ?? 0;
       if (parsed.seq !== expected) {
+        // 消費済みの予約は解放し、枠を永久に失わせない。
+        releaseHold(state);
         sendError(state, "UNEXPECTED_SEQ", "ストリーム内連番が期待値と一致しない。", requestId);
         return;
       }
@@ -627,6 +729,8 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
         payload: parsed.payload,
       });
       if (!enqueueResponse(state, text)) {
+        // 消費済みの予約を解放したうえで切断し、枠を永久に失わせない。
+        state.heldCount -= 1;
         sendError(state, "QUEUE_FULL", "応答キューが満杯である。", parsed.requestId, true);
         closeSocket(state, 1011, "queue full");
       }
@@ -658,6 +762,8 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
             },
       );
       if (!enqueueResponse(state, text)) {
+        // 消費済みの予約を解放したうえで切断し、枠を永久に失わせない。
+        state.heldCount -= 1;
         sendError(state, "QUEUE_FULL", "応答キューが満杯である。", parsed.requestId, true);
         closeSocket(state, 1011, "queue full");
       }
@@ -665,6 +771,10 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
     }
     stats.latestStored += 1;
     latestMailbox.set(parsed.streamId, { seq: parsed.seq, payload: parsed.payload });
+    // ADR: `data(kind: reliable)` が latest 受信箱へ入る扱いは別項目として残し、
+    // ここでは直さない。応答を保持しない reliable は予約を即時解放し、
+    // 枠を失わせない（解放で生じた余裕は追加付与する）。
+    if (consumesCredit) releaseHold(state);
   }
 
   await new Promise<void>((resolve, reject) => {

@@ -20,7 +20,8 @@ export interface BridgeLimits {
    */
   readonly maxMessageBytes: number;
   /**
-   * 接続ごとの reliable 未応答キューの上限件数。
+   * 接続単位の reliable 件数容量。未消費の付与残と保持中（未送信・送信中）の
+   * 応答の合計がこの件数に収まるよう、累積付与で制御する。
    *
    * @defaultValue `256`（B1 暫定）。
    */
@@ -38,7 +39,8 @@ export interface BridgeLimits {
    */
   readonly maxStreamsPerConnection: number;
   /**
-   * 認証直後に付与する reliable 送信クレジット。
+   * 認証直後に付与する reliable 送信クレジット（累積件数）。
+   * `maxReliableQueueMessages` 以下であること。
    *
    * @defaultValue `32`（B1 暫定）。
    */
@@ -95,6 +97,10 @@ export function resolveLimits(partial?: Partial<BridgeLimits>): BridgeLimits {
     if (!Number.isInteger(value) || value <= 0) {
       throw new RangeError(`limits.${key} は正の整数であること。`);
     }
+  }
+  if (merged.initialCreditWindow > merged.maxReliableQueueMessages) {
+    // 初期付与が件数容量を超えると、受信前に付与した権利が容量に収まらない。
+    throw new RangeError("limits.initialCreditWindow は maxReliableQueueMessages 以下であること。");
   }
   return merged;
 }

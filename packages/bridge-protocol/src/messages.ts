@@ -9,7 +9,7 @@
  */
 
 /** プロトコルのバージョン。互換性のない変更時に上げる。 */
-export const PROTOCOL_VERSION = "0.0.0";
+export const PROTOCOL_VERSION = "0.1.0";
 
 /** 接続セッション識別子。ブリッジが認証成功時に発行する。 */
 export type SessionId = string;
@@ -127,13 +127,16 @@ export interface DataMessage extends MessageBase {
 /**
  * 受信側容量を反映するクレジット付与（ブリッジ→クライアント）。
  *
- * 処理完了の応答とは別物で、送信側は `window` の範囲でのみ reliable を送る。
+ * 処理完了の応答とは別物で、送信側は累積付与から累積送信を引いた範囲でのみ
+ * reliable を送る。`limit` はこの接続で送信を許可した累積件数であり、残数の
+ * 上書きではない。同じ `limit` の再通知は追加付与にならない。
+ * 初期付与は `auth_ok.window` が担い、以降の追加はこの通知で送る。
  */
 export interface CreditMessage extends MessageBase {
   readonly type: "credit";
   readonly sessionId: SessionId;
-  /** 送信側が消費してよい残クレジット。 */
-  readonly window: number;
+  /** この接続で送信を許可した累積件数。送信可能残数 = `limit` − 累積送信件数。 */
+  readonly limit: number;
 }
 
 /** 明示エラーの通知。黙って捨てず待機または明示エラーで返す。 */

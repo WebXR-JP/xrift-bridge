@@ -267,7 +267,7 @@ export function parseBridgeMessage(raw: unknown): BridgeMessage {
         v,
         type: "credit",
         sessionId: readId(value, "sessionId"),
-        window: readWindow(value),
+        limit: readCount(value, "limit"),
       } satisfies CreditMessage;
     }
     case "error": {
@@ -305,14 +305,22 @@ function readReliable(value: Record<string, unknown>): "reliable" {
 }
 
 function readWindow(value: Record<string, unknown>): number {
-  const raw: unknown = value["window"];
+  return readCount(value, "window");
+}
+
+/** 累積付与などの件数を 0 以上の安全な整数として読む。 */
+function readCount(value: Record<string, unknown>, field: string): number {
+  const raw: unknown = value[field];
   if (
     typeof raw !== "number" ||
     !Number.isInteger(raw) ||
     raw < 0 ||
     raw > Number.MAX_SAFE_INTEGER
   ) {
-    throw new ProtocolError("INVALID_MESSAGE", "字段 `window` は 0 以上の安全な整数であること。");
+    throw new ProtocolError(
+      "INVALID_MESSAGE",
+      `字段 \`${field}\` は 0 以上の安全な整数であること。`,
+    );
   }
   return raw;
 }

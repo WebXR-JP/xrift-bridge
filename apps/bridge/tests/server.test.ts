@@ -3,7 +3,12 @@ import { connect } from "node:net";
 import { WebSocket, type RawData } from "ws";
 import { PROTOCOL_VERSION, parseBridgeMessage, type BridgeMessage } from "bridge-protocol";
 import { createWorldClient, type WorldClient } from "world-client";
-import { createBridgeServer, type BridgeOptions, type BridgeServer } from "../src/server.ts";
+import {
+  createBridgeServer,
+  type BridgeOptions,
+  type BridgeServer,
+  type BridgeTransport,
+} from "../src/server.ts";
 import { PAIRING_TTL_MS } from "../src/config.ts";
 import type { BridgeLogEvent } from "../src/log.ts";
 
@@ -216,6 +221,208 @@ class FrameCollector {
       this.closeWaiters.add(notify);
     });
   }
+}
+
+/**
+ * credit 履歴を残す受信器。
+ *
+ * 既存の `FrameCollector` は待機中の credit を読み飛ばすため、補充の観測には
+ * 使えない。ここでは credit を破棄せず履歴に残し、目的応答の探索でも残す。
+ * 想定外フレームの有無は各試験の最後に `framesOf`・`creditLimits` で asserts する。
+ */
+class CreditHistoryCollector {
+  private readonly frames: string[] = [];
+  private readonly waiters = new Set<() => void>();
+  private closed: { code: number; reason: string } | null = null;
+  private readonly closeWaiters = new Set<(value: { code: number; reason: string }) => void>();
+  /** 受信した credit の `limit` 履歴（受信順）。 */
+  readonly creditLimits: number[] = [];
+  /** 受信した credit のセッション履歴（受信順）。 */
+  readonly creditSessions: string[] = [];
+
+  constructor(socket: WebSocket) {
+    socket.on("message", (data: RawData) => {
+      const raw = rawToText(data);
+      this.frames.push(raw);
+      try {
+        const parsed = parseBridgeMessage(raw);
+        if (parsed.type === "credit") {
+          this.creditLimits.push(parsed.limit);
+          this.creditSessions.push(parsed.sessionId);
+        }
+      } catch {
+        // 非準拠フレームの扱いは各試験の asserts に任せる。
+      }
+      for (const notify of this.waiters) {
+        notify();
+      }
+    });
+    socket.on("close", (code: number, reason: Buffer) => {
+      this.closed = { code, reason: reason.toString("utf-8") };
+      for (const notify of this.closeWaiters) {
+        const value = this.closed;
+        if (value !== null) notify(value);
+      }
+      for (const notify of this.waiters) {
+        notify();
+      }
+    });
+  }
+
+  /** 受信フレームの写し（生テキスト、受信順）。 */
+  allFrames(): string[] {
+    return [...this.frames];
+  }
+
+  /** 切断していれば内容、していなければ `null`。 */
+  closeState(): { code: number; reason: string } | null {
+    return this.closed;
+  }
+
+  /** 条件に一致する最初の受信を取り出して待つ。credit は残し続ける。 */
+  async waitFor(
+    predicate: (message: BridgeMessage) => boolean,
+    timeoutMs = 3_000,
+  ): Promise<{ raw: string; message: BridgeMessage }> {
+    const deadline = Date.now() + timeoutMs;
+    while (true) {
+      for (let index = 0; index < this.frames.length; index += 1) {
+        const raw = this.frames[index];
+        if (raw === undefined) continue;
+        const parsed = parseBridgeMessage(raw);
+        if (predicate(parsed)) {
+          this.frames.splice(index, 1);
+          return { raw, message: parsed };
+        }
+      }
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) {
+        throw new Error("応答待ちがタイムアウトした。");
+      }
+      await new Promise<void>((resolve) => {
+        const timer = setTimeout(() => {
+          this.waiters.delete(notify);
+          resolve();
+        }, remaining);
+        const notify = (): void => {
+          clearTimeout(timer);
+          this.waiters.delete(notify);
+          resolve();
+        };
+        this.waiters.add(notify);
+      });
+    }
+  }
+
+  /** 指定の `limit` を超える credit 通知を待つ。 */
+  async waitForCreditAbove(threshold: number, timeoutMs = 3_000): Promise<number> {
+    const deadline = Date.now() + timeoutMs;
+    while (true) {
+      const found = this.creditLimits.find((limit) => limit > threshold);
+      if (found !== undefined) return found;
+      if (Date.now() >= deadline) {
+        throw new Error(`limit が ${threshold} を超える credit を観測できない。`);
+      }
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+  }
+
+  async waitClose(timeoutMs = 3_000): Promise<{ code: number; reason: string }> {
+    if (this.closed !== null) return this.closed;
+    return new Promise<{ code: number; reason: string }>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.closeWaiters.delete(notify);
+        reject(new Error("切断待ちがタイムアウトした。"));
+      }, timeoutMs);
+      const notify = (value: { code: number; reason: string }): void => {
+        clearTimeout(timer);
+        this.closeWaiters.delete(notify);
+        resolve(value);
+      };
+      this.closeWaiters.add(notify);
+    });
+  }
+}
+
+/** 接続直後から履歴収集で購読する送受信器を開く。 */
+async function openHistoryCollected(
+  url: string,
+  origin: string,
+): Promise<{ socket: WebSocket; collector: CreditHistoryCollector }> {
+  const socket = await openRaw(url, origin);
+  const collector = new CreditHistoryCollector(socket);
+  return { socket, collector };
+}
+
+/**
+ * 送信完了の通知を試験側で保留・解放できる差し替え送信路。
+ *
+ * 実サーバの会計経路に挿し、応答フレームのバイトは即時転送しつつ完了通知だけ
+ * 保留する。制御フレーム（認証・エラー・credit 通知は対象外）は即時完了させる。
+ */
+function createHeldTransport(): {
+  transport: BridgeTransport;
+  /** 転送済みフレームの生テキスト（送信順）。 */
+  forwarded: string[];
+  /** 保留中の応答完了の数。 */
+  heldResponses(): number;
+  /** 最も古い保留を1件完了させる。 */
+  releaseOne(): void;
+  /** 保留をすべて完了させる。 */
+  releaseAll(): void;
+} {
+  const forwarded: string[] = [];
+  const pending: Array<(error: Error | null) => void> = [];
+  return {
+    transport: {
+      send: (socket, text, done) => {
+        forwarded.push(text);
+        let holdsResponse = false;
+        try {
+          const parsed = parseBridgeMessage(text);
+          holdsResponse = parsed.type === "echo_response" || parsed.type === "command_response";
+        } catch {
+          // 非準拠フレームは試験対象外のため即時完了扱いにする。
+        }
+        socket.send(text);
+        if (holdsResponse) {
+          pending.push(done);
+          return;
+        }
+        done(null);
+      },
+    },
+    forwarded,
+    heldResponses: () => pending.length,
+    releaseOne: () => {
+      const done = pending.shift();
+      if (done === undefined) throw new Error("解放できる保留がない。");
+      done(null);
+    },
+    releaseAll: () => {
+      let done = pending.shift();
+      while (done !== undefined) {
+        done(null);
+        done = pending.shift();
+      }
+    },
+  };
+}
+
+/** 指定時間だけ credit が増えないことを確かめる。増加があれば即失敗する。 */
+async function expectNoNewCredit(
+  collector: CreditHistoryCollector,
+  baseline: number,
+  timeoutMs = 200,
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (collector.creditLimits.length > baseline) {
+      throw new Error("保留中に再付与されており容量が解放されていない。");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  expect(collector.creditLimits).toHaveLength(baseline);
 }
 
 function openRaw(url: string, origin?: string): Promise<WebSocket> {
@@ -448,16 +655,29 @@ test("latest は受信箱に最新値を残す", async () => {
   expect(server.getStats().latestStored).toBe(2);
 });
 
-test("小さな初期クレジットでも補充で送り続けられる", async () => {
-  const server = await startServer({ limits: { initialCreditWindow: 2 } });
+test("小容量でも補充で上限超の往復を続けられる（枯渇デッドロックの回帰）", async () => {
+  // 初期 2・上限 4 で 10 往復する。補充がなければ 5 件目で止まるため、
+  // 既定 256 件での 8 往復では証明できない。件数容量を超える反復で確認する。
+  const server = await startServer({
+    limits: { initialCreditWindow: 2, maxReliableQueueMessages: 4 },
+  });
   const issued = server.issuePairing(DEV_ORIGIN);
   const client = createWorldClient({ endpoint: server.endpoint, origin: DEV_ORIGIN });
   clients.push(client);
+  const closed: Array<{ code: number; reason: string }> = [];
+  client.onEvent((event) => {
+    if (event.kind === "closed") closed.push({ code: event.code, reason: event.reason });
+  });
   await client.connect(issued.secret);
-  for (let index = 0; index < 8; index += 1) {
+  for (let index = 0; index < 10; index += 1) {
     const echoed = await client.sendEcho("main", { n: index });
     expect(echoed.seq).toBe(index);
+    expect(echoed.payload).toEqual({ n: index });
   }
+  // 途中で切断されておらず、容量不足の記録も残らない。
+  expect(closed).toHaveLength(0);
+  expect(server.getStats().queueFull).toBe(0);
+  expect(server.getStats().echoCount).toBe(10);
 });
 
 test("ストリーム内連番の飛びを拒否する", async () => {
@@ -739,7 +959,7 @@ test("UNEXPECTED_DIRECTION は拒否し対象業務を処理しない", async ()
       v: PROTOCOL_VERSION,
       type: "credit",
       sessionId: ok.message.sessionId,
-      window: 8,
+      limit: 8,
     }),
   );
   const error = await collector.waitForErrorCode("UNEXPECTED_DIRECTION");
@@ -980,4 +1200,283 @@ test("world-client は切断コードを通知し未完了要求を結果不明�
   await expect(pending).rejects.toMatchObject({ code: "CONNECTION_CLOSED" });
   await waitForCondition(() => closedEvents.length >= 1);
   expect(closedEvents[0]?.code).toBe(1009);
+});
+
+test("複数ストリームの連番は独立し片方の飛びが他方に影響しない", async () => {
+  // 各ストリームが 0 から始まる独立採番であること、片方の欠番エラーが
+  // 他方の期待値も自ストリームの期待値も進めないことを確かめる。
+  const server = await startServer();
+  const issued = server.issuePairing(DEV_ORIGIN);
+  const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
+  socket.send(authMessage(issued.secret));
+  const ok = await collector.waitForType("auth_ok");
+  if (ok.message.type !== "auth_ok") throw new Error("認証応答ではない。");
+  const sessionId = ok.message.sessionId;
+
+  const waitEcho = async (streamId: string, seq: number, requestId: string): Promise<void> => {
+    socket.send(echoMessage(sessionId, streamId, seq, requestId));
+    const echoed = await collector.waitFor(
+      (message) => message.type === "echo_response" && message.requestId === requestId,
+    );
+    expect(echoed.message.type).toBe("echo_response");
+    if (echoed.message.type !== "echo_response") throw new Error("echo 応答ではない。");
+    // 応答が要求したストリーム・連番に対応している。
+    expect(echoed.message.streamId).toBe(streamId);
+    expect(echoed.message.seq).toBe(seq);
+  };
+
+  // 交互に送っても両方が 0 から始まる。全体通し番号なら sB の 0 が拒否される。
+  await waitEcho("sA", 0, "r-a0");
+  await waitEcho("sB", 0, "r-b0");
+  await waitEcho("sA", 1, "r-a1");
+  await waitEcho("sB", 1, "r-b1");
+
+  // sA だけ連番を飛ばすとその要求だけが明示エラーになる。
+  const before = server.getStats().echoCount;
+  socket.send(echoMessage(sessionId, "sA", 5, "r-a-skip"));
+  const error = await collector.waitForErrorCode("UNEXPECTED_SEQ");
+  expect(error.message.type).toBe("error");
+  if (error.message.type === "error") {
+    expect(error.message.requestId).toBe("r-a-skip");
+  }
+  // 飛びは処理件数に数えない。
+  expect(server.getStats().echoCount).toBe(before);
+
+  // 他方は影響なく続けられる。
+  await waitEcho("sB", 2, "r-b2");
+  // 飛ばした側も正しい連番を送れば再開できる。エラーで期待値は進んでいない。
+  await waitEcho("sA", 2, "r-a2");
+});
+
+test("切断後は接続枠と接続別状態が残らず新接続が使える", async () => {
+  // 枠上限 1 で旧接続を閉じると枠が回復し、新接続の同名ストリームが
+  // 連番 0 から始まる（接続別の期待値が破棄された）ことを確かめる。
+  const server = await startServer({ limits: { maxConnections: 1 } });
+  const first = createWorldClient({ endpoint: server.endpoint, origin: DEV_ORIGIN });
+  clients.push(first);
+  await first.connect(server.issuePairing(DEV_ORIGIN).secret);
+  first.sendLatest("pose", { x: 1 });
+  const firstEcho = await first.sendEcho("main", { marker: 1 });
+  expect(firstEcho.seq).toBe(0);
+  expect(server.getLatest("pose")).toEqual({ x: 1 });
+  expect(server.getConnectionCount()).toBe(1);
+
+  first.close();
+  await waitForCondition(() => server.getConnectionCount() === 0);
+  expect(server.listConnections()).toHaveLength(0);
+
+  // 枠が残っていたら上限 1 のため接続できない。
+  const second = createWorldClient({ endpoint: server.endpoint, origin: DEV_ORIGIN });
+  clients.push(second);
+  await second.connect(server.issuePairing(DEV_ORIGIN).secret);
+  // 旧接続の期待値が残っていたら seq 0 は UNEXPECTED_SEQ で拒否される。
+  const secondEcho = await second.sendEcho("main", { marker: 2 });
+  expect(secondEcho.seq).toBe(0);
+  expect(secondEcho.payload).toEqual({ marker: 2 });
+  // 旧接続の latest が新セッションを阻害せず上書きできる。
+  second.sendLatest("pose", { x: 2 });
+  const flushed = await second.sendEcho("main", { marker: "flush" });
+  expect(flushed.payload).toEqual({ marker: "flush" });
+  expect(server.getLatest("pose")).toEqual({ x: 2 });
+});
+
+test("raw接続で付与を使い切り新しいcreditで送り続けられる（3周期）", async () => {
+  // 初期 2・上限 4。累積 limit を守って送り、付与→送信を3周期回す。
+  // 追加付与は容量解放時のみ送るため、認証直後の通知は補充周期に数えない。
+  const server = await startServer({
+    limits: { initialCreditWindow: 2, maxReliableQueueMessages: 4 },
+  });
+  const issued = server.issuePairing(DEV_ORIGIN);
+  const { socket, collector } = await openHistoryCollected(server.endpoint, DEV_ORIGIN);
+  socket.send(authMessage(issued.secret));
+  const ok = await collector.waitFor((message) => message.type === "auth_ok");
+  if (ok.message.type !== "auth_ok") throw new Error("認証応答ではない。");
+  const sessionId = ok.message.sessionId;
+  expect(ok.message.window).toBe(2);
+
+  let limit = ok.message.window;
+  let sent = 0;
+  const sendEcho = (seq: number, requestId: string): void => {
+    if (!(sent < limit)) throw new Error("累積 limit を超えて送ろうとした。");
+    socket.send(echoMessage(sessionId, "main", seq, requestId));
+    sent += 1;
+  };
+  const waitEcho = async (requestId: string, seq: number): Promise<void> => {
+    const echoed = await collector.waitFor(
+      (message) => message.type === "echo_response" && message.requestId === requestId,
+    );
+    if (echoed.message.type !== "echo_response") throw new Error("echo 応答ではない。");
+    expect(echoed.message.streamId).toBe("main");
+    expect(echoed.message.seq).toBe(seq);
+  };
+
+  // 周期ごとに1件送り、応答と新しい credit を観測する。
+  // 付与式（C=4）から replenishment の履歴は [5, 6, 7] になる。
+  const observed: number[] = [];
+  for (let cycle = 0; cycle < 3; cycle += 1) {
+    sendEcho(cycle, `r-cycle-${cycle}`);
+    await waitEcho(`r-cycle-${cycle}`, cycle);
+    limit = await collector.waitForCreditAbove(limit);
+    observed.push(limit);
+  }
+  expect(observed).toEqual([5, 6, 7]);
+  expect(collector.creditLimits).toEqual([5, 6, 7]);
+  for (const creditSession of collector.creditSessions) {
+    expect(creditSession).toBe(sessionId);
+  }
+  // 使い切った付与でさらに送れる（周期外の確認）。
+  sendEcho(3, "r-cycle-3");
+  await waitEcho("r-cycle-3", 3);
+  const grown = await collector.waitForCreditAbove(limit);
+  expect(grown).toBe(8);
+  expect(sent).toBe(4);
+  // 切断はなく、容量不足の記録も残らない。
+  expect(collector.closeState()).toBeNull();
+  expect(server.getStats().queueFull).toBe(0);
+  expect(server.getStats().echoCount).toBe(4);
+});
+
+test("送信完了の保留中は再付与せず1件解放で1件回復する（実会計経路）", async () => {
+  // 件数容量 2・初期 2。送信完了の通知を保留できる差し替え送信路で、
+  // 保留中は再付与なし→1件解放で累積 +1 を反復確認する。
+  const held = createHeldTransport();
+  const server = await startServer({
+    limits: { initialCreditWindow: 2, maxReliableQueueMessages: 2 },
+    transport: held.transport,
+  });
+  const issued = server.issuePairing(DEV_ORIGIN);
+  const { socket, collector } = await openHistoryCollected(server.endpoint, DEV_ORIGIN);
+  socket.send(authMessage(issued.secret));
+  const ok = await collector.waitFor((message) => message.type === "auth_ok");
+  if (ok.message.type !== "auth_ok") throw new Error("認証応答ではない。");
+  const sessionId = ok.message.sessionId;
+
+  let limit = 2;
+  let sent = 0;
+  const sendEcho = (seq: number, requestId: string): void => {
+    if (!(sent < limit)) throw new Error("累積 limit を超えて送ろうとした。");
+    socket.send(echoMessage(sessionId, "main", seq, requestId));
+    sent += 1;
+  };
+  const waitEcho = async (requestId: string, seq: number): Promise<void> => {
+    const echoed = await collector.waitFor(
+      (message) => message.type === "echo_response" && message.requestId === requestId,
+    );
+    if (echoed.message.type !== "echo_response") throw new Error("echo 応答ではない。");
+    expect(echoed.message.seq).toBe(seq);
+  };
+
+  // 付与分を使い切る。応答バイトは届くが完了通知は保留される。
+  sendEcho(0, "r-h0");
+  sendEcho(1, "r-h1");
+  await waitEcho("r-h0", 0);
+  await waitEcho("r-h1", 1);
+  expect(held.heldResponses()).toBe(2);
+  // 保留中は再付与しない。
+  await expectNoNewCredit(collector, 0);
+
+  // 1件解放で1件分回復する。
+  held.releaseOne();
+  expect(held.heldResponses()).toBe(1);
+  limit = await collector.waitForCreditAbove(limit);
+  expect(limit).toBe(3);
+
+  // 次の1件を送り、再び保留で止まる。
+  sendEcho(2, "r-h2");
+  await waitEcho("r-h2", 2);
+  await expectNoNewCredit(collector, 1);
+
+  // 反復：解放→付与→送信を繰り返す。
+  held.releaseOne();
+  limit = await collector.waitForCreditAbove(limit);
+  expect(limit).toBe(4);
+  sendEcho(3, "r-h3");
+  await waitEcho("r-h3", 3);
+  held.releaseOne();
+  limit = await collector.waitForCreditAbove(limit);
+  expect(limit).toBe(5);
+  expect(collector.creditLimits).toEqual([3, 4, 5]);
+
+  // 観測 limit の範囲内で送り、通知の到達より先に枠内送信しても受理される。
+  sendEcho(4, "r-h4");
+  await waitEcho("r-h4", 4);
+  held.releaseOne();
+  // credit(6) の到達を待たず、枠内（累積 6 以下）で送る。交差しても安全である。
+  socket.send(echoMessage(sessionId, "main", 5, "r-h5"));
+  sent += 1;
+  await waitEcho("r-h5", 5);
+  limit = await collector.waitForCreditAbove(limit);
+  expect(limit).toBe(6);
+  expect(sent).toBe(6);
+  expect(collector.closeState()).toBeNull();
+  expect(server.getStats().queueFull).toBe(0);
+  expect(server.getStats().echoCount).toBe(6);
+});
+
+test("付与超過のreliableは業務処理前に明示拒否して切断する", async () => {
+  // 初期 2・上限 4。応答の送信完了を保留できる差し替え送信路で、
+  // 3件目の到達前に容量が解放→追加付与される経路を塞ぎ、決定的に超過させる。
+  // 製品挙動は変えず、順序依存だけを試験側で固定する。
+  const held = createHeldTransport();
+  const server = await startServer({
+    limits: { initialCreditWindow: 2, maxReliableQueueMessages: 4 },
+    transport: held.transport,
+  });
+  const issued = server.issuePairing(DEV_ORIGIN);
+  const { socket, collector } = await openHistoryCollected(server.endpoint, DEV_ORIGIN);
+  socket.send(authMessage(issued.secret));
+  const ok = await collector.waitFor((message) => message.type === "auth_ok");
+  if (ok.message.type !== "auth_ok") throw new Error("認証応答ではない。");
+  const sessionId = ok.message.sessionId;
+  const closed = collector.waitClose();
+  socket.send(echoMessage(sessionId, "main", 0, "r-o0"));
+  socket.send(echoMessage(sessionId, "main", 1, "r-o1"));
+  socket.send(echoMessage(sessionId, "main", 2, "r-o2"));
+  const error = await collector.waitFor(
+    (message) => message.type === "error" && message.code === "CREDIT_EXHAUSTED",
+  );
+  if (error.message.type !== "error") throw new Error("明示エラーではない。");
+  expect(error.message.code).toBe("CREDIT_EXHAUSTED");
+  expect(error.message.requestId).toBe("r-o2");
+  const result = await closed;
+  expect(result.code).toBe(1011);
+  // 超過分は業務処理されていない。
+  expect(server.getStats().echoCount).toBe(2);
+});
+
+test("連番誤りで拒否した要求の枠は失われない", async () => {
+  // 初期 1・上限 2。拒否で消費分を解放しなければ次の正規送信が止まる。
+  const server = await startServer({
+    limits: { initialCreditWindow: 1, maxReliableQueueMessages: 2 },
+  });
+  const issued = server.issuePairing(DEV_ORIGIN);
+  const { socket, collector } = await openHistoryCollected(server.endpoint, DEV_ORIGIN);
+  socket.send(authMessage(issued.secret));
+  const ok = await collector.waitFor((message) => message.type === "auth_ok");
+  if (ok.message.type !== "auth_ok") throw new Error("認証応答ではない。");
+  const sessionId = ok.message.sessionId;
+  // 連番を飛ばすと UNEXPECTED_SEQ で拒否され、予約の解放で追加付与が出る。
+  socket.send(echoMessage(sessionId, "main", 5, "r-bad"));
+  const error = await collector.waitFor((message) => message.type === "error");
+  if (error.message.type !== "error") throw new Error("明示エラーではない。");
+  expect(error.message.code).toBe("UNEXPECTED_SEQ");
+  expect(collector.creditLimits).toContain(3);
+  // 解放されていなければ CREDIT_EXHAUSTED になる正規送信が通る。
+  socket.send(echoMessage(sessionId, "main", 0, "r-ok"));
+  const echoed = await collector.waitFor(
+    (message) => message.type === "echo_response" && message.requestId === "r-ok",
+  );
+  expect(echoed.message.type).toBe("echo_response");
+  expect(server.getStats().echoCount).toBe(1);
+  expect(collector.closeState()).toBeNull();
+});
+
+test("初期付与が件数容量を超える設定は拒否する", async () => {
+  await expect(
+    createBridgeServer({
+      port: 0,
+      allowedOrigins: [DEV_ORIGIN],
+      limits: { initialCreditWindow: 5, maxReliableQueueMessages: 4 },
+    }),
+  ).rejects.toThrow(RangeError);
 });
