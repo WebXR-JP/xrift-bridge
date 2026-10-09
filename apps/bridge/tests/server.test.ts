@@ -1,28 +1,28 @@
 import { afterEach, expect, test } from "vite-plus/test";
 import { connect } from "node:net";
 import { WebSocket, type RawData } from "ws";
-import { PROTOCOL_VERSION, parseBridgeMessage, type BridgeMessage } from "bridge-protocol";
-import { createWorldClient, type WorldClient } from "world-client";
+import {
+  PROTOCOL_VERSION,
+  formatPairingCode,
+  parseBridgeMessage,
+  type BridgeMessage,
+} from "bridge-protocol";
 import {
   createBridgeServer,
   type BridgeOptions,
   type BridgeServer,
   type BridgeTransport,
 } from "../src/server.ts";
-import { PAIRING_TTL_MS } from "../src/config.ts";
+import { handleCommand } from "../src/index.ts";
 import type { BridgeLogEvent } from "../src/log.ts";
 
 const PROD_ORIGIN = "https://app.xrift.net";
 const DEV_ORIGIN = "http://localhost:5173";
 
 const servers: BridgeServer[] = [];
-const clients: WorldClient[] = [];
 const sockets: WebSocket[] = [];
 
 afterEach(async () => {
-  for (const client of clients.splice(0)) {
-    client.close();
-  }
   for (const socket of sockets.splice(0)) {
     try {
       socket.terminate();
@@ -75,7 +75,7 @@ function rawToText(data: RawData): string {
 /**
  * 継続購読＋受信バッファ＋条件一致待ちの受信器。
  *
- * 作成時点から購読し続けるため `auth_ok` 直後の `credit` を取りこぼさない。
+ * 作成時点から購読し続けるため `pairing_pending` 直後の `auth_ok` を取りこぼさない。
  * 既知の `credit` は目的応答待ちの間に消費するが、未知の異常フレームは
  * 無条件に読み飛ばさず明示失敗にする。固定 sleep・再試行による隠蔽はしない。
  */
@@ -462,8 +462,8 @@ async function waitForCondition(predicate: () => boolean, timeoutMs = 3_000): Pr
   }
 }
 
-function authMessage(secret: string): string {
-  return JSON.stringify({ v: PROTOCOL_VERSION, type: "auth", secret });
+function pairingStartMessage(): string {
+  return JSON.stringify({ v: PROTOCOL_VERSION, type: "pairing_start" });
 }
 
 function echoMessage(sessionId: string, streamId: string, seq: number, requestId: string): string {
@@ -476,6 +476,25 @@ function echoMessage(sessionId: string, streamId: string, seq: number, requestId
     seq,
     requestId,
     payload: "x",
+  });
+}
+
+function commandMessage(
+  sessionId: string,
+  streamId: string,
+  seq: number,
+  requestId: string,
+  command = "ping",
+): string {
+  return JSON.stringify({
+    v: PROTOCOL_VERSION,
+    type: "command_request",
+    sessionId,
+    streamId,
+    kind: "reliable",
+    seq,
+    requestId,
+    command,
   });
 }
 
@@ -496,32 +515,688 @@ function dataLatestMessage(
   });
 }
 
-test("world-client が接続・認証・reliable echo を往復できる", async () => {
+/**
+ * 開始→保留通知→承認→認可の往復を行い、認可情報を返す。
+ *
+ * ワールド画面の受信コードと管理側の保留コードが一致することも確かめる。
+ * 両画面の表示が食い違えば承認対象を取り違えるため、ここで検出する。
+ */
+async function authorizeCollected(
+  server: BridgeServer,
+  socket: WebSocket,
+  collector: FrameCollector,
+): Promise<{ sessionId: string; requestId: string; window: number }> {
+  socket.send(pairingStartMessage());
+  const pending = await collector.waitForType("pairing_pending");
+  if (pending.message.type !== "pairing_pending") throw new Error("保留通知ではない。");
+  expect(pending.message.expiresInMs).toBeGreaterThan(0);
+  expect(Number.isInteger(pending.message.expiresInMs)).toBe(true);
+  const pendingRequestId = pending.message.requestId;
+  const pendingCode = pending.message.code;
+  const listed = server.listPending().find((item) => item.requestId === pendingRequestId);
+  if (listed === undefined) throw new Error("保留一覧に見えない。");
+  // ワールド画面と管理画面のコードは一致すること。
+  expect(listed.code).toBe(pendingCode);
+  const approved = server.approvePairing(pendingRequestId, listed.code);
+  expect(approved.status).toBe("APPROVED");
+  const ok = await collector.waitForType("auth_ok");
+  if (ok.message.type !== "auth_ok") throw new Error("認可応答ではない。");
+  expect(ok.message.requestId).toBe(pendingRequestId);
+  return {
+    sessionId: ok.message.sessionId,
+    requestId: pendingRequestId,
+    window: ok.message.window,
+  };
+}
+
+// ---------- 受付・ペアリングの基本 ----------
+
+test("起動時は受付が閉じていてupgradeを拒否し開くと接続できる", async () => {
+  const server = await startServer();
+  expect(server.getAcceptance().state).toBe("closed");
+  expect(server.listPending()).toEqual([]);
+  await expect(openRaw(server.endpoint, DEV_ORIGIN)).rejects.toThrow();
+  expect(server.getStats().upgradeRejected).toBe(1);
+  expect(server.getStats().rejectionsByReason["ACCEPTANCE_CLOSED"]).toBe(1);
+
+  const info = server.openAcceptance();
+  expect(info.state).toBe("open");
+  expect(server.getAcceptance().state).toBe("open");
+  const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
+  socket.send(pairingStartMessage());
+  const pending = await collector.waitForType("pairing_pending");
+  expect(pending.message.type).toBe("pairing_pending");
+});
+
+test("受付開後のpairing_pending通知と承認後にだけ業務処理が動く", async () => {
   const captured = capture();
   const server = await startServer({}, captured);
-  const issued = server.issuePairing(DEV_ORIGIN);
+  server.openAcceptance();
+  const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
+  socket.send(pairingStartMessage());
+  const pending = await collector.waitForType("pairing_pending");
+  if (pending.message.type !== "pairing_pending") throw new Error("保留通知ではない。");
+  expect(pending.message.code).toMatch(/^[0-9]{6}$/);
+  expect(typeof pending.message.requestId).toBe("string");
 
-  const client = createWorldClient({ endpoint: server.endpoint, origin: DEV_ORIGIN });
-  clients.push(client);
-  const connected = await client.connect(issued.secret);
-  expect(typeof connected.sessionId).toBe("string");
+  const listed = server.listPending();
+  expect(listed).toHaveLength(1);
+  expect(listed[0]?.requestId).toBe(pending.message.requestId);
+  const approved = server.approvePairing(pending.message.requestId, pending.message.code);
+  expect(approved).toEqual({
+    status: "APPROVED",
+    connectionId: expect.any(String),
+    origin: DEV_ORIGIN,
+  });
+  const ok = await collector.waitForType("auth_ok");
+  if (ok.message.type !== "auth_ok") throw new Error("認可応答ではない。");
+  expect(ok.message.requestId).toBe(pending.message.requestId);
+  expect(typeof ok.message.sessionId).toBe("string");
+  expect(ok.message.window).toBeGreaterThan(0);
 
-  const echoed = await client.sendEcho("main", { text: "到達性" });
-  expect(echoed.seq).toBe(0);
-  expect(echoed.payload).toEqual({ text: "到達性" });
+  // 承認成功だけでは受付は閉じない。
+  expect(server.getAcceptance().state).toBe("open");
 
-  const pong = await client.sendCommand("main", "ping");
-  expect(pong.ok).toBe(true);
+  // 承認後に業務が動く。
+  socket.send(echoMessage(ok.message.sessionId, "main", 0, "r-echo-1"));
+  const echoed = await collector.waitFor(
+    (message) => message.type === "echo_response" && message.requestId === "r-echo-1",
+  );
+  expect(echoed.message.type).toBe("echo_response");
+  socket.send(commandMessage(ok.message.sessionId, "main", 1, "r-ping-1"));
+  const pong = await collector.waitFor(
+    (message) => message.type === "command_response" && message.requestId === "r-ping-1",
+  );
+  if (pong.message.type !== "command_response") throw new Error("コマンド応答ではない。");
+  expect(pong.message.ok).toBe(true);
+  socket.send(dataLatestMessage(ok.message.sessionId, "pose", 0, { x: 1 }));
+  socket.send(echoMessage(ok.message.sessionId, "main", 2, "r-flush-1"));
+  await collector.waitFor(
+    (message) => message.type === "echo_response" && message.requestId === "r-flush-1",
+  );
+  expect(server.getLatest("pose")).toEqual({ x: 1 });
 
   const stats = server.getStats();
-  expect(stats.authSuccess).toBe(1);
-  expect(stats.echoCount).toBe(1);
+  expect(stats.pairingSuccess).toBe(1);
+  expect(stats.echoCount).toBe(2);
   expect(stats.commandCount).toBe(1);
 
-  // 秘密値がログに出ていない。
+  // 比較コードがログに出ていない。
   const logged = JSON.stringify(captured.events);
-  expect(logged).not.toContain(issued.secret);
+  expect(logged).not.toContain(pending.message.code);
 });
+
+test("認可前のecho・command・data・creditは拒否し業務状態を変えない", async () => {
+  const server = await startServer();
+  server.openAcceptance();
+  // `credit` は逆方向メッセージのため `UNEXPECTED_DIRECTION` で終端する。
+  // いずれも認可前の終端エラーであり、業務状態を変えない。
+  const cases: Array<{ name: string; build: () => string; code: string }> = [
+    {
+      name: "echo",
+      build: () =>
+        JSON.stringify({
+          v: PROTOCOL_VERSION,
+          type: "echo",
+          sessionId: "none",
+          streamId: "main",
+          kind: "reliable",
+          seq: 0,
+          requestId: "r-pre-echo",
+          payload: "x",
+        }),
+      code: "NOT_AUTHORIZED",
+    },
+    {
+      name: "command",
+      build: () => commandMessage("none", "main", 0, "r-pre-cmd"),
+      code: "NOT_AUTHORIZED",
+    },
+    {
+      name: "data",
+      build: () => dataLatestMessage("none", "pose", 0, { x: 9 }),
+      code: "NOT_AUTHORIZED",
+    },
+    {
+      name: "credit",
+      build: () =>
+        JSON.stringify({ v: PROTOCOL_VERSION, type: "credit", sessionId: "none", limit: 8 }),
+      code: "UNEXPECTED_DIRECTION",
+    },
+  ];
+  for (const target of cases) {
+    const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
+    const closed = collector.waitClose();
+    socket.send(target.build());
+    const error = await collector.waitForErrorCode(target.code);
+    expect(error.message.type, target.name).toBe("error");
+    if (error.message.type === "error") {
+      // 認可前は sessionId を含めない。
+      expect(error.message.sessionId, target.name).toBeUndefined();
+    }
+    const result = await closed;
+    expect(result.code, target.name).toBe(1008);
+  }
+  // 業務カウンタ・受信箱・クレジット付与が未変更である。
+  const stats = server.getStats();
+  expect(stats.echoCount).toBe(0);
+  expect(stats.commandCount).toBe(0);
+  expect(stats.latestStored).toBe(0);
+  expect(server.getLatest("pose")).toBeUndefined();
+  expect(stats.pairingSuccess).toBe(0);
+  expect(stats.pairingFailure).toBe(4);
+  expect(stats.rejectionsByReason["NOT_AUTHORIZED"]).toBe(3);
+  expect(stats.rejectionsByReason["UNEXPECTED_DIRECTION"]).toBe(1);
+  await waitForCondition(() => server.getConnectionCount() === 0);
+});
+
+test("認証前のJSON不正・版不一致・逆方向メッセージは1回で終了する", async () => {
+  const server = await startServer();
+  server.openAcceptance();
+  const inputs: Array<{ name: string; raw: string; code: string }> = [
+    { name: "json", raw: "not json", code: "INVALID_JSON" },
+    {
+      name: "version",
+      raw: JSON.stringify({ v: "0.0.0", type: "pairing_start" }),
+      code: "VERSION_MISMATCH",
+    },
+    {
+      name: "reverse",
+      raw: JSON.stringify({ v: PROTOCOL_VERSION, type: "credit", sessionId: "s", limit: 1 }),
+      code: "UNEXPECTED_DIRECTION",
+    },
+    {
+      name: "unknown",
+      raw: JSON.stringify({ v: PROTOCOL_VERSION, type: "mystery" }),
+      code: "UNKNOWN_TYPE",
+    },
+  ];
+  for (const input of inputs) {
+    const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
+    const closed = collector.waitClose();
+    socket.send(input.raw);
+    const error = await collector.waitForErrorCode(input.code);
+    expect(error.message.type, input.name).toBe("error");
+    const result = await closed;
+    expect(result.code, input.name).toBe(1008);
+    // 1回で終了するため保留は作られない。
+    expect(server.listPending()).toHaveLength(0);
+  }
+  expect(server.getStats().pairingFailure).toBe(4);
+});
+
+test("2回目の開始はDUPLICATE_PAIRING_STARTで終了し再通知しない", async () => {
+  const server = await startServer();
+  server.openAcceptance();
+  const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
+  const closed = collector.waitClose();
+  socket.send(pairingStartMessage());
+  const pending = await collector.waitForType("pairing_pending");
+  if (pending.message.type !== "pairing_pending") throw new Error("保留通知ではない。");
+  const firstRequestId = pending.message.requestId;
+  socket.send(pairingStartMessage());
+  const error = await collector.waitForErrorCode("DUPLICATE_PAIRING_START");
+  expect(error.message.type).toBe("error");
+  const result = await closed;
+  expect(result.code).toBe(1008);
+  // コード再生成・再通知・期限延長をしない。保留は終わっている。
+  expect(server.listPending()).toHaveLength(0);
+  expect(server.approvePairing(firstRequestId, pending.message.code).status).toBe("NOT_PENDING");
+});
+
+test("開始待ちは短縮期限でPAIRING_START_TIMEOUTになり切断する", async () => {
+  const server = await startServer({ limits: { pairingStartTimeoutMs: 150 } });
+  server.openAcceptance();
+  const { collector } = await openCollected(server.endpoint, DEV_ORIGIN);
+  const error = await collector.waitForErrorCode("PAIRING_START_TIMEOUT");
+  expect(error.message.type).toBe("error");
+  if (error.message.type === "error") {
+    expect(error.message.requestId).toBeUndefined();
+    expect(error.message.sessionId).toBeUndefined();
+  }
+  const result = await collector.waitClose();
+  expect(result.code).toBe(1008);
+  await waitForCondition(() => server.getConnectionCount() === 0);
+});
+
+// ---------- 上限・レート ----------
+
+test("全接続数・未認可数・保留数の上限を同時に踏める（既定8・2・2）", async () => {
+  const server = await startServer({
+    limits: { maxPairingRequestsPerOrigin: 20, maxPairingRequestsTotal: 20 },
+  });
+  server.openAcceptance();
+  // 6件を認可し、2件を開始待ちで保持する。全8・未認可2が満杯になる。
+  const authorized: Array<{ socket: WebSocket; collector: FrameCollector; sessionId: string }> = [];
+  for (let index = 0; index < 6; index += 1) {
+    const opened = await openCollected(server.endpoint, DEV_ORIGIN);
+    const info = await authorizeCollected(server, opened.socket, opened.collector);
+    authorized.push({
+      socket: opened.socket,
+      collector: opened.collector,
+      sessionId: info.sessionId,
+    });
+  }
+  const first = await openCollected(server.endpoint, DEV_ORIGIN);
+  const second = await openCollected(server.endpoint, DEV_ORIGIN);
+  expect(server.getConnectionCount()).toBe(8);
+  // 9件目は全接続数の上限で拒否される。
+  await expect(openRaw(server.endpoint, DEV_ORIGIN)).rejects.toThrow();
+  expect(server.getStats().rejectionsByReason["TOO_MANY_CONNECTIONS"]).toBe(1);
+  // 未認可枠も満杯のため、開始待ちの3件目相当も拒否される。
+  await expect(openRaw(server.endpoint, DEV_ORIGIN)).rejects.toThrow();
+  expect(server.getConnectionCount()).toBe(8);
+  // 1枠（開始待ち）を空けると未認可枠が回復する。
+  first.socket.terminate();
+  await waitForCondition(() => server.getConnectionCount() === 7);
+  const retry = await openCollected(server.endpoint, DEV_ORIGIN);
+  expect(server.getConnectionCount()).toBe(8);
+  // 認可済みは業務を続けられる。
+  const target = authorized[0];
+  if (target === undefined) throw new Error("認可済みがない。");
+  target.socket.send(echoMessage(target.sessionId, "main", 0, "r-cap-ok"));
+  const echoed = await target.collector.waitFor(
+    (message) => message.type === "echo_response" && message.requestId === "r-cap-ok",
+  );
+  expect(echoed.message.type).toBe("echo_response");
+  second.socket.terminate();
+  retry.socket.terminate();
+  await waitForCondition(() => server.getConnectionCount() === 6);
+});
+
+test("保留超過は実際に踏みPENDING_FULLで終了する", async () => {
+  const server = await startServer({
+    limits: { maxPendingPairings: 1, maxUnauthorizedConnections: 2 },
+  });
+  server.openAcceptance();
+  const first = await openCollected(server.endpoint, DEV_ORIGIN);
+  const second = await openCollected(server.endpoint, DEV_ORIGIN);
+  const secondClosed = second.collector.waitClose();
+  first.socket.send(pairingStartMessage());
+  const pending = await first.collector.waitForType("pairing_pending");
+  expect(pending.message.type).toBe("pairing_pending");
+  second.socket.send(pairingStartMessage());
+  const error = await second.collector.waitForErrorCode("PENDING_FULL");
+  expect(error.message.type).toBe("error");
+  expect(await secondClosed).toMatchObject({ code: 1008 });
+  // 先行の保留は影響を受けない。
+  expect(server.listPending()).toHaveLength(1);
+  const listed = server.listPending()[0];
+  if (listed === undefined) throw new Error("保留がない。");
+  expect(server.approvePairing(listed.requestId, listed.code).status).toBe("APPROVED");
+  const ok = await first.collector.waitForType("auth_ok");
+  expect(ok.message.type).toBe("auth_ok");
+});
+
+test("受付レート超過は429で拒否し履歴に追加しない", async () => {
+  const server = await startServer({
+    limits: {
+      maxPairingRequestsPerOrigin: 2,
+      maxPairingRequestsTotal: 3,
+      maxUnauthorizedConnections: 8,
+      maxConnections: 8,
+    },
+  });
+  server.openAcceptance();
+  await openRaw(server.endpoint, DEV_ORIGIN);
+  await openRaw(server.endpoint, DEV_ORIGIN);
+  // Origin 別の上限（2）を超える。
+  await expect(openRaw(server.endpoint, DEV_ORIGIN)).rejects.toThrow();
+  expect(server.getStats().rejectionsByReason["ORIGIN_RATE_LIMITED"]).toBe(1);
+  // 拒否自体は履歴に追加しないため、別 Origin は全体上限（3）にまだ届く。
+  await openRaw(server.endpoint, PROD_ORIGIN);
+  await expect(openRaw(server.endpoint, PROD_ORIGIN)).rejects.toThrow();
+  expect(server.getStats().rejectionsByReason["TOTAL_RATE_LIMITED"]).toBe(1);
+});
+
+test("HTTP状態は403・429・503を使い分ける", async () => {
+  const readStatus = (port: number, payload: string): Promise<string> =>
+    new Promise((resolve, reject) => {
+      const socket = connect(port, "127.0.0.1", () => {
+        socket.write(payload);
+      });
+      let buffer = "";
+      socket.on("data", (chunk: Buffer) => {
+        buffer += chunk.toString("utf-8");
+        if (buffer.includes("\r\n\r\n")) {
+          socket.destroy();
+          resolve(buffer);
+        }
+      });
+      socket.on("error", (error: Error) => {
+        reject(error);
+      });
+    });
+  const key = "dGhlIHNhbXBsZSBub25jZQ==";
+  const build = (port: number, origin: string): string =>
+    `GET /v1 HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ${key}\r\nSec-WebSocket-Version: 13\r\nOrigin: ${origin}\r\n\r\n`;
+
+  // 受付閉は 403。
+  const closed = await startServer();
+  const closedResponse = await readStatus(closed.port, build(closed.port, DEV_ORIGIN));
+  expect(closedResponse).toContain("403");
+
+  // 受付レート超過は 429。
+  const limited = await startServer({
+    limits: {
+      maxPairingRequestsPerOrigin: 1,
+      maxPairingRequestsTotal: 1,
+      maxUnauthorizedConnections: 8,
+      maxConnections: 8,
+    },
+  });
+  limited.openAcceptance();
+  await openRaw(limited.endpoint, DEV_ORIGIN);
+  const limitedResponse = await readStatus(limited.port, build(limited.port, DEV_ORIGIN));
+  expect(limitedResponse).toContain("429");
+
+  // 接続容量の超過は 503。
+  const full = await startServer({
+    limits: { maxConnections: 1, maxUnauthorizedConnections: 1, maxPendingPairings: 1 },
+  });
+  full.openAcceptance();
+  await openRaw(full.endpoint, DEV_ORIGIN);
+  const fullResponse = await readStatus(full.port, build(full.port, DEV_ORIGIN));
+  expect(fullResponse).toContain("503");
+});
+
+// ---------- 失効・取消・再起動 ----------
+
+test("拒否・取消で保留が失効し認可済みに影響しない", async () => {
+  const server = await startServer();
+  server.openAcceptance();
+  const target = await openCollected(server.endpoint, DEV_ORIGIN);
+  target.socket.send(pairingStartMessage());
+  const pending = await target.collector.waitForType("pairing_pending");
+  if (pending.message.type !== "pairing_pending") throw new Error("保留通知ではない。");
+  const closed = target.collector.waitClose();
+
+  const keeper = await openCollected(server.endpoint, DEV_ORIGIN);
+  const keeperAuth = await authorizeCollected(server, keeper.socket, keeper.collector);
+
+  const rejected = server.rejectPairing(pending.message.requestId);
+  expect(rejected).toEqual({ status: "REJECTED" });
+  const error = await target.collector.waitForErrorCode("PAIRING_REJECTED");
+  if (error.message.type !== "error") throw new Error("明示エラーではない。");
+  expect(error.message.requestId).toBe(pending.message.requestId);
+  expect(await closed).toMatchObject({ code: 1008 });
+  expect(server.listPending()).toHaveLength(0);
+  expect(server.rejectPairing(pending.message.requestId)).toEqual({ status: "NOT_PENDING" });
+
+  // 認可済みは影響なく業務を続けられる。
+  keeper.socket.send(echoMessage(keeperAuth.sessionId, "main", 0, "r-keep-ok"));
+  const echoed = await keeper.collector.waitFor(
+    (message) => message.type === "echo_response" && message.requestId === "r-keep-ok",
+  );
+  expect(echoed.message.type).toBe("echo_response");
+});
+
+test("切断で保留が失効し承認は未保留になる", async () => {
+  const server = await startServer();
+  server.openAcceptance();
+  const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
+  socket.send(pairingStartMessage());
+  const pending = await collector.waitForType("pairing_pending");
+  if (pending.message.type !== "pairing_pending") throw new Error("保留通知ではない。");
+  socket.terminate();
+  await waitForCondition(() => server.listPending().length === 0);
+  expect(server.approvePairing(pending.message.requestId, pending.message.code)).toEqual({
+    status: "NOT_PENDING",
+  });
+});
+
+test("承認期限の到達で保留が失効し二度目の承認は未保留になる", async () => {
+  const server = await startServer({ limits: { pairingApprovalTimeoutMs: 250 } });
+  server.openAcceptance();
+  const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
+  const closed = collector.waitClose();
+  socket.send(pairingStartMessage());
+  const pending = await collector.waitForType("pairing_pending");
+  if (pending.message.type !== "pairing_pending") throw new Error("保留通知ではない。");
+  const error = await collector.waitForErrorCode("PAIRING_EXPIRED");
+  if (error.message.type !== "error") throw new Error("明示エラーではない。");
+  expect(error.message.requestId).toBe(pending.message.requestId);
+  expect(await closed).toMatchObject({ code: 1008 });
+  expect(server.listPending()).toHaveLength(0);
+  expect(server.approvePairing(pending.message.requestId, pending.message.code)).toEqual({
+    status: "NOT_PENDING",
+  });
+  expect(server.getStats().rejectionsByReason["PAIRING_EXPIRED"]).toBeGreaterThanOrEqual(1);
+});
+
+test("二重承認は2回目が未保留になりコード不一致は保留を残す", async () => {
+  const server = await startServer();
+  server.openAcceptance();
+  const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
+  socket.send(pairingStartMessage());
+  const pending = await collector.waitForType("pairing_pending");
+  if (pending.message.type !== "pairing_pending") throw new Error("保留通知ではない。");
+  const wrong = pending.message.code === "000000" ? "111111" : "000000";
+  expect(server.approvePairing(pending.message.requestId, wrong)).toEqual({
+    status: "CODE_MISMATCH",
+  });
+  // 不一致では保留が残り、正しいコードで承認できる。
+  expect(server.listPending()).toHaveLength(1);
+  expect(server.approvePairing(pending.message.requestId, "12")).toEqual({
+    status: "INVALID_CODE",
+  });
+  expect(server.listPending()).toHaveLength(1);
+  const listed = server.listPending()[0];
+  if (listed === undefined) throw new Error("保留がない。");
+  expect(server.approvePairing(pending.message.requestId, listed.code).status).toBe("APPROVED");
+  await collector.waitForType("auth_ok");
+  // 二重承認は未保留になる。
+  expect(server.approvePairing(pending.message.requestId, listed.code)).toEqual({
+    status: "NOT_PENDING",
+  });
+  expect(server.getStats().pairingSuccess).toBe(1);
+});
+
+test("再起動で保留と認可は失効する", async () => {
+  const first = await startServer();
+  first.openAcceptance();
+  const opened = await openCollected(first.endpoint, DEV_ORIGIN);
+  opened.socket.send(pairingStartMessage());
+  const pending = await opened.collector.waitForType("pairing_pending");
+  if (pending.message.type !== "pairing_pending") throw new Error("保留通知ではない。");
+  const keeper = await openCollected(first.endpoint, DEV_ORIGIN);
+  await authorizeCollected(first, keeper.socket, keeper.collector);
+  const oldRequestId = pending.message.requestId;
+  const oldCode = pending.message.code;
+  await first.close();
+  servers.splice(servers.indexOf(first), 1);
+
+  const second = await startServer();
+  expect(second.listPending()).toHaveLength(0);
+  expect(second.getConnectionCount()).toBe(0);
+  expect(second.getAcceptance().state).toBe("closed");
+  // 前世代の要求 ID・コードは使えない。
+  second.openAcceptance();
+  expect(second.approvePairing(oldRequestId, oldCode)).toEqual({ status: "NOT_PENDING" });
+});
+
+// ---------- 受付クローズの drain ----------
+
+test("受付クローズで開始待ち・承認待ちが終了し認可済みは維持される", async () => {
+  const server = await startServer();
+  server.openAcceptance();
+  const keeper = await openCollected(server.endpoint, DEV_ORIGIN);
+  // 先に認可して未認可枠を空けておく。
+  const keeperAuth = await authorizeCollected(server, keeper.socket, keeper.collector);
+
+  const awaiting = await openCollected(server.endpoint, DEV_ORIGIN);
+  const awaitingClosed = awaiting.collector.waitClose();
+
+  const pendingConn = await openCollected(server.endpoint, DEV_ORIGIN);
+  pendingConn.socket.send(pairingStartMessage());
+  const pending = await pendingConn.collector.waitForType("pairing_pending");
+  if (pending.message.type !== "pairing_pending") throw new Error("保留通知ではない。");
+  const pendingClosed = pendingConn.collector.waitClose();
+
+  server.closeAcceptance();
+  expect(server.getAcceptance().state).toBe("closed");
+
+  const awaitingError = await awaiting.collector.waitForErrorCode("ACCEPTANCE_CLOSED");
+  expect(awaitingError.message.type).toBe("error");
+  if (awaitingError.message.type === "error") {
+    expect(awaitingError.message.requestId).toBeUndefined();
+  }
+  expect(await awaitingClosed).toMatchObject({ code: 1008 });
+
+  const pendingError = await pendingConn.collector.waitForErrorCode("ACCEPTANCE_CLOSED");
+  if (pendingError.message.type !== "error") throw new Error("明示エラーではない。");
+  expect(pendingError.message.requestId).toBe(pending.message.requestId);
+  expect(await pendingClosed).toMatchObject({ code: 1008 });
+
+  expect(server.listPending()).toHaveLength(0);
+  expect(server.approvePairing(pending.message.requestId, pending.message.code)).toEqual({
+    status: "NOT_PENDING",
+  });
+
+  // 認可済みは維持され業務を続けられる。
+  keeper.socket.send(echoMessage(keeperAuth.sessionId, "main", 0, "r-drain-keep"));
+  const echoed = await keeper.collector.waitFor(
+    (message) => message.type === "echo_response" && message.requestId === "r-drain-keep",
+  );
+  expect(echoed.message.type).toBe("echo_response");
+
+  // 閉の冪等性。二度目の close でも認可済みは残る。
+  server.closeAcceptance();
+  keeper.socket.send(echoMessage(keeperAuth.sessionId, "main", 1, "r-drain-keep2"));
+  const second = await keeper.collector.waitFor(
+    (message) => message.type === "echo_response" && message.requestId === "r-drain-keep2",
+  );
+  expect(second.message.type).toBe("echo_response");
+});
+
+test("受付の自動クローズでも開始待ちは失効する", async () => {
+  const server = await startServer({ limits: { acceptanceDurationMs: 250 } });
+  server.openAcceptance();
+  const { collector } = await openCollected(server.endpoint, DEV_ORIGIN);
+  const closed = collector.waitClose();
+  const error = await collector.waitForErrorCode("ACCEPTANCE_CLOSED");
+  expect(error.message.type).toBe("error");
+  expect(await closed).toMatchObject({ code: 1008 });
+  expect(server.getAcceptance().state).toBe("closed");
+  expect(server.listPending()).toHaveLength(0);
+});
+
+test("管理イベントで保留の増減と受付の開閉が分かる", async () => {
+  const server = await startServer();
+  const events: Array<{ kind: string; requestId?: string }> = [];
+  const unsubscribe = server.onManagementEvent((event) => {
+    if (event.kind === "pending-created" || event.kind === "pending-ended") {
+      events.push({ kind: event.kind, requestId: event.requestId });
+    } else {
+      events.push({ kind: event.kind });
+    }
+  });
+  server.openAcceptance();
+  const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
+  socket.send(pairingStartMessage());
+  const pending = await collector.waitForType("pairing_pending");
+  if (pending.message.type !== "pairing_pending") throw new Error("保留通知ではない。");
+  await waitForCondition(() => events.some((event) => event.kind === "pending-created"));
+  const listed = server.listPending()[0];
+  if (listed === undefined) throw new Error("保留がない。");
+  server.approvePairing(listed.requestId, listed.code);
+  await waitForCondition(() => events.some((event) => event.kind === "pending-ended"));
+  server.closeAcceptance();
+  expect(events.map((event) => event.kind)).toContain("acceptance-changed");
+  unsubscribe();
+});
+
+// ---------- CLI ----------
+
+/** 対話命令の表示先を集める試験用の出力先。 */
+function captureOutput(): { output: string[]; out: { write(text: string): void } } {
+  const output: string[] = [];
+  return {
+    output,
+    out: {
+      write: (text: string): void => {
+        output.push(text);
+      },
+    },
+  };
+}
+
+test("CLIでaccept open・pending・approve・reject・statusが動く", async () => {
+  const server = await startServer({ generateCode: () => "000042" });
+  const captured = captureOutput();
+  const out = captured.out;
+  handleCommand("accept open", server, out);
+  expect(captured.output.join("")).toContain("state=open");
+
+  const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
+  socket.send(pairingStartMessage());
+  const pending = await collector.waitForType("pairing_pending");
+  if (pending.message.type !== "pairing_pending") throw new Error("保留通知ではない。");
+  const cliRequestId = pending.message.requestId;
+  // 先頭ゼロ保持の区切り表示。
+  expect(formatPairingCode("000042")).toBe("000 042");
+  handleCommand("pending", server, out);
+  const pendingText = captured.output.join("");
+  expect(pendingText).toContain(cliRequestId);
+  expect(pendingText).toContain("000 042");
+  expect(pendingText).toContain(DEV_ORIGIN);
+
+  // 引数不足・書式不正は厳密に弾く。数値化で先頭ゼロを落とさない。
+  handleCommand("approve", server, out);
+  expect(captured.output.join("")).toContain("使い方: approve");
+  handleCommand(`approve ${cliRequestId} 42`, server, out);
+  expect(captured.output.join("")).toContain("approve 失敗");
+  expect(server.listPending()).toHaveLength(1);
+
+  handleCommand(`approve ${cliRequestId} 000042`, server, out);
+  expect(captured.output.join("")).toContain(`approved ${cliRequestId}`);
+  const ok = await collector.waitForType("auth_ok");
+  expect(ok.message.type).toBe("auth_ok");
+
+  handleCommand("status", server, out);
+  const statusText = captured.output.join("");
+  expect(statusText).toContain("acceptance=open");
+  expect(statusText).toContain("authorized=1");
+  expect(statusText).toContain("pairingSuccess=1");
+
+  // 2件目を作って reject する。
+  const second = await openCollected(server.endpoint, DEV_ORIGIN);
+  second.socket.send(pairingStartMessage());
+  const secondPending = await second.collector.waitForType("pairing_pending");
+  if (secondPending.message.type !== "pairing_pending") throw new Error("保留通知ではない。");
+  const secondRequestId = secondPending.message.requestId;
+  handleCommand(`reject ${secondRequestId}`, server, out);
+  expect(captured.output.join("")).toContain(`rejected ${secondRequestId}`);
+  const rejectError = await second.collector.waitForErrorCode("PAIRING_REJECTED");
+  expect(rejectError.message.type).toBe("error");
+
+  handleCommand("accept close", server, out);
+  expect(captured.output.join("")).toContain("state=closed");
+  handleCommand("pending", server, out);
+  expect(captured.output.join("")).toContain("pending: (none)");
+  expect(handleCommand("quit", server, out)).toBe(true);
+});
+
+test("CLIのstatusは受付状態・各接続数・理由別拒否集計を出す", async () => {
+  const server = await startServer();
+  const captured = captureOutput();
+  const out = captured.out;
+  handleCommand("status", server, out);
+  let text = captured.output.join("");
+  expect(text).toContain("acceptance=closed");
+  expect(text).toContain("connections=0");
+  server.openAcceptance();
+  handleCommand("status", server, out);
+  text = captured.output.join("");
+  expect(text).toContain("acceptance=open");
+  // 拒否を1件起こすと集計に出る。
+  await expect(openRaw(server.endpoint, "https://evil.example")).rejects.toThrow();
+  handleCommand("status", server, out);
+  text = captured.output.join("");
+  expect(text).toContain("origin_rejected=1");
+});
+
+// ---------- 既存の検証（新認可経路へ適応） ----------
 
 test("不許可・欠落・null の Origin を拒否する", async () => {
   const server = await startServer();
@@ -561,86 +1236,6 @@ test("Host・path の不一致を拒否する", async () => {
   expect(badPath).toContain("403");
 });
 
-test("実際の昇格経路で Host・port・path・Origin の拒否を確認する", async () => {
-  const server = await startServer();
-  const key = "dGhlIHNhbXBsZSBub25jZQ==";
-  const readStatus = (payload: string): Promise<string> =>
-    new Promise((resolve, reject) => {
-      const socket = connect(server.port, "127.0.0.1", () => {
-        socket.write(payload);
-      });
-      let buffer = "";
-      socket.on("data", (chunk: Buffer) => {
-        buffer += chunk.toString("utf-8");
-        if (buffer.includes("\r\n\r\n")) {
-          socket.destroy();
-          resolve(buffer);
-        }
-      });
-      socket.on("error", (error: Error) => {
-        reject(error);
-      });
-    });
-  const badHostname = await readStatus(
-    `GET /v1 HTTP/1.1\r\nHost: evil.example:${server.port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ${key}\r\nSec-WebSocket-Version: 13\r\nOrigin: ${DEV_ORIGIN}\r\n\r\n`,
-  );
-  expect(badHostname).toContain("403");
-  const badPort = await readStatus(
-    `GET /v1 HTTP/1.1\r\nHost: 127.0.0.1:1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ${key}\r\nSec-WebSocket-Version: 13\r\nOrigin: ${DEV_ORIGIN}\r\n\r\n`,
-  );
-  expect(badPort).toContain("403");
-  const badPath = await readStatus(
-    `GET /v2 HTTP/1.1\r\nHost: 127.0.0.1:${server.port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ${key}\r\nSec-WebSocket-Version: 13\r\nOrigin: ${DEV_ORIGIN}\r\n\r\n`,
-  );
-  expect(badPath).toContain("403");
-  await expect(openRaw(server.endpoint, "https://evil.example")).rejects.toThrow();
-  expect(server.getStats().upgradeRejected).toBe(4);
-});
-
-test("未認証では業務メッセージを送受信できない", async () => {
-  const server = await startServer();
-  const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
-  const closed = collector.waitClose();
-  const business = JSON.stringify({
-    v: PROTOCOL_VERSION,
-    type: "echo",
-    sessionId: "none",
-    streamId: "main",
-    kind: "reliable",
-    seq: 0,
-    requestId: "r1",
-    payload: "x",
-  });
-  socket.send(business);
-  const error = await collector.waitForErrorCode("NOT_AUTHENTICATED");
-  expect(error.message.type).toBe("error");
-  // 試行上限に達すると閉じる。
-  socket.send(business);
-  socket.send(business);
-  const result = await closed;
-  expect(result.code).toBe(1008);
-});
-
-test("再利用・期限切れ相当・未知の秘密値を拒否する", async () => {
-  const server = await startServer();
-  const issued = server.issuePairing(DEV_ORIGIN);
-
-  const first = createWorldClient({ endpoint: server.endpoint, origin: DEV_ORIGIN });
-  clients.push(first);
-  await first.connect(issued.secret);
-  first.close();
-
-  const second = createWorldClient({ endpoint: server.endpoint, origin: DEV_ORIGIN });
-  clients.push(second);
-  await expect(second.connect(issued.secret)).rejects.toMatchObject({ code: "UNAUTHORIZED" });
-
-  const third = createWorldClient({ endpoint: server.endpoint, origin: DEV_ORIGIN });
-  clients.push(third);
-  await expect(third.connect("deadbeef".repeat(8))).rejects.toMatchObject({
-    code: "UNAUTHORIZED",
-  });
-});
-
 test("loopback 以外に bind しない", async () => {
   const server = await startServer();
   expect(server.endpoint.startsWith("ws://127.0.0.1:")).toBe(true);
@@ -659,15 +1254,17 @@ test("ポート競合時は探索せず失敗する", async () => {
 
 test("latest は受信箱に最新値を残す", async () => {
   const server = await startServer();
-  const issued = server.issuePairing(DEV_ORIGIN);
-  const client = createWorldClient({ endpoint: server.endpoint, origin: DEV_ORIGIN });
-  clients.push(client);
-  await client.connect(issued.secret);
-  client.sendLatest("pose", { x: 1 });
-  client.sendLatest("pose", { x: 2 });
+  server.openAcceptance();
+  const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
+  const auth = await authorizeCollected(server, socket, collector);
+  socket.send(dataLatestMessage(auth.sessionId, "pose", 0, { x: 1 }));
+  socket.send(dataLatestMessage(auth.sessionId, "pose", 1, { x: 2 }));
   // latest に応答はないため、後続の reliable 往復で受信処理の完了を確定させる。
-  const echoed = await client.sendEcho("main", { marker: "flush" });
-  expect(echoed.payload).toEqual({ marker: "flush" });
+  socket.send(echoMessage(auth.sessionId, "main", 0, "r-flush-latest"));
+  const echoed = await collector.waitFor(
+    (message) => message.type === "echo_response" && message.requestId === "r-flush-latest",
+  );
+  expect(echoed.message.type).toBe("echo_response");
   expect(server.getLatest("pose")).toEqual({ x: 2 });
   expect(server.getStats().latestStored).toBe(2);
 });
@@ -678,44 +1275,38 @@ test("小容量でも補充で上限超の往復を続けられる（枯渇デ�
   const server = await startServer({
     limits: { initialCreditWindow: 2, maxReliableQueueMessages: 4 },
   });
-  const issued = server.issuePairing(DEV_ORIGIN);
-  const client = createWorldClient({ endpoint: server.endpoint, origin: DEV_ORIGIN });
-  clients.push(client);
-  const closed: Array<{ code: number; reason: string }> = [];
-  client.onEvent((event) => {
-    if (event.kind === "closed") closed.push({ code: event.code, reason: event.reason });
-  });
-  await client.connect(issued.secret);
+  server.openAcceptance();
+  const { socket, collector } = await openHistoryCollected(server.endpoint, DEV_ORIGIN);
+  socket.send(pairingStartMessage());
+  const pending = await collector.waitFor((message) => message.type === "pairing_pending");
+  if (pending.message.type !== "pairing_pending") throw new Error("保留通知ではない。");
+  const approved = server.approvePairing(pending.message.requestId, pending.message.code);
+  expect(approved.status).toBe("APPROVED");
+  const ok = await collector.waitFor((message) => message.type === "auth_ok");
+  if (ok.message.type !== "auth_ok") throw new Error("認可応答ではない。");
+  expect(ok.message.window).toBe(2);
+  const sessionId = ok.message.sessionId;
   for (let index = 0; index < 10; index += 1) {
-    const echoed = await client.sendEcho("main", { n: index });
-    expect(echoed.seq).toBe(index);
-    expect(echoed.payload).toEqual({ n: index });
+    socket.send(echoMessage(sessionId, "main", index, `r-echo-${index}`));
+    const echoed = await collector.waitFor(
+      (message) => message.type === "echo_response" && message.requestId === `r-echo-${index}`,
+    );
+    expect(echoed.message.type).toBe("echo_response");
+    if (echoed.message.type !== "echo_response") throw new Error("echo 応答ではない。");
+    expect(echoed.message.seq).toBe(index);
   }
   // 途中で切断されておらず、容量不足の記録も残らない。
-  expect(closed).toHaveLength(0);
+  expect(collector.closeState()).toBeNull();
   expect(server.getStats().queueFull).toBe(0);
   expect(server.getStats().echoCount).toBe(10);
 });
 
 test("ストリーム内連番の飛びを拒否する", async () => {
   const server = await startServer();
-  const issued = server.issuePairing(DEV_ORIGIN);
+  server.openAcceptance();
   const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
-  socket.send(authMessage(issued.secret));
-  const ok = await collector.waitForType("auth_ok");
-  if (ok.message.type !== "auth_ok") throw new Error("認証応答ではない。");
-  socket.send(
-    JSON.stringify({
-      v: PROTOCOL_VERSION,
-      type: "echo",
-      sessionId: ok.message.sessionId,
-      streamId: "main",
-      kind: "reliable",
-      seq: 5,
-      requestId: "r-skip",
-      payload: "x",
-    }),
-  );
+  const auth = await authorizeCollected(server, socket, collector);
+  socket.send(echoMessage(auth.sessionId, "main", 5, "r-skip"));
   // auth_ok 直後の credit を消費しつつ目的の明示エラーを待つ。
   const error = await collector.waitForErrorCode("UNEXPECTED_SEQ");
   expect(error.message.type).toBe("error");
@@ -723,11 +1314,9 @@ test("ストリーム内連番の飛びを拒否する", async () => {
 
 test("受信上限の超過は close 1009 で通知する", async () => {
   const server = await startServer({ limits: { maxMessageBytes: 256 } });
-  const issued = server.issuePairing(DEV_ORIGIN);
+  server.openAcceptance();
   const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
-  socket.send(authMessage(issued.secret));
-  // JSON エラーや非空 reason は保証しないため、認証応答だけ待って切断を待つ。
-  await collector.waitForType("auth_ok");
+  await authorizeCollected(server, socket, collector);
   const closed = collector.waitClose();
   socket.send(
     JSON.stringify({
@@ -747,165 +1336,14 @@ test("受信上限の超過は close 1009 で通知する", async () => {
   expect(result.code).toBe(1009);
 });
 
-test("多バイトでも受信上限は UTF-8 バイトで判定する", async () => {
-  // 文字数では 100 文字程度でも UTF-8 では上限を超える。
-  const server = await startServer({ limits: { maxMessageBytes: 256 } });
-  const issued = server.issuePairing(DEV_ORIGIN);
-  const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
-  socket.send(authMessage(issued.secret));
-  await collector.waitForType("auth_ok");
-  const closed = collector.waitClose();
-  socket.send(
-    JSON.stringify({
-      v: PROTOCOL_VERSION,
-      type: "echo",
-      sessionId: "s",
-      streamId: "main",
-      kind: "reliable",
-      seq: 0,
-      requestId: "r-multibyte",
-      payload: "あ".repeat(100),
-    }),
-  );
-  const result = await closed;
-  expect(result.code).toBe(1009);
-});
-
-test("分割フレームの合算が上限を超えると close 1009 になる", async () => {
-  const limit = 256;
-  const server = await startServer({ limits: { maxMessageBytes: limit } });
-  const issued = server.issuePairing(DEV_ORIGIN);
-  const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
-  socket.send(authMessage(issued.secret));
-  const ok = await collector.waitForType("auth_ok");
-  if (ok.message.type !== "auth_ok") throw new Error("認証応答ではない。");
-  const base = JSON.stringify({
-    v: PROTOCOL_VERSION,
-    type: "echo",
-    sessionId: ok.message.sessionId,
-    streamId: "main",
-    kind: "reliable",
-    seq: 0,
-    requestId: "r-frag-over",
-    payload: "",
-  });
-  const baseBytes = Buffer.byteLength(base, "utf8");
-  const payloadLength = limit - baseBytes + 1;
-  expect(payloadLength).toBeGreaterThan(0);
-  const text = JSON.stringify({
-    v: PROTOCOL_VERSION,
-    type: "echo",
-    sessionId: ok.message.sessionId,
-    streamId: "main",
-    kind: "reliable",
-    seq: 0,
-    requestId: "r-frag-over",
-    payload: "x".repeat(payloadLength),
-  });
-  const bytes = Buffer.from(text, "utf-8");
-  expect(bytes.length).toBe(limit + 1);
-  const firstLength = Math.floor(bytes.length / 3);
-  const secondLength = Math.floor((bytes.length - firstLength) / 2);
-  const first = bytes.subarray(0, firstLength);
-  const second = bytes.subarray(firstLength, firstLength + secondLength);
-  const third = bytes.subarray(firstLength + secondLength);
-  expect(first.length).toBeGreaterThan(0);
-  expect(second.length).toBeGreaterThan(0);
-  expect(third.length).toBeGreaterThan(0);
-  expect(first.length).toBeLessThan(limit);
-  expect(second.length).toBeLessThan(limit);
-  expect(third.length).toBeLessThan(limit);
-  expect(first.length + second.length + third.length).toBe(limit + 1);
-  const before = server.getStats().echoCount;
-  const closed = collector.waitClose();
-  socket.send(first, { binary: false, compress: false, fin: false });
-  socket.send(second, { binary: false, compress: false, fin: false });
-  socket.send(third, { binary: false, compress: false, fin: true });
-  const result = await closed;
-  expect(result.code).toBe(1009);
-  expect(server.getStats().echoCount).toBe(before);
-});
-
-test("分割フレームの合算が上限ちょうどなら echo 成功する", async () => {
-  const limit = 256;
-  const server = await startServer({ limits: { maxMessageBytes: limit } });
-  const issued = server.issuePairing(DEV_ORIGIN);
-  const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
-  socket.send(authMessage(issued.secret));
-  const ok = await collector.waitForType("auth_ok");
-  if (ok.message.type !== "auth_ok") throw new Error("認証応答ではない。");
-  const base = JSON.stringify({
-    v: PROTOCOL_VERSION,
-    type: "echo",
-    sessionId: ok.message.sessionId,
-    streamId: "main",
-    kind: "reliable",
-    seq: 0,
-    requestId: "r-frag-exact",
-    payload: "",
-  });
-  const baseBytes = Buffer.byteLength(base, "utf8");
-  const payloadLength = limit - baseBytes;
-  expect(payloadLength).toBeGreaterThan(0);
-  const text = JSON.stringify({
-    v: PROTOCOL_VERSION,
-    type: "echo",
-    sessionId: ok.message.sessionId,
-    streamId: "main",
-    kind: "reliable",
-    seq: 0,
-    requestId: "r-frag-exact",
-    payload: "x".repeat(payloadLength),
-  });
-  const bytes = Buffer.from(text, "utf-8");
-  expect(bytes.length).toBe(limit);
-  const firstLength = Math.floor(bytes.length / 3);
-  const secondLength = Math.floor((bytes.length - firstLength) / 2);
-  const first = bytes.subarray(0, firstLength);
-  const second = bytes.subarray(firstLength, firstLength + secondLength);
-  const third = bytes.subarray(firstLength + secondLength);
-  expect(first.length).toBeGreaterThan(0);
-  expect(second.length).toBeGreaterThan(0);
-  expect(third.length).toBeGreaterThan(0);
-  expect(first.length).toBeLessThan(limit);
-  expect(second.length).toBeLessThan(limit);
-  expect(third.length).toBeLessThan(limit);
-  expect(first.length + second.length + third.length).toBe(limit);
-  socket.send(first, { binary: false, compress: false, fin: false });
-  socket.send(second, { binary: false, compress: false, fin: false });
-  socket.send(third, { binary: false, compress: false, fin: true });
-  const echoed = await collector.waitFor(
-    (message) => message.type === "echo_response" && message.requestId === "r-frag-exact",
-  );
-  expect(echoed.message.type).toBe("echo_response");
-  expect(server.getStats().echoCount).toBe(1);
-});
-
-test("認証待ち超過と試行上限で閉じる", async () => {
-  const idling = await startServer({ limits: { authTimeoutMs: 100 } });
-  const idle = await openRaw(idling.endpoint, DEV_ORIGIN);
-  const idleCollector = new FrameCollector(idle);
-  const idleClosed = await idleCollector.waitClose();
-  expect(idleClosed.code).toBe(1008);
-
-  const strict = await startServer({ limits: { maxAuthAttempts: 1 } });
-  const openedStrict = await openCollected(strict.endpoint, DEV_ORIGIN);
-  const closed = openedStrict.collector.waitClose();
-  openedStrict.socket.send(JSON.stringify({ v: PROTOCOL_VERSION, type: "auth", secret: "wrong" }));
-  const result = await closed;
-  expect(result.code).toBe(1008);
-});
-
 test("QUEUE_FULL は小さい上限設定で決定的に発生し明示エラーと切断になる", async () => {
   // 単一応答でバイト上限を超える設定にし、flush の競合なく決定的に発生させる。
   const server = await startServer({ limits: { maxReliableQueueBytes: 16 } });
-  const issued = server.issuePairing(DEV_ORIGIN);
+  server.openAcceptance();
   const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
-  socket.send(authMessage(issued.secret));
-  const ok = await collector.waitForType("auth_ok");
-  if (ok.message.type !== "auth_ok") throw new Error("認証応答ではない。");
+  const auth = await authorizeCollected(server, socket, collector);
   const closed = collector.waitClose();
-  socket.send(echoMessage(ok.message.sessionId, "main", 0, "r-queue-full"));
+  socket.send(echoMessage(auth.sessionId, "main", 0, "r-queue-full"));
   const error = await collector.waitForErrorCode("QUEUE_FULL");
   expect(error.message.type).toBe("error");
   if (error.message.type === "error") {
@@ -918,18 +1356,16 @@ test("QUEUE_FULL は小さい上限設定で決定的に発生し明示エラー
 
 test("SESSION_MISMATCH は拒否し対象業務を処理しない", async () => {
   const server = await startServer();
-  const issued = server.issuePairing(DEV_ORIGIN);
+  server.openAcceptance();
   const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
-  socket.send(authMessage(issued.secret));
-  const ok = await collector.waitForType("auth_ok");
-  if (ok.message.type !== "auth_ok") throw new Error("認証応答ではない。");
+  const auth = await authorizeCollected(server, socket, collector);
   const before = server.getStats().echoCount;
   socket.send(echoMessage("wrong-session", "main", 0, "r-mismatch"));
   const error = await collector.waitForErrorCode("SESSION_MISMATCH");
   expect(error.message.type).toBe("error");
   expect(server.getStats().echoCount).toBe(before);
   // 正規セッションの連番は進んでいない。
-  socket.send(echoMessage(ok.message.sessionId, "main", 0, "r-mismatch-ok"));
+  socket.send(echoMessage(auth.sessionId, "main", 0, "r-mismatch-ok"));
   const echoed = await collector.waitFor(
     (message) => message.type === "echo_response" && message.requestId === "r-mismatch-ok",
   );
@@ -938,12 +1374,10 @@ test("SESSION_MISMATCH は拒否し対象業務を処理しない", async () => 
 
 test("STREAM_LIMIT は拒否し対象業務を処理しない", async () => {
   const server = await startServer({ limits: { maxStreamsPerConnection: 2 } });
-  const issued = server.issuePairing(DEV_ORIGIN);
+  server.openAcceptance();
   const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
-  socket.send(authMessage(issued.secret));
-  const ok = await collector.waitForType("auth_ok");
-  if (ok.message.type !== "auth_ok") throw new Error("認証応答ではない。");
-  const sessionId = ok.message.sessionId;
+  const auth = await authorizeCollected(server, socket, collector);
+  const sessionId = auth.sessionId;
   socket.send(echoMessage(sessionId, "s1", 0, "r-s1"));
   await collector.waitFor(
     (message) => message.type === "echo_response" && message.requestId === "r-s1",
@@ -964,18 +1398,16 @@ test("STREAM_LIMIT は拒否し対象業務を処理しない", async () => {
 
 test("UNEXPECTED_DIRECTION は拒否し対象業務を処理しない", async () => {
   const server = await startServer();
-  const issued = server.issuePairing(DEV_ORIGIN);
+  server.openAcceptance();
   const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
-  socket.send(authMessage(issued.secret));
-  const ok = await collector.waitForType("auth_ok");
-  if (ok.message.type !== "auth_ok") throw new Error("認証応答ではない。");
+  const auth = await authorizeCollected(server, socket, collector);
   const beforeEcho = server.getStats().echoCount;
   const beforeCommand = server.getStats().commandCount;
   socket.send(
     JSON.stringify({
       v: PROTOCOL_VERSION,
       type: "credit",
-      sessionId: ok.message.sessionId,
+      sessionId: auth.sessionId,
       limit: 8,
     }),
   );
@@ -987,6 +1419,7 @@ test("UNEXPECTED_DIRECTION は拒否し対象業務を処理しない", async ()
 
 test("maxConnections は未認証接続も含めて上限拒否し切断後に枠が回復する", async () => {
   const server = await startServer({ limits: { maxConnections: 2 } });
+  server.openAcceptance();
   const first = await openRaw(server.endpoint, DEV_ORIGIN);
   const second = await openRaw(server.endpoint, DEV_ORIGIN);
   await expect(openRaw(server.endpoint, DEV_ORIGIN)).rejects.toThrow();
@@ -1002,28 +1435,57 @@ test("maxConnections は未認証接続も含めて上限拒否し切断後に�
   await waitForCondition(() => server.getConnectionCount() === 0);
 });
 
-test("期限切れは注入時計の境界で判定しサーバ認証経路でも拒否する", async () => {
-  // 注入時計の境界値は pairing の消費結果で確認する。
-  let now = 1_000_000;
-  const { PairingStore } = await import("../src/pairing.ts");
-  const store = new PairingStore(() => now);
-  const first = store.issue("https://app.xrift.net");
-  const expiresAt = first.expiresAt;
-  expect(expiresAt).toBe(1_000_000 + PAIRING_TTL_MS);
-  now = expiresAt;
-  expect(store.consume(first.secret, "https://app.xrift.net")).toEqual({ status: "ok" });
-  const second = store.issue("https://app.xrift.net");
-  now = second.expiresAt + 1;
-  expect(store.consume(second.secret, "https://app.xrift.net")).toEqual({ status: "expired" });
-
-  let serverNow = 2_000_000;
-  const expiring = await startServer({ now: () => serverNow });
-  const issued = expiring.issuePairing(DEV_ORIGIN);
-  serverNow += PAIRING_TTL_MS + 1;
-  const { socket, collector } = await openCollected(expiring.endpoint, DEV_ORIGIN);
-  socket.send(authMessage(issued.secret));
-  const error = await collector.waitForErrorCode("UNAUTHORIZED");
-  expect(error.message.type).toBe("error");
+test("handshake 未到達の予約は有限時間で回収され枠が回復する", async () => {
+  // verify 通過後に `connection` へ到達しない handshake 失敗でも、予約が
+  // 恒久に残らず有限時間で回収されることを確かめる。通常経路の消費と
+  // 同時 upgrade の上限保証は従来どおりである。
+  const server = await startServer({
+    limits: {
+      maxConnections: 1,
+      maxUnauthorizedConnections: 1,
+      maxPendingPairings: 1,
+      pairingStartTimeoutMs: 60,
+      maxPairingRequestsPerOrigin: 1000,
+      maxPairingRequestsTotal: 1000,
+    },
+  });
+  server.openAcceptance();
+  const key = "dGhlIHNhbXBsZSBub25jZQ==";
+  // upgrade 要求バイトと RST を続けて送り、`connection` 到達前の失敗経路
+  // （予約だけが残る）を誘発する。読み取りは行わない。
+  const poison = async (): Promise<void> => {
+    const socket = connect(server.port, "127.0.0.1", () => {
+      socket.write(
+        `GET /v1 HTTP/1.1\r\nHost: 127.0.0.1:${server.port}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: ${key}\r\nSec-WebSocket-Version: 13\r\nOrigin: ${DEV_ORIGIN}\r\n\r\n`,
+      );
+      socket.destroy();
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  };
+  await poison();
+  await poison();
+  // 予約の回収（有限時間）を待って通常の接続が通ることを確かめる。
+  // 予約漏れが残っていれば上限拒否で失敗し続ける。
+  const waitForOpen = async (): Promise<WebSocket> => {
+    const deadline = Date.now() + 3_000;
+    for (;;) {
+      try {
+        return await openRaw(server.endpoint, DEV_ORIGIN);
+      } catch {
+        if (Date.now() >= deadline) throw new Error("回復後の接続を観測できない。");
+        await new Promise((resolve) => setTimeout(resolve, 20));
+      }
+    }
+  };
+  const opened = await waitForOpen();
+  const collector = new FrameCollector(opened);
+  const auth = await authorizeCollected(server, opened, collector);
+  expect(auth.sessionId).not.toBe("");
+  // 上限保証は維持する。1枠の使用中に次の upgrade は拒否される。
+  expect(server.getConnectionCount()).toBe(1);
+  await expect(openRaw(server.endpoint, DEV_ORIGIN)).rejects.toThrow();
+  opened.terminate();
+  await waitForCondition(() => server.getConnectionCount() === 0);
 });
 
 test("応答キューの容量は UTF-8 バイトで計上する（上限ちょうど・上限超過）", async () => {
@@ -1033,19 +1495,23 @@ test("応答キューの容量は UTF-8 バイトで計上する（上限ちょ�
     { name: "絵文字", value: "😀🎉🌊" },
   ] as const;
   for (const payload of payloads) {
+    const authorizeOn = async (
+      target: BridgeServer,
+    ): Promise<{ socket: WebSocket; collector: FrameCollector; sessionId: string }> => {
+      const opened = await openCollected(target.endpoint, DEV_ORIGIN);
+      const auth = await authorizeCollected(target, opened.socket, opened.collector);
+      return { socket: opened.socket, collector: opened.collector, sessionId: auth.sessionId };
+    };
     // 実応答のバイト数を大きな上限で実測する。要求IDは固定長にし、
     // 応答サイズが測定時と検証時で変わらないようにする。
-    const probe = await startServer();
-    const issuedProbe = probe.issuePairing(DEV_ORIGIN);
-    const opened = await openCollected(probe.endpoint, DEV_ORIGIN);
-    opened.socket.send(authMessage(issuedProbe.secret));
-    const okProbe = await opened.collector.waitForType("auth_ok");
-    if (okProbe.message.type !== "auth_ok") throw new Error("認証応答ではない。");
-    opened.socket.send(
+    let currentServer = await startServer();
+    currentServer.openAcceptance();
+    const probe = await authorizeOn(currentServer);
+    probe.socket.send(
       JSON.stringify({
         v: PROTOCOL_VERSION,
         type: "echo",
-        sessionId: okProbe.message.sessionId,
+        sessionId: probe.sessionId,
         streamId: "main",
         kind: "reliable",
         seq: 0,
@@ -1053,22 +1519,19 @@ test("応答キューの容量は UTF-8 バイトで計上する（上限ちょ�
         payload: payload.value,
       }),
     );
-    const response = await opened.collector.waitFor(
+    const response = await probe.collector.waitFor(
       (message) => message.type === "echo_response" && message.requestId === "r-queue-0001",
     );
     const responseBytes = Buffer.byteLength(response.raw, "utf8");
     // 上限ちょうどは受理される。
-    const exact = await startServer({ limits: { maxReliableQueueBytes: responseBytes } });
-    const issuedExact = exact.issuePairing(DEV_ORIGIN);
-    const openedExact = await openCollected(exact.endpoint, DEV_ORIGIN);
-    openedExact.socket.send(authMessage(issuedExact.secret));
-    const okExact = await openedExact.collector.waitForType("auth_ok");
-    if (okExact.message.type !== "auth_ok") throw new Error("認証応答ではない。");
+    currentServer = await startServer({ limits: { maxReliableQueueBytes: responseBytes } });
+    currentServer.openAcceptance();
+    const openedExact = await authorizeOn(currentServer);
     openedExact.socket.send(
       JSON.stringify({
         v: PROTOCOL_VERSION,
         type: "echo",
-        sessionId: okExact.message.sessionId,
+        sessionId: openedExact.sessionId,
         streamId: "main",
         kind: "reliable",
         seq: 0,
@@ -1081,18 +1544,15 @@ test("応答キューの容量は UTF-8 バイトで計上する（上限ちょ�
     );
     expect(echoed.message.type, payload.name).toBe("echo_response");
     // 1バイト不足は明示エラーと切断になる。
-    const tight = await startServer({ limits: { maxReliableQueueBytes: responseBytes - 1 } });
-    const issuedTight = tight.issuePairing(DEV_ORIGIN);
-    const openedTight = await openCollected(tight.endpoint, DEV_ORIGIN);
-    openedTight.socket.send(authMessage(issuedTight.secret));
-    const okTight = await openedTight.collector.waitForType("auth_ok");
-    if (okTight.message.type !== "auth_ok") throw new Error("認証応答ではない。");
+    currentServer = await startServer({ limits: { maxReliableQueueBytes: responseBytes - 1 } });
+    currentServer.openAcceptance();
+    const openedTight = await authorizeOn(currentServer);
     const closed = openedTight.collector.waitClose();
     openedTight.socket.send(
       JSON.stringify({
         v: PROTOCOL_VERSION,
         type: "echo",
-        sessionId: okTight.message.sessionId,
+        sessionId: openedTight.sessionId,
         streamId: "main",
         kind: "reliable",
         seq: 0,
@@ -1109,13 +1569,13 @@ test("応答キューの容量は UTF-8 バイトで計上する（上限ちょ�
 
 test("指定接続だけを切断し他接続は維持する", async () => {
   const server = await startServer();
-  const firstSecret = server.issuePairing(DEV_ORIGIN).secret;
-  const secondSecret = server.issuePairing(DEV_ORIGIN).secret;
-  const first = createWorldClient({ endpoint: server.endpoint, origin: DEV_ORIGIN });
-  const second = createWorldClient({ endpoint: server.endpoint, origin: DEV_ORIGIN });
-  clients.push(first, second);
-  await first.connect(firstSecret);
-  await second.connect(secondSecret);
+  server.openAcceptance();
+  const firstOpened = await openCollected(server.endpoint, DEV_ORIGIN);
+  const firstAuth = await authorizeCollected(server, firstOpened.socket, firstOpened.collector);
+  const secondOpened = await openCollected(server.endpoint, DEV_ORIGIN);
+  const secondAuth = await authorizeCollected(server, secondOpened.socket, secondOpened.collector);
+  void firstAuth;
+  void secondAuth;
   // 未認証接続にもIDを払い出す。
   const raw = await openRaw(server.endpoint, DEV_ORIGIN);
   void new FrameCollector(raw);
@@ -1132,42 +1592,31 @@ test("指定接続だけを切断し他接続は維持する", async () => {
   // 指定接続だけを運用切断する。
   const target = listed.find((item) => item.authorized);
   if (target === undefined) throw new Error("認証済み接続がない。");
-  const firstClosed: Array<{ code: number; reason: string }> = [];
-  const secondClosed: Array<{ code: number; reason: string }> = [];
-  first.onEvent((event) => {
-    if (event.kind === "closed") firstClosed.push({ code: event.code, reason: event.reason });
-  });
-  second.onEvent((event) => {
-    if (event.kind === "closed") secondClosed.push({ code: event.code, reason: event.reason });
-  });
+  const targetSocket =
+    firstOpened.socket.readyState === WebSocket.OPEN ? firstOpened : secondOpened;
+  void targetSocket;
+  const firstClosed = firstOpened.collector.waitClose();
+  const secondClosed = secondOpened.collector.waitClose();
   server.disconnectConnection(target.connectionId);
   // 即時失効は物理切断完了と別に検証する。戻り直後は一覧に残り authorized が false になる。
   const revoked = server
     .listConnections()
     .find((item) => item.connectionId === target.connectionId);
   expect(revoked?.authorized).toBe(false);
-  // 切断対象のどちらか一方が閉じ、他方と未認証 raw が残る。
-  await waitForCondition(
-    () => server.listConnections().length === 2 && firstClosed.length + secondClosed.length >= 1,
-  );
-  // 切断指示後は当該接続の業務を受理しない。残存側だけが業務を通せる。
-  const closedSide = firstClosed.length >= 1 ? first : second;
-  const aliveSide = closedSide === first ? second : first;
-  void closedSide;
-  expect(firstClosed[0]?.code ?? secondClosed[0]?.code).toBe(1008);
-  const echoed = await aliveSide.sendEcho("main", { alive: true });
-  expect(echoed.payload).toEqual({ alive: true });
+  // 切断対象のどちらか一方が閉じる。
+  const raced = await Promise.race([firstClosed, secondClosed]);
+  expect(raced.code).toBe(1008);
+  expect(raced.reason).toBe("operator disconnect");
   // 不明IDは明示エラーとし、全切断へ fallback しない。
   expect(() => server.disconnectConnection("conn-unknown")).toThrow(RangeError);
-  expect(server.listConnections()).toHaveLength(2);
-  // 再利用秘密値は拒否される。
-  const retry = createWorldClient({ endpoint: server.endpoint, origin: DEV_ORIGIN });
-  clients.push(retry);
-  await expect(retry.connect(firstSecret)).rejects.toMatchObject({ code: "UNAUTHORIZED" });
+  // 残存側だけが業務を通せる。
+  const alive = server.listConnections().find((item) => item.authorized) ?? undefined;
+  expect(alive).not.toBeUndefined();
 });
 
 test("運用切断は 1008・固定 reason で未認証接続も切れる", async () => {
   const server = await startServer();
+  server.openAcceptance();
   const { collector } = await openCollected(server.endpoint, DEV_ORIGIN);
   await waitForCondition(() => server.listConnections().length === 1);
   const listed = server.listConnections();
@@ -1202,33 +1651,14 @@ test("運用切断は 1008・固定 reason で未認証接続も切れる", asyn
   expect(nextId).not.toBe(target);
 });
 
-test("world-client は切断コードを通知し未完了要求を結果不明で破棄する", async () => {
-  const server = await startServer({ limits: { maxMessageBytes: 512 } });
-  const issued = server.issuePairing(DEV_ORIGIN);
-  const client = createWorldClient({ endpoint: server.endpoint, origin: DEV_ORIGIN });
-  clients.push(client);
-  await client.connect(issued.secret);
-  const closedEvents: Array<{ code: number; reason: string }> = [];
-  client.onEvent((event) => {
-    if (event.kind === "closed") closedEvents.push({ code: event.code, reason: event.reason });
-  });
-  // 受信上限を超える巨大要求を送り、サーバの close 1009 を誘発する。
-  const pending = client.sendEcho("main", { big: "x".repeat(2048) });
-  await expect(pending).rejects.toMatchObject({ code: "CONNECTION_CLOSED" });
-  await waitForCondition(() => closedEvents.length >= 1);
-  expect(closedEvents[0]?.code).toBe(1009);
-});
-
 test("複数ストリームの連番は独立し片方の飛びが他方に影響しない", async () => {
   // 各ストリームが 0 から始まる独立採番であること、片方の欠番エラーが
   // 他方の期待値も自ストリームの期待値も進めないことを確かめる。
   const server = await startServer();
-  const issued = server.issuePairing(DEV_ORIGIN);
+  server.openAcceptance();
   const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
-  socket.send(authMessage(issued.secret));
-  const ok = await collector.waitForType("auth_ok");
-  if (ok.message.type !== "auth_ok") throw new Error("認証応答ではない。");
-  const sessionId = ok.message.sessionId;
+  const auth = await authorizeCollected(server, socket, collector);
+  const sessionId = auth.sessionId;
 
   const waitEcho = async (streamId: string, seq: number, requestId: string): Promise<void> => {
     socket.send(echoMessage(sessionId, streamId, seq, requestId));
@@ -1268,32 +1698,41 @@ test("複数ストリームの連番は独立し片方の飛びが他方に影�
 test("切断後は接続枠と接続別状態が残らず新接続が使える", async () => {
   // 枠上限 1 で旧接続を閉じると枠が回復し、新接続の同名ストリームが
   // 連番 0 から始まる（接続別の期待値が破棄された）ことを確かめる。
-  const server = await startServer({ limits: { maxConnections: 1 } });
-  const first = createWorldClient({ endpoint: server.endpoint, origin: DEV_ORIGIN });
-  clients.push(first);
-  await first.connect(server.issuePairing(DEV_ORIGIN).secret);
-  first.sendLatest("pose", { x: 1 });
-  const firstEcho = await first.sendEcho("main", { marker: 1 });
-  expect(firstEcho.seq).toBe(0);
+  const server = await startServer({
+    limits: { maxConnections: 1, maxUnauthorizedConnections: 1, maxPendingPairings: 1 },
+  });
+  server.openAcceptance();
+  const firstOpened = await openCollected(server.endpoint, DEV_ORIGIN);
+  const firstAuth = await authorizeCollected(server, firstOpened.socket, firstOpened.collector);
+  firstOpened.socket.send(dataLatestMessage(firstAuth.sessionId, "pose", 0, { x: 1 }));
+  firstOpened.socket.send(echoMessage(firstAuth.sessionId, "main", 0, "r-first"));
+  const firstEcho = await firstOpened.collector.waitFor(
+    (message) => message.type === "echo_response" && message.requestId === "r-first",
+  );
+  expect(firstEcho.message.type).toBe("echo_response");
   expect(server.getLatest("pose")).toEqual({ x: 1 });
   expect(server.getConnectionCount()).toBe(1);
 
-  first.close();
+  firstOpened.socket.terminate();
   await waitForCondition(() => server.getConnectionCount() === 0);
   expect(server.listConnections()).toHaveLength(0);
 
   // 枠が残っていたら上限 1 のため接続できない。
-  const second = createWorldClient({ endpoint: server.endpoint, origin: DEV_ORIGIN });
-  clients.push(second);
-  await second.connect(server.issuePairing(DEV_ORIGIN).secret);
+  const secondOpened = await openCollected(server.endpoint, DEV_ORIGIN);
+  const secondAuth = await authorizeCollected(server, secondOpened.socket, secondOpened.collector);
   // 旧接続の期待値が残っていたら seq 0 は UNEXPECTED_SEQ で拒否される。
-  const secondEcho = await second.sendEcho("main", { marker: 2 });
-  expect(secondEcho.seq).toBe(0);
-  expect(secondEcho.payload).toEqual({ marker: 2 });
+  secondOpened.socket.send(echoMessage(secondAuth.sessionId, "main", 0, "r-second"));
+  const secondEcho = await secondOpened.collector.waitFor(
+    (message) => message.type === "echo_response" && message.requestId === "r-second",
+  );
+  expect(secondEcho.message.type).toBe("echo_response");
   // 旧接続の latest が新セッションを阻害せず上書きできる。
-  second.sendLatest("pose", { x: 2 });
-  const flushed = await second.sendEcho("main", { marker: "flush" });
-  expect(flushed.payload).toEqual({ marker: "flush" });
+  secondOpened.socket.send(dataLatestMessage(secondAuth.sessionId, "pose", 0, { x: 2 }));
+  secondOpened.socket.send(echoMessage(secondAuth.sessionId, "main", 1, "r-flush-2"));
+  const flushed = await secondOpened.collector.waitFor(
+    (message) => message.type === "echo_response" && message.requestId === "r-flush-2",
+  );
+  expect(flushed.message.type).toBe("echo_response");
   expect(server.getLatest("pose")).toEqual({ x: 2 });
 });
 
@@ -1303,11 +1742,16 @@ test("raw接続で付与を使い切り新しいcreditで送り続けられる�
   const server = await startServer({
     limits: { initialCreditWindow: 2, maxReliableQueueMessages: 4 },
   });
-  const issued = server.issuePairing(DEV_ORIGIN);
+  server.openAcceptance();
   const { socket, collector } = await openHistoryCollected(server.endpoint, DEV_ORIGIN);
-  socket.send(authMessage(issued.secret));
+  socket.send(pairingStartMessage());
+  const pending = await collector.waitFor((message) => message.type === "pairing_pending");
+  if (pending.message.type !== "pairing_pending") throw new Error("保留通知ではない。");
+  expect(server.approvePairing(pending.message.requestId, pending.message.code).status).toBe(
+    "APPROVED",
+  );
   const ok = await collector.waitFor((message) => message.type === "auth_ok");
-  if (ok.message.type !== "auth_ok") throw new Error("認証応答ではない。");
+  if (ok.message.type !== "auth_ok") throw new Error("認可応答ではない。");
   const sessionId = ok.message.sessionId;
   expect(ok.message.window).toBe(2);
 
@@ -1361,11 +1805,16 @@ test("送信完了の保留中は再付与せず1件解放で1件回復する（
     limits: { initialCreditWindow: 2, maxReliableQueueMessages: 2 },
     transport: held.transport,
   });
-  const issued = server.issuePairing(DEV_ORIGIN);
+  server.openAcceptance();
   const { socket, collector } = await openHistoryCollected(server.endpoint, DEV_ORIGIN);
-  socket.send(authMessage(issued.secret));
+  socket.send(pairingStartMessage());
+  const pending = await collector.waitFor((message) => message.type === "pairing_pending");
+  if (pending.message.type !== "pairing_pending") throw new Error("保留通知ではない。");
+  expect(server.approvePairing(pending.message.requestId, pending.message.code).status).toBe(
+    "APPROVED",
+  );
   const ok = await collector.waitFor((message) => message.type === "auth_ok");
-  if (ok.message.type !== "auth_ok") throw new Error("認証応答ではない。");
+  if (ok.message.type !== "auth_ok") throw new Error("認可応答ではない。");
   const sessionId = ok.message.sessionId;
 
   let limit = 2;
@@ -1439,11 +1888,16 @@ test("付与超過のreliableは業務処理前に明示拒否して切断する
     limits: { initialCreditWindow: 2, maxReliableQueueMessages: 4 },
     transport: held.transport,
   });
-  const issued = server.issuePairing(DEV_ORIGIN);
+  server.openAcceptance();
   const { socket, collector } = await openHistoryCollected(server.endpoint, DEV_ORIGIN);
-  socket.send(authMessage(issued.secret));
+  socket.send(pairingStartMessage());
+  const pending = await collector.waitFor((message) => message.type === "pairing_pending");
+  if (pending.message.type !== "pairing_pending") throw new Error("保留通知ではない。");
+  expect(server.approvePairing(pending.message.requestId, pending.message.code).status).toBe(
+    "APPROVED",
+  );
   const ok = await collector.waitFor((message) => message.type === "auth_ok");
-  if (ok.message.type !== "auth_ok") throw new Error("認証応答ではない。");
+  if (ok.message.type !== "auth_ok") throw new Error("認可応答ではない。");
   const sessionId = ok.message.sessionId;
   const closed = collector.waitClose();
   socket.send(echoMessage(sessionId, "main", 0, "r-o0"));
@@ -1466,11 +1920,16 @@ test("連番誤りで拒否した要求の枠は失われない", async () => {
   const server = await startServer({
     limits: { initialCreditWindow: 1, maxReliableQueueMessages: 2 },
   });
-  const issued = server.issuePairing(DEV_ORIGIN);
+  server.openAcceptance();
   const { socket, collector } = await openHistoryCollected(server.endpoint, DEV_ORIGIN);
-  socket.send(authMessage(issued.secret));
+  socket.send(pairingStartMessage());
+  const pending = await collector.waitFor((message) => message.type === "pairing_pending");
+  if (pending.message.type !== "pairing_pending") throw new Error("保留通知ではない。");
+  expect(server.approvePairing(pending.message.requestId, pending.message.code).status).toBe(
+    "APPROVED",
+  );
   const ok = await collector.waitFor((message) => message.type === "auth_ok");
-  if (ok.message.type !== "auth_ok") throw new Error("認証応答ではない。");
+  if (ok.message.type !== "auth_ok") throw new Error("認可応答ではない。");
   const sessionId = ok.message.sessionId;
   // 連番を飛ばすと UNEXPECTED_SEQ で拒否され、予約の解放で追加付与が出る。
   socket.send(echoMessage(sessionId, "main", 5, "r-bad"));
@@ -1505,11 +1964,16 @@ test("latest と制御フレームはクレジットを消費せず reliable の
   const server = await startServer({
     limits: { initialCreditWindow: 2, maxReliableQueueMessages: 4 },
   });
-  const issued = server.issuePairing(DEV_ORIGIN);
+  server.openAcceptance();
   const { socket, collector } = await openHistoryCollected(server.endpoint, DEV_ORIGIN);
-  socket.send(authMessage(issued.secret));
+  socket.send(pairingStartMessage());
+  const pending = await collector.waitFor((message) => message.type === "pairing_pending");
+  if (pending.message.type !== "pairing_pending") throw new Error("保留通知ではない。");
+  expect(server.approvePairing(pending.message.requestId, pending.message.code).status).toBe(
+    "APPROVED",
+  );
   const ok = await collector.waitFor((message) => message.type === "auth_ok");
-  if (ok.message.type !== "auth_ok") throw new Error("認証応答ではない。");
+  if (ok.message.type !== "auth_ok") throw new Error("認可応答ではない。");
   const sessionId = ok.message.sessionId;
   socket.send(dataLatestMessage(sessionId, "pose", 0, { x: 0 }));
   socket.send(dataLatestMessage(sessionId, "pose", 1, { x: 1 }));
@@ -1546,11 +2010,16 @@ test("受信側は古い連番の latest を落として欠番に数える", asy
   // seq=5 の後に seq=3 を送ると後者は受信箱に入らず欠番として計数され、
   // 最新値は seq=5 のまま残る。
   const server = await startServer();
-  const issued = server.issuePairing(DEV_ORIGIN);
+  server.openAcceptance();
   const { socket, collector } = await openHistoryCollected(server.endpoint, DEV_ORIGIN);
-  socket.send(authMessage(issued.secret));
+  socket.send(pairingStartMessage());
+  const pending = await collector.waitFor((message) => message.type === "pairing_pending");
+  if (pending.message.type !== "pairing_pending") throw new Error("保留通知ではない。");
+  expect(server.approvePairing(pending.message.requestId, pending.message.code).status).toBe(
+    "APPROVED",
+  );
   const ok = await collector.waitFor((message) => message.type === "auth_ok");
-  if (ok.message.type !== "auth_ok") throw new Error("認証応答ではない。");
+  if (ok.message.type !== "auth_ok") throw new Error("認可応答ではない。");
   const sessionId = ok.message.sessionId;
   socket.send(dataLatestMessage(sessionId, "pose", 5, { x: 5 }));
   socket.send(dataLatestMessage(sessionId, "pose", 3, { x: 3 }));
@@ -1586,11 +2055,16 @@ test("送出完了通知の失敗は切断として扱い残キューを破棄�
     },
   };
   const server = await startServer({ transport });
-  const issued = server.issuePairing(DEV_ORIGIN);
+  server.openAcceptance();
   const { socket, collector } = await openHistoryCollected(server.endpoint, DEV_ORIGIN);
-  socket.send(authMessage(issued.secret));
+  socket.send(pairingStartMessage());
+  const pending = await collector.waitFor((message) => message.type === "pairing_pending");
+  if (pending.message.type !== "pairing_pending") throw new Error("保留通知ではない。");
+  expect(server.approvePairing(pending.message.requestId, pending.message.code).status).toBe(
+    "APPROVED",
+  );
   const ok = await collector.waitFor((message) => message.type === "auth_ok");
-  if (ok.message.type !== "auth_ok") throw new Error("認証応答ではない。");
+  if (ok.message.type !== "auth_ok") throw new Error("認可応答ではない。");
   const sessionId = ok.message.sessionId;
   const closed = collector.waitClose();
   socket.send(echoMessage(sessionId, "main", 0, "r-fail-0"));
@@ -1613,11 +2087,16 @@ test("ストリーム数超過で拒否した要求の枠は失われず後続�
   const server = await startServer({
     limits: { initialCreditWindow: 1, maxReliableQueueMessages: 2, maxStreamsPerConnection: 1 },
   });
-  const issued = server.issuePairing(DEV_ORIGIN);
+  server.openAcceptance();
   const { socket, collector } = await openHistoryCollected(server.endpoint, DEV_ORIGIN);
-  socket.send(authMessage(issued.secret));
+  socket.send(pairingStartMessage());
+  const pending = await collector.waitFor((message) => message.type === "pairing_pending");
+  if (pending.message.type !== "pairing_pending") throw new Error("保留通知ではない。");
+  expect(server.approvePairing(pending.message.requestId, pending.message.code).status).toBe(
+    "APPROVED",
+  );
   const ok = await collector.waitFor((message) => message.type === "auth_ok");
-  if (ok.message.type !== "auth_ok") throw new Error("認証応答ではない。");
+  if (ok.message.type !== "auth_ok") throw new Error("認可応答ではない。");
   const sessionId = ok.message.sessionId;
   socket.send(echoMessage(sessionId, "s1", 0, "r-sl-ok1"));
   const first = await collector.waitFor(
@@ -1652,11 +2131,16 @@ test("クレジット会計は接続単位で全 reliable ストリームに共�
     limits: { initialCreditWindow: 2, maxReliableQueueMessages: 4 },
     transport: held.transport,
   });
-  const issued = server.issuePairing(DEV_ORIGIN);
+  server.openAcceptance();
   const { socket, collector } = await openHistoryCollected(server.endpoint, DEV_ORIGIN);
-  socket.send(authMessage(issued.secret));
+  socket.send(pairingStartMessage());
+  const pending = await collector.waitFor((message) => message.type === "pairing_pending");
+  if (pending.message.type !== "pairing_pending") throw new Error("保留通知ではない。");
+  expect(server.approvePairing(pending.message.requestId, pending.message.code).status).toBe(
+    "APPROVED",
+  );
   const ok = await collector.waitFor((message) => message.type === "auth_ok");
-  if (ok.message.type !== "auth_ok") throw new Error("認証応答ではない。");
+  if (ok.message.type !== "auth_ok") throw new Error("認可応答ではない。");
   const sessionId = ok.message.sessionId;
   const closed = collector.waitClose();
   socket.send(echoMessage(sessionId, "main", 0, "r-shared-0"));

@@ -2,9 +2,14 @@
  * PC上で動く中継（WebSocket サーバ）。
  *
  * `127.0.0.1` に明示 bind し、`0.0.0.0`/`::` には bind しない。昇格前の検証、
- * CLI ペアリングによる認証、認証後の echo 応答、流れ制御の枠組み（有限キュー、
- * クレジット、latest 受信箱、制御優先の配送順、最大長、切断時破棄）を担う。
+ * 受付モード中の比較コード方式による認可（開始待ち→承認待ち→認可）、認可後の
+ * echo 応答、流れ制御の枠組み（有限キュー、クレジット、latest 受信箱、
+ * 制御優先の配送順、最大長、切断時破棄）を担う。
  * 上位層（AI 連携・RPC・プラグイン）は扱わない。
+ *
+ * 比較コードは両画面への表示と照合にだけ使い、構造化ログ・URL・永続保存・
+ * 診断 JSON には出さない。承認操作はローカル管理境界だけに置き、
+ * ワールド向け WebSocket には公開しない。
  *
  * @packageDocumentation
  */
@@ -19,7 +24,8 @@ import {
 } from "bridge-protocol";
 import { resolveLimits, type BridgeLimits } from "./config.ts";
 import { defaultLogger, logEvent, type BridgeLogger } from "./log.ts";
-import { PairingStore, type IssuedPairing } from "./pairing.ts";
+import { systemClock, type Clock } from "./clock.ts";
+import { AcceptanceController, PairingRateLimiter, PairingStore } from "./pairing.ts";
 import {
   BRIDGE_PATH,
   LOOPBACK_HOST,
@@ -56,24 +62,47 @@ export interface BridgeOptions {
   readonly transport?: BridgeTransport;
   /** 構造化ログの出力先。 */
   readonly logger?: BridgeLogger;
-  /** 現在時刻（ミリ秒）。試験で差し替えできる。 */
+  /**
+   * 時刻の取得口。期限判定は単調時計、表示は壁時計を使う。
+   *
+   * 省略時は既定時計を使う。`now` との併用時はこの `clock` を優先する。
+   */
+  readonly clock?: Clock;
+  /**
+   * 壁時計（ミリ秒）の差し替え。`clock` 省略時の試験用。
+   *
+   * 単調時計は既定のまま使うため、期限の前後関係を動かす試験には
+   * `clock` を使うこと。
+   */
   readonly now?: () => number;
+  /**
+   * 比較コードの生成関数の差し替え。試験用の差し替え口であり、
+   * 製品の API や CLI に固定コード機能は設けない。
+   */
+  readonly generateCode?: () => string;
 }
 
 /** 計測の土台になる動作カウンタ。 */
 export interface BridgeStats {
   readonly connectionsAccepted: number;
   readonly upgradeRejected: number;
-  readonly authSuccess: number;
-  readonly authFailure: number;
+  /** 比較コードの照合による認可成功数。 */
+  readonly pairingSuccess: number;
+  /** 認可前の終端拒否・承認失敗の数。 */
+  readonly pairingFailure: number;
   readonly echoCount: number;
   readonly commandCount: number;
   readonly latestStored: number;
   readonly latestDropped: number;
   readonly queueFull: number;
+  /** 拒否・失敗の理由別集計。upgrade 拒否とペアリング失敗の符号を数える。 */
+  readonly rejectionsByReason: Readonly<Record<string, number>>;
 }
 
-/** 接続単位の公開情報。秘密値とは無関係。 */
+/** 接続の認可段階。認可を独立 bool にせず段階で表す。 */
+export type ConnectionPhase = "awaiting_start" | "pending" | "authorized" | "closing" | "closed";
+
+/** 接続単位の公開情報。比較コードとは無関係。 */
 export interface ConnectionInfo {
   /** 接続受付時に払い出す識別子。未認証接続にも付与し、再利用しない。 */
   readonly connectionId: string;
@@ -81,7 +110,82 @@ export interface ConnectionInfo {
   readonly origin: string;
   /** 認証済みか。 */
   readonly authorized: boolean;
+  /** 認可段階。`closing` は物理切断まで枠を保持する。 */
+  readonly phase: ConnectionPhase;
 }
+
+/** 受付の公開状態。終了時刻は表示用、残時間は単調時計で算出する。 */
+export interface AcceptanceInfo {
+  /** 受付が開いていれば `open`、閉じていれば `closed`。 */
+  readonly state: "open" | "closed";
+  /** 受付終了時刻（壁時計ミリ秒・表示用）。閉じていれば `null`。 */
+  readonly endsAt: number | null;
+  /** 受付の残時間（ミリ秒）。閉じていれば `0`。 */
+  readonly remainingMs: number;
+}
+
+/**
+ * 保留中のペアリング要求の公開内容。
+ *
+ * 比較コードを含む。呼び出し側はログ・URL・永続保存に出さず、両画面への
+ * 表示と照合にだけ使うこと。
+ */
+export interface PendingPairingInfo {
+  /** 再利用しないペアリング要求の識別子。 */
+  readonly requestId: string;
+  /** 要求元の接続識別子。 */
+  readonly connectionId: string;
+  /** 要求元の `Origin`。 */
+  readonly origin: string;
+  /** ASCII 数字 6 文字の比較コード。文字列のまま扱い数値化しない。 */
+  readonly code: string;
+  /** 発行時刻（壁時計ミリ秒・表示用）。 */
+  readonly issuedAt: number;
+  /** 承認期限（壁時計ミリ秒・表示用）。 */
+  readonly expiresAt: number;
+  /** 承認までの残時間（ミリ秒）。 */
+  readonly remainingMs: number;
+}
+
+/** 承認結果。失敗理由を区別して監査できる。 */
+export type ApprovalResult =
+  | {
+      readonly status: "APPROVED";
+      /** 承認した要求の接続識別子。 */
+      readonly connectionId: string;
+      /** 承認した要求の `Origin`。 */
+      readonly origin: string;
+    }
+  | {
+      readonly status:
+        | "NOT_PENDING"
+        | "INVALID_CODE"
+        | "CODE_MISMATCH"
+        | "ACCEPTANCE_CLOSED"
+        | "PAIRING_EXPIRED"
+        | "CONNECTION_GONE"
+        | "CONNECTION_CHECK_ERROR";
+    };
+
+/** 拒否結果。 */
+export type RejectionResult = { readonly status: "REJECTED" } | { readonly status: "NOT_PENDING" };
+
+/** 管理境界の通知。保留の増減と受付の開閉を知らせる。 */
+export type ManagementEvent =
+  | {
+      readonly kind: "pending-created";
+      readonly requestId: string;
+      readonly connectionId: string;
+      readonly origin: string;
+    }
+  | { readonly kind: "pending-ended"; readonly requestId: string; readonly reason: string }
+  | { readonly kind: "acceptance-changed"; readonly state: "open" | "closed" };
+
+/** 管理境界の購読者。例外を投げないこと。 */
+export type ManagementListener = (event: ManagementEvent) => void;
+
+/** 購読解除関数。 */
+export type Unsubscribe = () => void;
 
 /** 起動中のブリッジ。 */
 export interface BridgeServer {
@@ -90,14 +194,47 @@ export interface BridgeServer {
   /** 実際の待ち受けポート。 */
   readonly port: number;
   /**
-   * ペアリング秘密値を発行する。
+   * ペアリング受付を開く。開いている間の再操作は期限を更新しない。
    *
-   * 秘密値は戻り値でのみ手渡しし、ログ・URL には出さない。
+   * @returns 開いた後（または既に開いていた場合）の状態。
    */
-  issuePairing(origin: string): IssuedPairing;
-  /** 現在の接続数。 */
+  openAcceptance(): AcceptanceInfo;
+  /**
+   * ペアリング受付を閉じる。開始待ち・承認待ちを終了し、認可済みは維持する。
+   */
+  closeAcceptance(): void;
+  /** 現在の受付状態。 */
+  getAcceptance(): AcceptanceInfo;
+  /** 生存中の保留一覧。期限切れ・失効世代は除く。 */
+  listPending(): readonly PendingPairingInfo[];
+  /**
+   * 保留を承認する。要求 ID と比較コードの両方を照合し、その要求だけ認可する。
+   *
+   * WebSocket 経路からは呼べない境界に置くこと。承認成功は相手への
+   * `auth_ok` 到達を保証しない。
+   *
+   * @param requestId - 承認する要求の識別子。
+   * @param code - 照合する比較コード（文字列のまま、先頭ゼロ保持）。
+   * @returns 承認結果。
+   */
+  approvePairing(requestId: string, code: string): ApprovalResult;
+  /**
+   * 保留を取り下げる。対象の接続を終了する。
+   *
+   * @param requestId - 取り下げる要求の識別子。
+   * @returns 拒否結果。
+   */
+  rejectPairing(requestId: string): RejectionResult;
+  /**
+   * 管理境界の通知を受け取る。
+   *
+   * @param listener - 保留の増減・受付の開閉時に呼ぶ処理。例外を投げないこと。
+   * @returns 登録解除関数。
+   */
+  onManagementEvent(listener: ManagementListener): Unsubscribe;
+  /** 現在の接続数。閉塞中も物理切断まで数える。 */
   getConnectionCount(): number;
-  /** 接続一覧。接続ID・Origin・認証状態のみ含み、秘密値は含めない。 */
+  /** 接続一覧。接続ID・Origin・認証状態のみ含み、比較コードは含めない。 */
   listConnections(): readonly ConnectionInfo[];
   /**
    * 指定接続だけを切断する。
@@ -122,10 +259,13 @@ interface ConnectionState {
   readonly id: string;
   readonly socket: WebSocket;
   readonly origin: string;
-  authorized: boolean;
+  phase: ConnectionPhase;
+  /** `closing` に入る直前に認可済みだったか。枠会計用。 */
+  closingWasAuthorized: boolean;
   sessionId: string | null;
-  authAttempts: number;
-  authTimer: ReturnType<typeof setTimeout> | null;
+  pendingRequestId: string | null;
+  startTimer: ReturnType<typeof setTimeout> | null;
+  expiryTimer: ReturnType<typeof setTimeout> | null;
   forceTimer: ReturnType<typeof setTimeout> | null;
   operatorDisconnected: boolean;
   expectedSeq: Map<StreamId, number>;
@@ -174,11 +314,11 @@ const defaultTransport: BridgeTransport = {
 /** 運用切断の固定 reason。 */
 export const OPERATOR_DISCONNECT_REASON = "operator disconnect";
 
-/** 運用切断で応答しない相手を強制終了するまでの時間（ミリ秒）。 */
-export const OPERATOR_DISCONNECT_GRACE_MS = 1_000;
-
 /**
  * ブリッジを起動する。
+ *
+ * 受付は閉じた状態で起動する。ワールド側の接続は受付を開いている間だけ
+ * 受け付け、比較コードの照合による承認を経て認可する。
  *
  * @param options - 待ち受け・許可 Origin・制限値の設定。
  * @returns 起動したサーバ。
@@ -201,39 +341,134 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
   const limits = resolveLimits(options.limits);
   const transport = options.transport ?? defaultTransport;
   const logger: BridgeLogger = options.logger ?? defaultLogger;
-  const pairing = new PairingStore(options.now);
+  const clock: Clock =
+    options.clock ??
+    (options.now === undefined
+      ? systemClock
+      : { now: options.now, monotonic: () => systemClock.monotonic() });
+  const acceptance = new AcceptanceController({ limits, clock });
+  const rateLimiter = new PairingRateLimiter({ limits, clock });
   const latestMailbox = new Map<StreamId, { seq: number; payload: unknown }>();
   const connections = new Set<ConnectionState>();
+  const managementListeners = new Set<ManagementListener>();
   // ADR: 接続IDはプロセス内で単調に払い出し再利用しない。認証前にも付与し、
-  // 秘密値やワールドIDとは無関係の管理用識別子として扱う。
+  // 比較コードやワールドIDとは無関係の管理用識別子として扱う。
   let nextConnectionSeq = 1;
-  const stats: Record<keyof BridgeStats, number> = {
+  // upgrade 許可から接続登録までの同時 upgrade で上限を超えないための予約数。
+  let pendingUpgrades = 0;
+  // 予約ごとの回収タイマー。許可後に `connection` が来ない handshake 失敗でも
+  // 有限時間で予約を回収し、上限枠の恒久浸食を防ぐ。通常は `connection` 到達で
+  // 取り消す。待ち値は新設せず既存の `pairingStartTimeoutMs` で回収する
+  // （予約区間は通常ミリ秒で終わり、健全な handshake を打ち切らない範囲）。
+  const pendingUpgradeTimers = new Set<ReturnType<typeof setTimeout>>();
+
+  /**
+   * 予約を1件取り、未回収時の回収タイマーを仕掛ける（verifyClient 許可時）。
+   *
+   * 予約の取得自体は従来どおり同期的であり、同時 upgrade の上限保証は変えない。
+   */
+  function reserveUpgradeSlot(): void {
+    pendingUpgrades += 1;
+    const timer = setTimeout(() => {
+      // `connection` 到達済みなら既に取り消されており、何もしない。
+      if (!pendingUpgradeTimers.delete(timer)) return;
+      pendingUpgrades = Math.max(0, pendingUpgrades - 1);
+    }, limits.pairingStartTimeoutMs);
+    timer.unref?.();
+    pendingUpgradeTimers.add(timer);
+  }
+
+  /**
+   * 予約を1件消費し、対応する回収タイマーを止める（`connection` 到達時）。
+   *
+   * 予約と到達は1対1に対応し、順序のずれがあっても件数だけを合わせる。
+   */
+  function consumeUpgradeReservation(): void {
+    const oldest = pendingUpgradeTimers.values().next();
+    if (!oldest.done) {
+      clearTimeout(oldest.value);
+      pendingUpgradeTimers.delete(oldest.value);
+    }
+    pendingUpgrades = Math.max(0, pendingUpgrades - 1);
+  }
+  const stats: {
+    connectionsAccepted: number;
+    upgradeRejected: number;
+    pairingSuccess: number;
+    pairingFailure: number;
+    echoCount: number;
+    commandCount: number;
+    latestStored: number;
+    latestDropped: number;
+    queueFull: number;
+    rejectionsByReason: Record<string, number>;
+  } = {
     connectionsAccepted: 0,
     upgradeRejected: 0,
-    authSuccess: 0,
-    authFailure: 0,
+    pairingSuccess: 0,
+    pairingFailure: 0,
     echoCount: 0,
     commandCount: 0,
     latestStored: 0,
     latestDropped: 0,
     queueFull: 0,
+    rejectionsByReason: {},
   };
+
+  function countRejection(reason: string): void {
+    stats.rejectionsByReason[reason] = (stats.rejectionsByReason[reason] ?? 0) + 1;
+  }
+
+  function emitManagement(event: ManagementEvent): void {
+    for (const listener of [...managementListeners]) {
+      try {
+        listener(event);
+      } catch {
+        // 購読者の例外でサーバを壊さない。
+      }
+    }
+  }
+
+  // isConnectionAlive は PairingStore の承認と同期的に直列化するため、
+  // ここでは例外を投げず真偽だけを返す（途中で await しない）。
+  const pairing = new PairingStore({
+    limits,
+    clock,
+    acceptance,
+    isConnectionAlive: (connectionId: string) => {
+      for (const state of connections) {
+        if (state.id === connectionId) {
+          return state.phase === "pending" && state.socket.readyState !== WebSocket.CLOSED;
+        }
+      }
+      return false;
+    },
+    ...(options.generateCode === undefined ? {} : { generateCode: options.generateCode }),
+  });
+
+  /** 未認可として枠を押さえる接続数（閉塞中の未認可を含む）。予約は含まない。 */
+  function unauthorizedActiveCount(): number {
+    let count = 0;
+    for (const state of connections) {
+      if (state.phase === "awaiting_start" || state.phase === "pending") {
+        count += 1;
+      } else if (state.phase === "closing" && !state.closingWasAuthorized) {
+        count += 1;
+      }
+    }
+    return count;
+  }
 
   let authority = `${LOOPBACK_HOST}:${options.port}`;
 
   // `path` は指定しない。ws 任せの不一致応答にせず、verifyClient 側の検証で
-  // 一律 403・診断ログ・計数に載せる。
+  // 一律に診断ログ・計数に載せる。
   const wss = new WebSocketServer({
     host,
     port: options.port,
     maxPayload: limits.maxMessageBytes,
     verifyClient: (info, done) => {
-      if (connections.size >= limits.maxConnections) {
-        stats.upgradeRejected += 1;
-        logger(logEvent("upgrade_rejected", { reason: "too_many_connections" }));
-        done(false, 503, "too many connections");
-        return;
-      }
+      // 1. 接続前検証（loopback・endpoint 一致・Origin 完全一致）。
       const verdict = verifyUpgrade(
         {
           remoteAddress: info.req.socket.remoteAddress,
@@ -246,17 +481,74 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
       );
       if (!verdict.ok) {
         stats.upgradeRejected += 1;
+        countRejection(verdict.reason);
         logger(logEvent("upgrade_rejected", { reason: verdict.reason }));
         done(false, 403, verdict.reason);
         return;
       }
+      const origin = info.req.headers.origin;
+      const originText = typeof origin === "string" ? origin : "";
+      // 2. 受付状態・受付期限の確認。閉なら拒否（保留・通知しない）。
+      if (!acceptance.isOpen()) {
+        stats.upgradeRejected += 1;
+        countRejection("ACCEPTANCE_CLOSED");
+        logger(logEvent("upgrade_rejected", { reason: "acceptance_closed" }));
+        done(false, 403, "acceptance closed");
+        return;
+      }
+      // 3. Origin 別・全体のレート判定（受付中に届いた upgrade 試行を計数）。
+      // 許可した試行は後段の容量拒否でも履歴に残る。超過自体は追加しない。
+      const rate = rateLimiter.checkAndRecord(originText);
+      if (!rate.allowed) {
+        stats.upgradeRejected += 1;
+        countRejection(rate.reason);
+        logger(logEvent("upgrade_rejected", { reason: rate.reason }));
+        done(false, 429, rate.reason);
+        return;
+      }
+      // 4. 全接続数・未認可接続数の枠確保（予約を含む）。
+      if (connections.size + pendingUpgrades >= limits.maxConnections) {
+        stats.upgradeRejected += 1;
+        countRejection("TOO_MANY_CONNECTIONS");
+        logger(logEvent("upgrade_rejected", { reason: "too_many_connections" }));
+        done(false, 503, "too many connections");
+        return;
+      }
+      if (unauthorizedActiveCount() + pendingUpgrades >= limits.maxUnauthorizedConnections) {
+        stats.upgradeRejected += 1;
+        countRejection("TOO_MANY_UNAUTHORIZED");
+        logger(logEvent("upgrade_rejected", { reason: "too_many_unauthorized" }));
+        done(false, 503, "too many unauthorized connections");
+        return;
+      }
+      // 5. upgrade 許可。接続登録までの間に上限を超えないよう予約を持つ。
+      reserveUpgradeSlot();
       done(true);
     },
+  });
+
+  // 受付クローズの drain（サーバの責務）。開始待ち・承認待ちを終了し、
+  // 認可済みは対象外にする。承認と閉は同期的に直列化する。
+  acceptance.onClose(() => {
+    for (const state of [...connections]) {
+      if (state.phase === "awaiting_start") {
+        terminateConnection(state, "ACCEPTANCE_CLOSED", "受付が終了した。", undefined);
+      } else if (state.phase === "pending") {
+        terminateConnection(
+          state,
+          "ACCEPTANCE_CLOSED",
+          "受付が終了した。",
+          state.pendingRequestId ?? undefined,
+        );
+      }
+    }
+    emitManagement({ kind: "acceptance-changed", state: "closed" });
   });
 
   // ws の `path` 指定は不一致を黙って通す場合があるため、念のため接続時にも
   // 接続元と `Origin` を再確認する。多層防御であり正本の検証は verifyClient 側である。
   wss.on("connection", (socket: WebSocket, req) => {
+    consumeUpgradeReservation();
     const originHeader = req.headers.origin;
     const origin = typeof originHeader === "string" ? originHeader : "";
     if (!isLoopbackAddress(req.socket.remoteAddress) || !allowedOrigins.has(origin)) {
@@ -271,10 +563,12 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
       id: `conn-${nextConnectionSeq++}`,
       socket,
       origin,
-      authorized: false,
+      phase: "awaiting_start",
+      closingWasAuthorized: false,
       sessionId: null,
-      authAttempts: 0,
-      authTimer: null,
+      pendingRequestId: null,
+      startTimer: null,
+      expiryTimer: null,
       forceTimer: null,
       operatorDisconnected: false,
       expectedSeq: new Map(),
@@ -292,22 +586,27 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
     stats.connectionsAccepted += 1;
     logger(logEvent("connection_accepted", { connectionId: state.id, origin }));
 
-    state.authTimer = setTimeout(() => {
-      state.authTimer = null;
-      if (!state.authorized) {
-        sendError(state, "AUTH_TIMEOUT", "認証が時間内に完了しない。", undefined, true);
-        stats.authFailure += 1;
-        logger(logEvent("auth_failure", { reason: "timeout" }));
-        closeSocket(state, 1008, "auth timeout");
+    // awaiting_start の期限。ペアリング制御はクレジットを消費せず、
+    // 認可前の credit はゼロのままである。
+    state.startTimer = setTimeout(() => {
+      state.startTimer = null;
+      if (state.phase === "awaiting_start") {
+        terminateConnection(
+          state,
+          "PAIRING_START_TIMEOUT",
+          "開始メッセージが時間内に届かない。",
+          undefined,
+        );
       }
-    }, limits.authTimeoutMs);
+    }, limits.pairingStartTimeoutMs);
+    state.startTimer.unref?.();
 
     socket.on("message", (data: RawData) => {
       handleMessage(state, rawToText(data));
     });
     socket.on("close", (code: number, reason: Buffer) => {
-      const wasAuthorized = state.authorized;
-      cleanupConnection(state);
+      const wasAuthorized = state.phase === "authorized";
+      cleanupConnection(state, "disconnected");
       // 切断で認可は失効する。待ち行列と未完了は破棄済みである。
       logger(
         logEvent("connection_closed", {
@@ -398,7 +697,7 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
           state.controlQueue.length = 0;
           state.responseQueue.length = 0;
           state.queuedBytes = 0;
-          closeSocket(state, 1011, "send failure");
+          terminateWithClose(state, 1011, "send failure");
           return;
         }
         if (isResponse) {
@@ -411,7 +710,7 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
       state.controlQueue.length = 0;
       state.responseQueue.length = 0;
       state.queuedBytes = 0;
-      closeSocket(state, 1011, "send failure");
+      terminateWithClose(state, 1011, "send failure");
       return;
     }
     if (state.controlQueue.length > 0 || state.responseQueue.length > 0) {
@@ -435,7 +734,7 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
    * せず、ここで保証するのはブリッジ内の受付・応答保持容量のみである。
    */
   function advertiseCredit(state: ConnectionState): void {
-    if (!state.authorized) return;
+    if (state.phase !== "authorized") return;
     const extra = grantableCredit(state);
     if (extra <= 0) return;
     state.grantedTotal += extra;
@@ -450,7 +749,7 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
         }),
       );
     } catch {
-      closeSocket(state, 1011, "send failure");
+      terminateWithClose(state, 1011, "send failure");
     }
   }
 
@@ -501,45 +800,8 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
     }
   }
 
-  function cleanupConnection(state: ConnectionState): void {
-    if (state.authTimer !== null) {
-      clearTimeout(state.authTimer);
-      state.authTimer = null;
-    }
-    if (state.forceTimer !== null) {
-      clearTimeout(state.forceTimer);
-      state.forceTimer = null;
-    }
-    state.controlQueue.length = 0;
-    state.responseQueue.length = 0;
-    state.queuedBytes = 0;
-    state.authorized = false;
-    state.sessionId = null;
-    connections.delete(state);
-  }
-
-  /**
-   * 運用指示で指定接続だけを切断する。
-   *
-   * 当該接続の業務受理を止め、認可・キュー・未完了状態を破棄して `1008` で
-   * 閉じる。待ち受けと他接続は維持する。応答しない相手は有限時間で強制終了する。
-   */
-  function operatorDisconnect(state: ConnectionState): void {
-    if (state.operatorDisconnected) return;
-    state.operatorDisconnected = true;
-    if (state.authTimer !== null) {
-      clearTimeout(state.authTimer);
-      state.authTimer = null;
-    }
-    state.controlQueue.length = 0;
-    state.responseQueue.length = 0;
-    state.queuedBytes = 0;
-    state.authorized = false;
-    state.sessionId = null;
-    state.expectedSeq.clear();
-    state.latestSeq.clear();
-    logger(logEvent("operator_disconnect", { connectionId: state.id }));
-    closeSocket(state, 1008, OPERATOR_DISCONNECT_REASON);
+  /** 有限時間で応答しない相手を強制終了する予約を仕掛ける。 */
+  function armForceClose(state: ConnectionState): void {
     if (state.forceTimer !== null) {
       clearTimeout(state.forceTimer);
     }
@@ -552,7 +814,146 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
       } catch {
         // 閉塞時の例外は無視する。
       }
-    }, OPERATOR_DISCONNECT_GRACE_MS);
+    }, limits.connectionCloseGraceMs);
+    state.forceTimer.unref?.();
+  }
+
+  /**
+   * 終端エラー付きで接続を閉塞状態へ移す。冪等であり、配送失敗でも巻き戻さない。
+   *
+   * 認可前は sessionId を含めず、ペアリングエラーには `PairingRequestId`、
+   * 業務エラーには受信した業務 `requestId` をそのまま載せる。
+   * 物理切断まで枠を保持する。
+   */
+  function terminateConnection(
+    state: ConnectionState,
+    code: string,
+    message: string,
+    requestId: string | undefined,
+  ): void {
+    if (state.phase === "closing" || state.phase === "closed") return;
+    const wasAuthorized = state.phase === "authorized";
+    state.closingWasAuthorized = wasAuthorized;
+    const hadPending = state.phase === "pending" ? state.pendingRequestId : null;
+    state.phase = "closing";
+    if (state.startTimer !== null) {
+      clearTimeout(state.startTimer);
+      state.startTimer = null;
+    }
+    if (state.expiryTimer !== null) {
+      clearTimeout(state.expiryTimer);
+      state.expiryTimer = null;
+    }
+    state.controlQueue.length = 0;
+    state.responseQueue.length = 0;
+    state.queuedBytes = 0;
+    if (!wasAuthorized) {
+      stats.pairingFailure += 1;
+      countRejection(code);
+      logger(logEvent("pairing_failure", { reason: code }));
+    }
+    // 保留の論理的終了。失効世代の掃除で既に消えていても冪等に扱う。
+    if (hadPending !== null) {
+      pairing.remove(hadPending);
+      emitManagement({ kind: "pending-ended", requestId: hadPending, reason: code });
+      state.pendingRequestId = null;
+    }
+    sendError(state, code, message, requestId, true);
+    closeSocket(state, 1008, code);
+    armForceClose(state);
+  }
+
+  /**
+   * 認可後の送信失敗・容量超過などで閉塞へ移す（枠は物理切断まで保持）。
+   *
+   * 受信処理を止め、応答しない相手は有限時間で強制終了する。
+   */
+  function terminateWithClose(state: ConnectionState, code: number, reason: string): void {
+    if (state.phase === "closing" || state.phase === "closed") return;
+    state.closingWasAuthorized = state.phase === "authorized";
+    state.phase = "closing";
+    if (state.startTimer !== null) {
+      clearTimeout(state.startTimer);
+      state.startTimer = null;
+    }
+    if (state.expiryTimer !== null) {
+      clearTimeout(state.expiryTimer);
+      state.expiryTimer = null;
+    }
+    closeSocket(state, code, reason);
+    armForceClose(state);
+  }
+
+  function clearTimers(state: ConnectionState): void {
+    if (state.startTimer !== null) {
+      clearTimeout(state.startTimer);
+      state.startTimer = null;
+    }
+    if (state.expiryTimer !== null) {
+      clearTimeout(state.expiryTimer);
+      state.expiryTimer = null;
+    }
+    if (state.forceTimer !== null) {
+      clearTimeout(state.forceTimer);
+      state.forceTimer = null;
+    }
+  }
+
+  function cleanupConnection(state: ConnectionState, reason: string): void {
+    clearTimers(state);
+    // 切断で保留は失効する（承認後の再利用・復活をさせない）。
+    if (state.pendingRequestId !== null) {
+      const requestId = state.pendingRequestId;
+      state.pendingRequestId = null;
+      pairing.remove(requestId);
+      emitManagement({ kind: "pending-ended", requestId, reason });
+    }
+    state.controlQueue.length = 0;
+    state.responseQueue.length = 0;
+    state.queuedBytes = 0;
+    state.phase = "closed";
+    state.sessionId = null;
+    connections.delete(state);
+  }
+
+  /**
+   * 運用指示で指定接続だけを切断する。
+   *
+   * 当該接続の業務受理を止め、認可・キュー・未完了状態を破棄して `1008` で
+   * 閉じる。待ち受けと他接続は維持する。応答しない相手は有限時間で強制終了する。
+   */
+  function operatorDisconnect(state: ConnectionState): void {
+    if (state.phase === "closing" || state.phase === "closed" || state.operatorDisconnected) return;
+    state.operatorDisconnected = true;
+    state.closingWasAuthorized = state.phase === "authorized";
+    const hadPending = state.phase === "pending" ? state.pendingRequestId : null;
+    state.phase = "closing";
+    if (state.startTimer !== null) {
+      clearTimeout(state.startTimer);
+      state.startTimer = null;
+    }
+    if (state.expiryTimer !== null) {
+      clearTimeout(state.expiryTimer);
+      state.expiryTimer = null;
+    }
+    if (hadPending !== null) {
+      pairing.remove(hadPending);
+      emitManagement({
+        kind: "pending-ended",
+        requestId: hadPending,
+        reason: "operator disconnect",
+      });
+      state.pendingRequestId = null;
+    }
+    state.controlQueue.length = 0;
+    state.responseQueue.length = 0;
+    state.queuedBytes = 0;
+    state.sessionId = null;
+    state.expectedSeq.clear();
+    state.latestSeq.clear();
+    logger(logEvent("operator_disconnect", { connectionId: state.id }));
+    closeSocket(state, 1008, OPERATOR_DISCONNECT_REASON);
+    armForceClose(state);
   }
 
   /** ストリーム数上限を確認する。 */
@@ -569,6 +970,8 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
     // 分割フレーム合算）に委ね、超過時は close 1009 で通知する。JSON の
     // `MESSAGE_TOO_LARGE` や非空 reason は保証しない。到達不能な自前の長さ
     // 判定は置かない。
+    // 閉塞中は受信処理をしない。物理切断まで枠を保持する。
+    if (state.phase === "closing" || state.phase === "closed") return;
     // 運用切断の指示後は当該接続の業務メッセージを受理しない。
     if (state.operatorDisconnected) return;
     let parsed: ReturnType<typeof parseBridgeMessage>;
@@ -576,75 +979,139 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
       parsed = parseBridgeMessage(text);
     } catch (error) {
       const detail = error instanceof ProtocolError ? error.code : "INVALID_MESSAGE";
-      if (!state.authorized) {
-        stats.authFailure += 1;
-        state.authAttempts += 1;
-        sendError(state, detail, "受信メッセージが不正である。", undefined, true);
-        if (state.authAttempts >= limits.maxAuthAttempts) {
-          closeSocket(state, 1008, "too many attempts");
-        }
-      } else {
+      if (state.phase === "authorized") {
         sendError(state, detail, "受信メッセージが不正である。");
+      } else {
+        // 認証前は終端エラーとし、入力再試行を許さない。
+        terminateConnection(state, detail, "受信メッセージが不正である。", undefined);
       }
       return;
     }
-    if (!state.authorized) {
-      handleAuthMessage(state, parsed);
+    if (state.phase === "authorized") {
+      handleAuthorizedMessage(state, parsed);
       return;
     }
-    handleAuthorizedMessage(state, parsed);
+    handlePairingMessage(state, parsed);
   }
 
-  function handleAuthMessage(
+  /**
+   * 認証前の受信を処理する。受理するのは `pairing_start` のみである。
+   *
+   * 2回目の開始は終了し、業務メッセージは未認可として終了する。
+   * JSON 不正・版不一致・逆方向メッセージも終端エラーとする。
+   */
+  function handlePairingMessage(
     state: ConnectionState,
     parsed: ReturnType<typeof parseBridgeMessage>,
   ): void {
-    if (parsed.type !== "auth") {
-      stats.authFailure += 1;
-      state.authAttempts += 1;
-      sendError(state, "NOT_AUTHENTICATED", "最初のメッセージで認証すること。", undefined, true);
-      if (state.authAttempts >= limits.maxAuthAttempts) {
-        closeSocket(state, 1008, "too many attempts");
+    if (parsed.type !== "pairing_start") {
+      switch (parsed.type) {
+        case "pairing_pending":
+        case "auth_ok":
+        case "echo_response":
+        case "command_response":
+        case "credit":
+        case "error":
+          // 逆方向の型は認証前も受け付けず、1回で終了する。
+          terminateConnection(
+            state,
+            "UNEXPECTED_DIRECTION",
+            "その方向のメッセージは受け付けない。",
+            undefined,
+          );
+          return;
+        case "echo":
+        case "command_request":
+          terminateConnection(
+            state,
+            "NOT_AUTHORIZED",
+            "認可前に業務メッセージは送れない。",
+            parsed.requestId,
+          );
+          return;
+        case "data":
+          terminateConnection(
+            state,
+            "NOT_AUTHORIZED",
+            "認可前に業務メッセージは送れない。",
+            undefined,
+          );
+          return;
+        default:
+          terminateConnection(state, "UNKNOWN_TYPE", "未知のメッセージ種別である。", undefined);
+          return;
       }
+    }
+    // 6. `pairing_start` 受信時に保留枠・期限を確認してコード発行する。
+    if (state.phase !== "awaiting_start") {
+      // 2回目の開始はコード再生成・再通知・期限延長をしない。
+      terminateConnection(
+        state,
+        "DUPLICATE_PAIRING_START",
+        "開始メッセージは接続につき1回である。",
+        undefined,
+      );
       return;
     }
-    const result = pairing.consume(parsed.secret, state.origin);
-    if (result.status !== "ok") {
-      stats.authFailure += 1;
-      state.authAttempts += 1;
-      const reason =
-        result.status === "expired"
-          ? "秘密値の有効期限が過ぎた。"
-          : result.status === "reused"
-            ? "秘密値は一度だけ使用できる。"
-            : result.status === "origin_mismatch"
-              ? "発行時の Origin と一致しない。"
-              : "未知の秘密値である。";
-      sendError(state, "UNAUTHORIZED", reason, undefined, true);
-      logger(logEvent("auth_failure", { reason: result.status }));
-      if (state.authAttempts >= limits.maxAuthAttempts) {
-        closeSocket(state, 1008, "too many attempts");
+    const result = pairing.create(state.id, state.origin);
+    if (result.status === "CREATED") {
+      state.phase = "pending";
+      state.pendingRequestId = result.requestId;
+      if (state.startTimer !== null) {
+        clearTimeout(state.startTimer);
+        state.startTimer = null;
       }
+      // ADR: 単調時計は小数を返す場合があり、残時間も小数になる。
+      // wire 形式は正の整数を要求するため、切り上げて正規化する。
+      // 切り捨てでは 1ms 未満の残時間が 0 になり検証を満たさない。
+      const expiresInMs = Math.max(1, Math.ceil(result.expiresInMs));
+      // 保留の失効は PairingStore 側で成立する。サーバは配送・切断を担う。
+      state.expiryTimer = setTimeout(() => {
+        state.expiryTimer = null;
+        if (state.phase === "pending" && state.pendingRequestId === result.requestId) {
+          terminateConnection(
+            state,
+            "PAIRING_EXPIRED",
+            "ペアリング要求の期限が過ぎた。",
+            result.requestId,
+          );
+        }
+      }, expiresInMs);
+      state.expiryTimer.unref?.();
+      // 比較コードは制御キューへ積み、ログには出さない。
+      enqueueControl(state, {
+        v: PROTOCOL_VERSION,
+        type: "pairing_pending",
+        requestId: result.requestId,
+        code: result.code,
+        expiresAt: result.expiresAt,
+        expiresInMs,
+      });
+      logger(logEvent("pairing_pending", { connectionId: state.id, origin: state.origin }));
+      emitManagement({
+        kind: "pending-created",
+        requestId: result.requestId,
+        connectionId: state.id,
+        origin: state.origin,
+      });
       return;
     }
-    state.authorized = true;
-    state.sessionId = randomUUID();
-    // 初期付与は累積件数として会計へ載せる。ここでは追加の credit 通知を送らず、
-    // `auth_ok.window` が初期付与を担う。容量への top-up はしない。
-    state.grantedTotal = limits.initialCreditWindow;
-    state.advertisedLimit = limits.initialCreditWindow;
-    if (state.authTimer !== null) {
-      clearTimeout(state.authTimer);
-      state.authTimer = null;
+    if (result.status === "ALREADY_PENDING") {
+      terminateConnection(
+        state,
+        "DUPLICATE_PAIRING_START",
+        "開始メッセージは接続につき1回である。",
+        undefined,
+      );
+      return;
     }
-    stats.authSuccess += 1;
-    logger(logEvent("auth_success", {}));
-    enqueueControl(state, {
-      v: PROTOCOL_VERSION,
-      type: "auth_ok",
-      sessionId: state.sessionId,
-      window: limits.initialCreditWindow,
-    });
+    const message =
+      result.status === "ACCEPTANCE_CLOSED"
+        ? "受付が閉じている。"
+        : result.status === "PENDING_FULL"
+          ? "承認待ちが満杯である。"
+          : "比較コードを生成できない。";
+    terminateConnection(state, result.status, message, undefined);
   }
 
   function handleAuthorizedMessage(
@@ -652,7 +1119,16 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
     parsed: ReturnType<typeof parseBridgeMessage>,
   ): void {
     switch (parsed.type) {
-      case "auth":
+      case "pairing_start":
+        // 認可後の開始は受け付けず終了する（開始は接続につき1回）。
+        terminateConnection(
+          state,
+          "DUPLICATE_PAIRING_START",
+          "開始メッセージは接続につき1回である。",
+          undefined,
+        );
+        return;
+      case "pairing_pending":
       case "auth_ok":
       case "echo_response":
       case "command_response":
@@ -687,7 +1163,7 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
           requestId,
           true,
         );
-        closeSocket(state, 1011, "credit exhausted");
+        terminateWithClose(state, 1011, "credit exhausted");
         return;
       }
       state.consumedTotal += 1;
@@ -732,7 +1208,7 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
         // 消費済みの予約を解放したうえで切断し、枠を永久に失わせない。
         state.heldCount -= 1;
         sendError(state, "QUEUE_FULL", "応答キューが満杯である。", parsed.requestId, true);
-        closeSocket(state, 1011, "queue full");
+        terminateWithClose(state, 1011, "queue full");
       }
       return;
     }
@@ -765,7 +1241,7 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
         // 消費済みの予約を解放したうえで切断し、枠を永久に失わせない。
         state.heldCount -= 1;
         sendError(state, "QUEUE_FULL", "応答キューが満杯である。", parsed.requestId, true);
-        closeSocket(state, 1011, "queue full");
+        terminateWithClose(state, 1011, "queue full");
       }
       return;
     }
@@ -775,6 +1251,25 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
     // ここでは直さない。応答を保持しない reliable は予約を即時解放し、
     // 枠を失わせない（解放で生じた余裕は追加付与する）。
     if (consumesCredit) releaseHold(state);
+  }
+
+  function findById(connectionId: string): ConnectionState | undefined {
+    for (const state of connections) {
+      if (state.id === connectionId) return state;
+    }
+    return undefined;
+  }
+
+  function findByPendingRequestId(requestId: string): ConnectionState | undefined {
+    for (const state of connections) {
+      if (state.phase === "pending" && state.pendingRequestId === requestId) return state;
+    }
+    return undefined;
+  }
+
+  function toAcceptanceInfo(): AcceptanceInfo {
+    const status = acceptance.get();
+    return { state: status.state, endsAt: status.endsAt, remainingMs: status.remainingMs };
   }
 
   await new Promise<void>((resolve, reject) => {
@@ -805,21 +1300,117 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
   return {
     endpoint: `ws://${LOOPBACK_HOST}:${actualPort}${BRIDGE_PATH}`,
     port: actualPort,
-    issuePairing: (origin: string): IssuedPairing => {
-      const normalized = parseAllowedOrigin(origin);
-      if (!allowedOrigins.has(normalized)) {
-        throw new RangeError("発行先は許可 Origin の一覧にあること。");
+    openAcceptance: (): AcceptanceInfo => {
+      const status = acceptance.open();
+      logger(logEvent("acceptance_opened", { endsAt: status.endsAt }));
+      emitManagement({ kind: "acceptance-changed", state: status.state });
+      return { state: status.state, endsAt: status.endsAt, remainingMs: status.remainingMs };
+    },
+    closeAcceptance: (): void => {
+      acceptance.close();
+      // 論理的終了と drain は `onClose` 購読で同期的に成立する。
+      // 既に閉じていた場合の通知は送らない。
+    },
+    getAcceptance: (): AcceptanceInfo => toAcceptanceInfo(),
+    listPending: (): readonly PendingPairingInfo[] =>
+      pairing.list().map((entry) => ({
+        requestId: entry.requestId,
+        connectionId: entry.connectionId,
+        origin: entry.origin,
+        code: entry.code,
+        issuedAt: entry.issuedAt,
+        expiresAt: entry.expiresAt,
+        remainingMs: entry.remainingMs,
+      })),
+    approvePairing: (requestId: string, code: string): ApprovalResult => {
+      // 承認と閉は同期的に直列化する。承認成功なら通知前に認可状態まで確定する。
+      const result = pairing.approve(requestId, code);
+      if (result.status === "APPROVED") {
+        const state = findById(result.connectionId);
+        if (
+          state === undefined ||
+          state.phase !== "pending" ||
+          state.pendingRequestId !== requestId
+        ) {
+          // 承認と切断が交差した。保留は既に消えている。
+          stats.pairingFailure += 1;
+          countRejection("CONNECTION_GONE");
+          return { status: "CONNECTION_GONE" };
+        }
+        // 認可成立時のみ session を発行し、初期 credit 会計を設定する。
+        state.phase = "authorized";
+        state.sessionId = randomUUID();
+        state.pendingRequestId = null;
+        if (state.expiryTimer !== null) {
+          clearTimeout(state.expiryTimer);
+          state.expiryTimer = null;
+        }
+        state.grantedTotal = limits.initialCreditWindow;
+        state.advertisedLimit = limits.initialCreditWindow;
+        stats.pairingSuccess += 1;
+        logger(logEvent("pairing_approved", { connectionId: state.id }));
+        emitManagement({ kind: "pending-ended", requestId, reason: "approved" });
+        enqueueControl(state, {
+          v: PROTOCOL_VERSION,
+          type: "auth_ok",
+          requestId,
+          sessionId: state.sessionId,
+          window: limits.initialCreditWindow,
+        });
+        return { status: "APPROVED", connectionId: result.connectionId, origin: result.origin };
       }
-      const issued = pairing.issue(normalized);
-      logger(logEvent("pairing_issued", { origin: normalized, expiresAt: issued.expiresAt }));
-      return issued;
+      if (result.status === "INVALID_CODE" || result.status === "CODE_MISMATCH") {
+        // 保留は残る。人間が正しいコードで再試行できる。
+        stats.pairingFailure += 1;
+        countRejection(result.status);
+        return result;
+      }
+      if (result.status === "NOT_PENDING") {
+        stats.pairingFailure += 1;
+        countRejection("NOT_PENDING");
+        return result;
+      }
+      // PAIRING_EXPIRED・CONNECTION_GONE・CONNECTION_CHECK_ERROR・
+      // ACCEPTANCE_CLOSED: 対象の保留は終わっている。残存する承認待ちを閉じる。
+      stats.pairingFailure += 1;
+      countRejection(result.status);
+      const orphan = findByPendingRequestId(requestId);
+      if (orphan !== undefined) {
+        const message =
+          result.status === "PAIRING_EXPIRED"
+            ? "ペアリング要求の期限が過ぎた。"
+            : result.status === "ACCEPTANCE_CLOSED"
+              ? "受付が終了した。"
+              : "接続が失われた。";
+        terminateConnection(orphan, result.status, message, requestId);
+      }
+      return result;
+    },
+    rejectPairing: (requestId: string): RejectionResult => {
+      const result = pairing.reject(requestId);
+      if (result.status === "REJECTED") {
+        const state = findByPendingRequestId(requestId);
+        if (state !== undefined) {
+          terminateConnection(state, "PAIRING_REJECTED", "ペアリング要求を取り下げた。", requestId);
+        } else {
+          emitManagement({ kind: "pending-ended", requestId, reason: "rejected" });
+        }
+      }
+      return result;
+    },
+    onManagementEvent: (listener: ManagementListener): Unsubscribe => {
+      managementListeners.add(listener);
+      return () => {
+        managementListeners.delete(listener);
+      };
     },
     getConnectionCount: () => connections.size,
     listConnections: (): readonly ConnectionInfo[] =>
       [...connections].map((state) => ({
         connectionId: state.id,
         origin: state.origin,
-        authorized: state.authorized && !state.operatorDisconnected,
+        authorized: state.phase === "authorized" && !state.operatorDisconnected,
+        phase: state.phase === "closed" ? "closed" : state.phase,
       })),
     disconnectConnection: (connectionId: string): void => {
       for (const state of connections) {
@@ -832,9 +1423,26 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
       throw new RangeError(`不明な接続IDである: ${connectionId}`);
     },
     getLatest: (streamId: StreamId): unknown => latestMailbox.get(streamId)?.payload,
-    getStats: (): BridgeStats => ({ ...stats }),
+    getStats: (): BridgeStats => ({
+      connectionsAccepted: stats.connectionsAccepted,
+      upgradeRejected: stats.upgradeRejected,
+      pairingSuccess: stats.pairingSuccess,
+      pairingFailure: stats.pairingFailure,
+      echoCount: stats.echoCount,
+      commandCount: stats.commandCount,
+      latestStored: stats.latestStored,
+      latestDropped: stats.latestDropped,
+      queueFull: stats.queueFull,
+      rejectionsByReason: { ...stats.rejectionsByReason },
+    }),
     close: (): Promise<void> => {
+      for (const timer of pendingUpgradeTimers) {
+        clearTimeout(timer);
+      }
+      pendingUpgradeTimers.clear();
+      pendingUpgrades = 0;
       for (const state of connections) {
+        clearTimers(state);
         try {
           state.socket.close(1001, "bridge shutdown");
         } catch {
