@@ -10,10 +10,31 @@
 - 実際の宛先に対応する `allowedDomains` とコード規則の宣言、審査結果を記録する。宣言要件の正本は[ブリッジ接続](../../design/bridge.md)である。
 - 実測のコンテンツセキュリティポリシー（`connect-src` など）を記録する。これまでの実測値は `connect-src * blob: data:` である。
 - ローカル網アクセスの初回許可、拒否、権限取消後の挙動を記録する。
-- 不許可 `Origin`、欠落 `Origin`、再利用と期限切れの秘密値の拒否を記録する。要件の正本は[プロトコル](../../design/protocol.md)である。
+- 不許可 `Origin`、欠落 `Origin`、期限切れ・再利用のペアリング要求の拒否を記録する。要件の正本は[プロトコル](../../design/protocol.md)である。
 - 待ち受けが LAN 側に露出していない証拠を残す。
 - 対応表は観測結果で作る。対象ブラウザの必須範囲（必須は Google Chrome のみ）の判断は[ブリッジ接続](../../design/bridge.md)を正本とする。
 - ブラウザの安全機能を無効化した成功は合格にしない。
+
+## ペアリングの観測手順
+
+確定事項である。手順の確定を指し、結果は検証待ちである。要件の正本は[プロトコル](../../design/protocol.md)と[ブリッジ接続](../../design/bridge.md)である。
+
+- 受付開閉: 起動時は閉じていること、閉じている間の新規要求は upgrade 時に拒否され保留・通知しないこと、`accept open` で開き120秒で自動クローズすること、開いている間の再操作は期限を更新しないこと、手動／自動クローズで開始待ち・承認待ちをすべて終了し認可済みは維持することを記録する。
+- 比較コードの照合: ワールド画面とブリッジの `pending` 表示が同じコードを示すこと、先頭ゼロを保持する6文字の文字列として扱い数値化しないこと（例: `000123`）、表示は `123 456` のように3桁区切りであること、承認時に要求 ID とコードの両方を照合することを記録する。
+- 承認／拒否: 正しい要求 ID とコードの組だけが承認され `auth_ok{requestId,sessionId,window}` で接続単位に認可されること、コード不一致・書式不正は保留を残して拒否すること、`reject` で保留を取り下げ対象の接続を終了することを記録する。
+- 期限: 接続から開始メッセージまで10秒、コード発行から承認まで120秒、保留の絶対期限は「コード発行＋120秒」と「受付終了時刻」の早い方であること、開始メッセージは接続につき1回で重複は終了することを記録する。
+- 競合: 同一接続の二重開始は延長せず終了すること、二重承認は一度だけ成功すること、承認と受付クローズ・承認と切断が交差した場合は保留を残さず終了することを記録する。
+- 上限: 全8・未認可2・保留2の枠組み（未認可は全接続の内数、保留は未認可の内数、認可済みを追い出さない）であること、`Origin` 別5回・全体10回（直近60秒）の受付レート超過は保留せず拒否すること、拒否ごとの通知は出さず `status` に集計することを記録する。
+- 認可前データ拒否: 認可前の業務メッセージ（`echo`・`command_request`・`data`）は終端エラーで終了すること、逆方向メッセージも受け付けないことを記録する。認証前に送受信してよいのはペアリングに限定した制御メッセージ（`pairing_start`・`pairing_pending`・認証前エラー）のみである。
+- 再接続で再承認: 切断で認可が失効すること、切断・ワールド切替・ブリッジ再起動後に認可を継承せず再承認が必要であることを記録する。
+- 比較コードは画面表示と照合にだけ使い、ログ・URL・永続保存・証拠に含めないことを記録する。
+
+## 実機での人間確認
+
+確定事項である。実機 Chrome とブリッジ CLI で人間が確認すべき範囲である。ローカル網アクセス・審査・対応表の記録は[実行条件](#実行条件)を正本とする。
+
+- ワールド画面の比較コードとブリッジの `pending` 表示の両画面を人間が照合し、ブリッジ側で承認する流れを通す。コード一致だけでの自動認可はしない。
+- 承認操作はローカルの CLI（将来は GUI）からのみ行い、ワールド側からの承認は受け付けないことを確認する。
 
 ## 配送と負荷の試作条件
 
@@ -26,23 +47,31 @@
 - 受信消費の停止、主スレッド停滞、切断、ブリッジ再起動、バックグラウンドタブを含める。
 - 周期・ストリーム数の発生方法は未定義である（診断ワールドに生成処理はなく、誰がその周期・本数を出すかは未確定）。大きさ以外の単位も未確認である。これらは UNRESOLVED とし、推測で埋めない。
 - 待ち行列容量等の初期暫定値は下表のとおりである。これらは B1 到達性確認のための計測用の暫定値であり、利用者の合意値・性能保証ではない。測定結果から合意する（合意待ち）。
-- ペアリングの120秒・128ビット以上・一度だけ使用可能は確定要件であり、下表の暫定値とは区別する。正本は[プロトコル](../../design/protocol.md)である。
+- ペアリングの120秒・数字6桁・接続単位・切断失効は確定要件であり、下表の暫定値とは区別する。正本は[プロトコル](../../design/protocol.md)である。
 
-| 項目                              |             B1 暫定値 |
-| --------------------------------- | --------------------: |
-| `maxMessageBytes`                 |          65,536 bytes |
-| `maxReliableQueueMessages`        |           256件／接続 |
-| `maxReliableQueueBytes`           | 1,048,576 bytes／接続 |
-| `maxStreamsPerConnection`         |              32／接続 |
-| `initialCreditWindow`             |                  32件 |
-| `authTimeoutMs`                   |             10,000 ms |
-| `maxAuthAttempts`                 |             3回／接続 |
-| `maxConnections`                  |                     8 |
-| world-client `requestTimeoutMs`   |             10,000 ms |
-| world-client `maxPendingReliable` |                 128件 |
-| world-client `maxMessageBytes`    |          65,536 bytes |
+| 項目                               |             B1 暫定値 |
+| ---------------------------------- | --------------------: |
+| `maxMessageBytes`                  |          65,536 bytes |
+| `maxReliableQueueMessages`         |           256件／接続 |
+| `maxReliableQueueBytes`            | 1,048,576 bytes／接続 |
+| `maxStreamsPerConnection`          |              32／接続 |
+| `initialCreditWindow`              |                  32件 |
+| `maxConnections`                   |                     8 |
+| `pairingStartTimeoutMs`            |             10,000 ms |
+| `pairingApprovalTimeoutMs`         |            120,000 ms |
+| `acceptanceDurationMs`             |            120,000 ms |
+| `maxUnauthorizedConnections`       |          2／全8の内数 |
+| `maxPendingPairings`               |      2／未認可2の内数 |
+| `pairingRateWindowMs`              |             60,000 ms |
+| `maxPairingRequestsPerOrigin`      |         5回／直近60秒 |
+| `maxPairingRequestsTotal`          |        10回／直近60秒 |
+| `maxPairingCodeGenerationAttempts` |                  16回 |
+| `connectionCloseGraceMs`           |              1,000 ms |
+| world-client `requestTimeoutMs`    |             10,000 ms |
+| world-client `maxPendingReliable`  |                 128件 |
+| world-client `maxMessageBytes`     |          65,536 bytes |
 
-- 値の正本はコードである。サーバ側の8値は `apps/bridge/src/config.ts` の `DEFAULT_LIMITS` に置き、`BridgeOptions.limits` で上書きする。world-client の3値は `packages/world-client/src/client.ts` の既定値に置き、`WorldClientOptions` の `requestTimeoutMs`・`maxPendingReliable`・`maxMessageBytes` で上書きする。ペアリングの確定値は `apps/bridge/src/config.ts` の `PAIRING_TTL_MS`・`PAIRING_SECRET_BYTES` に置く。件数容量 `maxReliableQueueMessages` は[プロトコル](../../design/protocol.md)の流れ制御における `C`（`reliable` 受付の件数容量で応答保持を含む）に対応し、初期付与 `initialCreditWindow` はその範囲内の累積付与である。
+- 値の正本はコードである。サーバ側の全値は `apps/bridge/src/config.ts` の `DEFAULT_LIMITS` に置き、`BridgeOptions.limits` で上書きする。world-client の3値は `packages/world-client/src/client.ts` の既定値に置き、`WorldClientOptions` の `requestTimeoutMs`・`maxPendingReliable`・`maxMessageBytes` で上書きする。件数容量 `maxReliableQueueMessages` は[プロトコル](../../design/protocol.md)の流れ制御における `C`（`reliable` 受付の件数容量で応答保持を含む）に対応し、初期付与 `initialCreditWindow` はその範囲内の累積付与である。
 - 意味論は[プロトコル](../../design/protocol.md)の流れ制御に従う。表値はその `C`・初期付与の暫定値である。
 - 待機 bound の意味論は[プロトコル](../../design/protocol.md)の流れ制御に従う。件数上限だけの待機を「総バイト上限も実装済み」と記述しない。
 
