@@ -9,9 +9,11 @@
 export { BRIDGE_HOST, BRIDGE_PATH, parseBridgeEndpoint } from "./endpoint.ts";
 export { WorldClientError, createWorldClient } from "./client.ts";
 export type {
+  ConnectOptions,
   ConnectResult,
   ConnectionState,
   EchoResult,
+  PairingInfo,
   Unsubscribe,
   WorldClient,
   WorldClientEvent,
