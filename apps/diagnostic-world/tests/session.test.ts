@@ -733,8 +733,6 @@ test("実在する全符号に案内が付く", () => {
   // サーバが実際に送る符号（受付・ペアリング・承認・境界違反）と、
   // 接続試行・診断待機の符号を網羅する。
   // 送らない符号（`PAIRING_LIMIT`・`PAIRING_CODE_UNAVAILABLE`）は含めない。
-  // 0.3 で発生し得ない符号（`UNEXPECTED_SEQ`・`CREDIT_EXHAUSTED`・
-  // `STREAM_LIMIT`・`QUEUE_FULL`）も含めない。
   const realCodes = [
     "PAIRING_REJECTED",
     "PAIRING_EXPIRED",
@@ -780,9 +778,4 @@ test("実在する全符号に案内が付く", () => {
   // 送らない符号には案内を持たない（死に分岐の混入検出）。
   expect(errorHint("PAIRING_LIMIT")).toBeUndefined();
   expect(errorHint("PAIRING_CODE_UNAVAILABLE")).toBeUndefined();
-  // 0.3 で発生し得ない符号の残骸は持たない。
-  expect(errorHint("UNEXPECTED_SEQ")).toBeUndefined();
-  expect(errorHint("CREDIT_EXHAUSTED")).toBeUndefined();
-  expect(errorHint("STREAM_LIMIT")).toBeUndefined();
-  expect(errorHint("QUEUE_FULL")).toBeUndefined();
 });

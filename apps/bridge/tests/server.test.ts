@@ -283,10 +283,9 @@ async function authorizeCollected(
   const ok = await collector.waitForType("auth_ok");
   if (ok.message.type !== "auth_ok") throw new Error("認可応答ではない。");
   expect(ok.message.requestId).toBe(pendingRequestId);
-  // 0.3 の `auth_ok` は `connectionId` を載せ、`window`・`sessionId` を載せない。
+  // `auth_ok` は `v`・`type`・`requestId`・`connectionId` のみを持ち、他のフィールドを持たない。
   expect(typeof ok.message.connectionId).toBe("string");
-  expect("window" in ok.message).toBe(false);
-  expect("sessionId" in ok.message).toBe(false);
+  expect(Object.keys(ok.message).sort()).toEqual(["connectionId", "requestId", "type", "v"]);
   return { connectionId: ok.message.connectionId, requestId: pendingRequestId };
 }
 

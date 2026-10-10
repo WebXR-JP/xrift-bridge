@@ -176,11 +176,11 @@ test("版不一致・未知種別・JSON 異常を拒否する", () => {
   expect(PROTOCOL_VERSION).toBe("0.3.0");
   const cases: Array<{ raw: unknown; code: ProtocolError["code"] }> = [
     { raw: { ...validReliableData(), v: "9.9.9" }, code: "VERSION_MISMATCH" },
-    // 旧版 0.2.0 は版判定で拒否する。
-    { raw: { ...validReliableData(), v: "0.2.0" }, code: "VERSION_MISMATCH" },
-    // 旧版の credit 形式は版判定で拒否する（limit 欠落でも版不一致が先に検出される）。
+    // 対応版以外は版判定で拒否する。
+    { raw: { ...validReliableData(), v: "1.0.0" }, code: "VERSION_MISMATCH" },
+    // 版不一致は種別判定より先に検出する（未知種別でも版不一致が先に検出される）。
     {
-      raw: { v: "0.0.0", type: "credit", sessionId: "s", window: 4 },
+      raw: { v: "0.0.0", type: "credit", sessionId: "s", extra: 4 },
       code: "VERSION_MISMATCH",
     },
     { raw: { ...validReliableData(), type: "teleport" }, code: "UNKNOWN_TYPE" },
@@ -256,11 +256,10 @@ test("data の payload 必須と seq 形式を検証する", () => {
     { ...validLatestData(), seq: 1.5 },
     { ...validLatestData(), seq: "3" },
     { ...validLatestData(), seq: null },
-    // 削除フィールド・未知キーは黙って受理しない。
+    // 許可キー外・未知のキーは黙って受理しない。
     { ...validReliableData(), kind: "reliable" },
     { ...validLatestData(), kind: "latest" },
     { ...validReliableData(), unknownField: "extra" },
-    { ...validReliableData(), window: 8 },
     // 識別子の不足・書式不正。
     { ...validReliableData(), connectionId: "" },
     { ...validReliableData(), sessionId: "" },
@@ -277,12 +276,12 @@ test("data の payload 必須と seq 形式を検証する", () => {
   }
 });
 
-test("auth_ok の旧フィールドを拒否する", () => {
+test("auth_ok は許可キー外のフィールドを拒否する", () => {
   const bad: unknown[] = [
-    // 0.3 の auth_ok は requestId と connectionId のみ。旧 sessionId・window は拒否する。
-    { ...validAuthOk(), sessionId: "s" },
-    { ...validAuthOk(), window: 8 },
-    { v: PROTOCOL_VERSION, type: "auth_ok", requestId: "pair-1", sessionId: "s", window: 8 },
+    // auth_ok は requestId と connectionId のみを受け付ける。他のフィールドは拒否する。
+    { ...validAuthOk(), unknownField: "extra" },
+    { ...validAuthOk(), extra: 8 },
+    { v: PROTOCOL_VERSION, type: "auth_ok", requestId: "pair-1", unknownField: "s", extra: 8 },
     // 必須の欠落・書式不正。
     { v: PROTOCOL_VERSION, type: "auth_ok", connectionId: "conn-1" },
     { v: PROTOCOL_VERSION, type: "auth_ok", requestId: "pair-1" },
@@ -303,7 +302,7 @@ test("pairing_start の余分なフィールドを拒否する", () => {
   const bad: unknown[] = [
     { v: PROTOCOL_VERSION, type: "pairing_start", sessionId: "s" },
     { v: PROTOCOL_VERSION, type: "pairing_start", connectionId: "c" },
-    { v: PROTOCOL_VERSION, type: "pairing_start", window: 8 },
+    { v: PROTOCOL_VERSION, type: "pairing_start", extra: 8 },
   ];
   for (const raw of bad) {
     const error = parseError(raw);
@@ -382,7 +381,7 @@ test("error の任意 connectionId/requestId が不正なら拒否し黙って�
       message: "m",
       requestId: "x".repeat(129),
     },
-    // 旧 sessionId は未知フィールドとして拒否する。
+    // 許可外のフィールドは未知フィールドとして拒否する。
     { v: PROTOCOL_VERSION, type: "error", code: "E", message: "m", sessionId: "s" },
   ];
   for (const raw of bad) {
