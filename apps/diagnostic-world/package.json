@@ -37,6 +37,7 @@
     "typescript": "catalog:",
     "vite": "catalog:",
     "vite-plus": "catalog:",
-    "ws": "catalog:"
+    "ws": "catalog:",
+    "yamux-spike": "workspace:*"
   }
 }

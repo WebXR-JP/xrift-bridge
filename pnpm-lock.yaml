@@ -322,6 +322,9 @@ importers:
       ws:
         specifier: 'catalog:'
         version: 8.22.0
+      yamux-spike:
+        specifier: workspace:*
+        version: link:../../tools/yamux-spike
 
   apps/website:
     devDependencies:

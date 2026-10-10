@@ -1,0 +1,26 @@
+/* yamux探針の開発専用表示。配色は診断パネル（DiagnosticPanel.css）に合わせる。 */
+
+.yamux-panel {
+  right: auto;
+  left: 12px;
+}
+
+.yamux-url {
+  flex: 1;
+  min-width: 0;
+  font-family: monospace;
+}
+
+.diag-log {
+  margin-top: 6px;
+  padding: 6px 8px;
+  max-height: 160px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-family: monospace;
+  font-size: 11px;
+  background: #232833;
+  border: 1px solid #343a46;
+  border-radius: 4px;
+}

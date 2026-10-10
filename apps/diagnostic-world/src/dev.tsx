@@ -13,6 +13,7 @@ import { useMemo } from "react";
 import { createRoot } from "react-dom/client";
 import { World } from "./World.tsx";
 import { DiagnosticPanelRoot } from "./components/DiagnosticPanel.tsx";
+import { YamuxProbe } from "./components/YamuxProbe.tsx";
 import { useDevTextInputAdapter } from "./components/DevTextInputDialog.tsx";
 import { captureWindowEnv } from "./diagnostic/env.ts";
 import { getBuildInfo } from "./build-info.ts";
@@ -42,6 +43,7 @@ function DevRoot(): React.JSX.Element {
         <World />
       </DevEnvironment>
       <DiagnosticPanelRoot env={env} build={build} />
+      <YamuxProbe />
       {textInput.dialog}
     </XRiftProvider>
   );

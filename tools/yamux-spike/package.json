@@ -5,6 +5,10 @@
   "description": "experimental: yamux(muxer)のみを自前WebSocket上で動かす採用可否の限定試作。製品コードではなく、採用判断の証拠集めだけが目的。",
   "license": "MIT",
   "type": "module",
+  "exports": {
+    "./browser-probe": "./src/browser-probe.ts",
+    "./package.json": "./package.json"
+  },
   "scripts": {
     "dev": "vp dev --port 5190 --strictPort",
     "build": "vp build",
