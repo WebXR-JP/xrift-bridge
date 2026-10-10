@@ -28,6 +28,6 @@
     "@types/ws": "catalog:",
     "typescript": "catalog:",
     "vite-plus": "catalog:",
-    "world-client": "catalog:"
+    "world-client": "workspace:*"
   }
 }

@@ -22,7 +22,7 @@
     "react": "~19.2.4",
     "react-dom": "~19.2.4",
     "three": "^0.183.1",
-    "world-client": "catalog:"
+    "world-client": "workspace:*"
   },
   "devDependencies": {
     "@originjs/vite-plugin-federation": "^1.4.1",
