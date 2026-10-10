@@ -10,7 +10,7 @@
  * `design/bridge.md` の候補節を参照し、形状の正本は
  * `bridge-protocol`（`PAIRING_CODE_LENGTH` 等）に置く。
  *
- * 0.3 では件数クレジット・応答キュー・ストリーム上限をブリッジ層に持たない。
+ * 件数クレジット・応答キュー・ストリーム上限をブリッジ層に持たない。
  * framing 本体上限（65,536）は transport（`FRAME_MAX_BYTES`）の固定であり、
  * yamux の stream 上限（各32）も transport（`MAX_INBOUND_STREAMS` 等）の固定である。
  * ここに残す `maxWebSocketMessageBytes` は WS メッセージ1件の上限（`ws` の

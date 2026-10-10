@@ -1203,7 +1203,7 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
         stats.pairingSuccess += 1;
         emitManagement({ kind: "pending-ended", requestId, reason: "approved" });
         // ADR: `auth_ok` は text で送り、完了で mux を開始する。`window` は載せない。
-        // 推測判別・0.2 フォールバックは作らない。
+        // 受信形式の推測判別は行わない。
         beginSwitch(state, requestId);
         return { status: "APPROVED", connectionId: result.connectionId, origin: result.origin };
       }

@@ -5,8 +5,8 @@
  * ブリッジ側で承認した接続だけを認可する。認可前の往復はテキスト
  * （`pairing_start`・`pairing_pending`・`auth_ok`・`error`）で行い、
  * `auth_ok` の受信処理内で同一 WebSocket 上の yamux mux へ切り替える。
- * 以降の送受信は `SessionProvider`・`Session` で行い、JSON と yamux の
- * 推測判別・0.2 フォールバックは設けない。
+ * 以降の送受信は `SessionProvider`・`Session` で行い、受信形式の
+ * 推測判別は設けない。
  *
  * 切断後の再送・セッション復元・自動再実行は行わない（設計どおり）。
  * 再接続には再ペアリングが必要である。業務 request/response 相関・
@@ -147,15 +147,13 @@ function openSocket(endpoint: string, origin: string | undefined): WebSocket {
  * ブリッジへの接続を開始する。
  *
  * 比較コードの発行と認証完了を2つの約束で返す。承認前の取消は
- * `options.signal` で行う。0.2 のイベント購読・状態取得・業務送信 API は
+ * `options.signal` で行う。イベント購読・状態取得・業務送信 API は
  * 持たず、認可後の操作は解決した `SessionProvider` で行う。
  *
- * 公開 API の選択理由: 0.2 の `createWorldClient`・`connect` のイベント API
- * は echo/command の要求相関・クレジット会計・要求待機と結び付いており、
- * 0.3（`data` 一本化・上位層への相関委譲）では責務が残らない。2約束の形は
+ * 公開 API の選択理由: echo/command の要求相関・要求待機は上位層の責務とし
+ * （`data` 一本化・相関委譲）、本関数は相関・待機を持たない。2約束の形は
  * 人間への表示（比較コード）と mux 準備完了の時点が異なるため分け、
- * 承認フロー（開始→表示→承認→mux）をそのまま表す。0.x の破壊的変更として
- * 旧 API は残さない。
+ * 承認フロー（開始→表示→承認→mux）をそのまま表す。
  *
  * @param options - 接続先・取消合図・待ち時間の設定。
  * @returns 比較コードとセッション管理口の約束。
@@ -364,7 +362,7 @@ export function createConnectionRequest(options: ConnectOptions): ConnectionRequ
       return;
     }
     // ADR: 認可前の業務メッセージ（`create_session`・`data`）は取り違え防止の
-    // ため終了扱いにする。推測判別・0.2 フォールバックは作らない。
+    // ため終了扱いにする。受信形式の推測判別は行わない。
     failRequest(new WorldClientError("UNEXPECTED_MESSAGE", "認証前の業務メッセージは扱わない。"));
   }
 

@@ -10,19 +10,19 @@
 輸送の採用値の正本は `packages/bridge-protocol/src/transport/` の各定数（`framing.ts` の `FRAME_MAX_BYTES`・`muxer.ts` の `MUX_STREAM_WINDOW_BYTES`・`MAX_INBOUND_STREAMS`・`MAX_OUTBOUND_STREAMS`・`keepalive.ts` の `KEEPALIVE_*`）とし、本文に複製しない。
 ワールド側の公開操作の正本は `packages/world-client/src/client.ts` の `createConnectionRequest`・`packages/world-client/src/session.ts` の `SessionProvider`・`Session` とする。
 
-### protocol 0.3 の位置づけ
+### 版の方針
 
-- WebSocket 上のセッション管理（旧 "Stream" → "Session"）を **yamux on WebSocket（libp2p なし）**へ置き換える破壊的変更を protocol **0.3** として扱う。0.x 台では破壊的変更を許容し、異なるバージョン間の互換設計はしない（ルートの `AGENTS.md` の方針どおり）。
-- 本改訂は**採用済みの方向と理由の記録**である。形状・数値の正本はコードであり、protocol 0.3 として実装済みである。採用値はコードへ移した。以降の調整はコードの定数を正本として行う。
-- packages/bridge-protocol/src/messages.ts が 0.3 の形状の正本である（旧 messages.example.ts の構想は正本化に伴い削除した）。設計判断の根拠として削除済み文書を引用しない。
+- セッション管理は **yamux on WebSocket（libp2p なし）**とする。0.x 台では破壊的変更を許容し、異なるバージョン間の互換設計はしない（ルートの `AGENTS.md` の方針どおり）。
+- 形状・数値の正本はコードであり、以降の調整はコードの定数を正本として行う。
+- `packages/bridge-protocol/src/messages.ts` が形状の正本である。
 
 ## 用語
 
-本節で Connection／Session／yamux stream の呼び分けを自己完結して定義する。旧称 "Stream" は本節の定義により "Session" と呼ぶ。
+本節で Connection／Session／yamux stream の呼び分けを自己完結して定義する。
 
 - **Connection**＝WebSocket 接続1つ。認可は Connection 単位のみに属し、切断で失効する（[ブリッジ接続](bridge.md)の接続認可の判断を維持する）。
 - **Session**＝一連のやりとりの単位。既定は双方向 yamux stream 1本である。
-- **yamux stream**＝多重化の輸送単位。論理名（旧 StreamId）と yamux stream ID の対応はアプリが保持する。`latestMailbox`（接続をまたぐサーバ全体記録、キーは論理名）は変更しない。
+- **yamux stream**＝多重化の輸送単位。論理名と yamux stream ID の対応はアプリが保持する。`latestMailbox`（接続をまたぐサーバ全体記録、キーは論理名）は変更しない。
 - 複数の stream を束ねる終了プロトコルは導入しない。
 
 ## 判断と理由
@@ -32,7 +32,7 @@
 - WebSocket の昇格前に、接続元がループバックであること、ホスト・ポート・パスが設定した接続先と一致すること、`Origin` の完全一致をいずれも確認する。ループバック到達だけでは利用者の認可の根拠にならないため、接続先の一致確認と明示的なペアリングを組み合わせる。
 - WebSocket の安全性を CORS ヘッダに依存させない。CORS を認可の根拠にしない。
 - 欠落した `Origin`、`null`、ワイルドカード、接尾辞一致は拒否する方針とする。具体的な符号・書式は型・境界検証・テストを参照する。
-- ペアリングはワールド側から `pairing_start` で開始する。開始を受けるとブリッジは比較コードを発行し `pairing_pending` で通知し、人間がブリッジ側（ローカル CLI、将来は GUI）で承認したその接続だけを `auth_ok{requestId,connectionId}` で接続単位に認可する。ブリッジが発行するのは暗号学的乱数による数字6桁の比較コードであり、OTP 認証ではない（照合のための比較コード）。旧方式の使い捨て秘密値（ワールド側での入力）は採用しない。
+- ペアリングはワールド側から `pairing_start` で開始する。開始を受けるとブリッジは比較コードを発行し `pairing_pending` で通知し、人間がブリッジ側（ローカル CLI、将来は GUI）で承認したその接続だけを `auth_ok{requestId,connectionId}` で接続単位に認可する。ブリッジが発行するのは暗号学的乱数による数字6桁の比較コードであり、OTP 認証ではない（照合のための比較コード）。使い捨て秘密値（ワールド側での入力）は採用しない。
 - 認証前はデータとローカル情報を送受信しない。ただしペアリングに限定した制御メッセージ（`pairing_start`・`pairing_pending`・認証前エラー）は例外として送受信する。
 - 受付モードは起動時は閉じ、ローカル操作で開き、120秒で自動クローズする。保留の絶対期限は「コード発行＋120秒」と「受付終了時刻」の早い方である。権限範囲は現行同等とし、認可はその接続だけに属し、切断で失効し、再接続は再承認である。これらを設計判断とする。形状・数値・状態遷移の詳細は正本（[packages/bridge-protocol/src/messages.ts](../packages/bridge-protocol/src/messages.ts)・[packages/bridge-protocol/src/validate.ts](../packages/bridge-protocol/src/validate.ts)・[apps/bridge/src/config.ts](../apps/bridge/src/config.ts)・実装・テスト）へ置き、ここでは複製しない。
 - 比較コード・要求 ID を URL・クエリ・Cookie・ログ・ブラウザの永続ストレージに入れない。比較コードは両画面への表示と照合にだけ使う。
@@ -65,8 +65,8 @@
 
 ### 流れ制御を yamux に寄せる（件数クレジット層は不採用）
 
-- 旧来の「受信容量に基づく件数クレジット」層（`auth_ok.window`・`credit` メッセージ・サーバ／クライアントの会計エンジン）は**持たない**（[不採用](#不採用)を参照）。理由は、順序・再送・流れ制御を yamux stream に委ねることで層を減らし、独自の会計と通知の行き違い（残量上書き・再通知の進行停止など）の問題ごと排除するためである。
-- 新方針として、流れ制御は yamux の window に寄せる。本数上限と window の正本は [`muxer.ts`](../packages/bridge-protocol/src/transport/muxer.ts) の定数（`MAX_INBOUND_STREAMS`・`MAX_OUTBOUND_STREAMS`・`MUX_STREAM_WINDOW_BYTES`）とし、独自の合算制限は作らない。window は自動拡大しない方針とする。ただし採用版のライブラリ既定は RTT 既知で受信 window を自動拡大するため、この方針を実装で守るには `maxStreamWindowSize` を初期 window と同値に明示設定する（実装済みの必須設定であり、決定の変更ではない）。
+- 「受信容量に基づく件数クレジット」層（`auth_ok.window`・`credit` メッセージ・サーバ／クライアントの会計エンジン）は**持たない**（[不採用](#不採用)を参照）。理由は、順序・再送・流れ制御を yamux stream に委ねることで層を減らし、独自の会計と通知の行き違い（残量上書き・再通知の進行停止など）の問題ごと排除するためである。
+- 流れ制御は yamux の window に寄せる。本数上限と window の正本は [`muxer.ts`](../packages/bridge-protocol/src/transport/muxer.ts) の定数（`MAX_INBOUND_STREAMS`・`MAX_OUTBOUND_STREAMS`・`MUX_STREAM_WINDOW_BYTES`）とし、独自の合算制限は作らない。window は自動拡大しない方針とする。ただし採用版のライブラリ既定は RTT 既知で受信 window を自動拡大するため、この方針を実装で守るには `maxStreamWindowSize` を初期 window と同値に明示設定する（必須設定である）。
 - アプリ層の reliable 件数／バイト待機上限、接続全体の総バッファ上限は**設けない**。総メモリ上限は保証しない。シンプルさを優先し、yamux で扱えない上限は廃止する。
 - 唯一の例外として **framing の長さガードは残す**（[認可後の輸送境界と framing](#認可後の輸送境界と-framing)を参照）。固定4-byte長＋JSON本体の上限検査であり、受信時に長さを読んだ時点で検査し、巨大領域を先に確保しない。
 
@@ -85,7 +85,7 @@
 
 ### 配送順の保証を持たない
 
-- 旧来の「制御優先・接続全体 FIFO」の配送順保証は**持たない**（[不採用](#不採用)を参照）。同一 stream 内の順序は維持するが、stream 間の順序・公平性・優先度は保証しない。制御専用 stream は作らない。
+- 「制御優先・接続全体 FIFO」の配送順保証は**持たない**（[不採用](#不採用)を参照）。同一 stream 内の順序は維持するが、stream 間の順序・公平性・優先度は保証しない。制御専用 stream は作らない。
 - 致命的エラーはエラー配送を待たず RST／Connection 終了へ進む（理由の通知はベストエフォート）。
 
 ### WebSocket close code の使い分け
@@ -138,10 +138,10 @@ flowchart LR
 - 本物の非信頼データグラムを今は採らない。yamux 投入前置換の `latest` で置換の考え方だけを入れる。
 - 切断後の自動再送を採らない。結果不明のコマンドを重複実行しない。
 - エラーを黙って捨てない。待機または明示エラーで返す。
-- 受信容量に基づく件数クレジット層（`auth_ok.window`・`credit` メッセージ・会計エンジン）を 0.3 で採らない。順序・再送・流れ制御を yamux に委ね、層と行き違い問題ごと排除するためである。
-- `reliable` のアプリ層 `seq` と `UNEXPECTED_SEQ` 検出を 0.3 で採らない。順序は yamux stream に委ねるためである。
+- 受信容量に基づく件数クレジット層（`auth_ok.window`・`credit` メッセージ・会計エンジン）を採らない。順序・再送・流れ制御を yamux に委ね、層と行き違い問題ごと排除するためである。
+- `reliable` のアプリ層 `seq` と `UNEXPECTED_SEQ` 検出を採らない。順序は yamux stream に委ねるためである。
 - request／response 相関をブリッジ設計に持たせない。当面は上位層の責務とし、echo／command は `data` に一本化する。
-- 制御優先・接続全体 FIFO の配送順保証を 0.3 で採らない。同一 stream 内の順序のみ維持し、stream 間の順序・公平性・優先度は保証しない。シンプルさを優先するためである。
+- 制御優先・接続全体 FIFO の配送順保証を採らない。同一 stream 内の順序のみ維持し、stream 間の順序・公平性・優先度は保証しない。シンプルさを優先するためである。
 
 ## 合意待ち・検証待ち
 
@@ -150,7 +150,7 @@ flowchart LR
 ## 正本へのリンク
 
 - 上位の設計判断: この文書（[design/protocol.md](protocol.md)）、全体構成は [design/bridge.md](bridge.md)
-- 形状（フィールド名・型・必須/任意）: [packages/bridge-protocol/src/messages.ts](../packages/bridge-protocol/src/messages.ts)（0.3 の形状の正本）
+- 形状（フィールド名・型・必須/任意）: [packages/bridge-protocol/src/messages.ts](../packages/bridge-protocol/src/messages.ts)
 - 外部入力の境界検証: [packages/bridge-protocol/src/validate.ts](../packages/bridge-protocol/src/validate.ts)
 - 輸送の採用値: [framing.ts](../packages/bridge-protocol/src/transport/framing.ts)（`FRAME_MAX_BYTES`）・[muxer.ts](../packages/bridge-protocol/src/transport/muxer.ts)（`MUX_STREAM_WINDOW_BYTES`・`MAX_INBOUND_STREAMS`・`MAX_OUTBOUND_STREAMS`・`enableKeepAlive: false`）・[keepalive.ts](../packages/bridge-protocol/src/transport/keepalive.ts)（`KEEPALIVE_*`）
 - ワールド側の公開操作: [packages/world-client/src/client.ts](../packages/world-client/src/client.ts)（`createConnectionRequest`）・[packages/world-client/src/session.ts](../packages/world-client/src/session.ts)（`SessionProvider`・`Session`）

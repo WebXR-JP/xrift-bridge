@@ -135,9 +135,10 @@ function readVersion(value: Record<string, unknown>): string {
   return value["v"];
 }
 
-// ADR: 各種別の許可キーを明示し、削除済み・未知のキーを黙って受理しない。
-// `window`・`sessionId`（auth_ok の旧形）・`streamId`・`kind`（data に載せない）
-// などはここで拒否する。`data.seq` の要否（latest 必須・reliable 禁止）は
+// ADR: 各種別の許可キーを明示し、許可外・未知のキーを黙って受理しない。
+// `window`・`streamId`・`kind`（data に載せない）など、許可キーにない
+// フィールドはここで拒否する。`auth_ok` は `requestId`・`connectionId` のみを
+// 受け付け、`sessionId` を含めない。`data.seq` の要否（latest 必須・reliable 禁止）は
 // Session が `kind` を保持して判断するため、ここでは形式のみ検証する。
 function assertOnlyKeys(value: Record<string, unknown>, allowed: ReadonlySet<string>): void {
   for (const key of Object.keys(value)) {

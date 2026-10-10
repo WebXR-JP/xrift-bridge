@@ -6,7 +6,7 @@
  * を見る。型注釈だけでは外部入力を信用しない。
  *
  * Connection＝WebSocket 接続1つ（認可は Connection 単位）。Session＝一連の
- * やりとりの単位（旧 Stream）。`data` の `kind` は wire に載せず Session が
+ * やりとりの単位。`data` の `kind` は wire に載せず Session が
  * 保持し、`seq` の要否（latest 必須・reliable 禁止）は Session 境界で扱う。
  *
  * @packageDocumentation
@@ -21,7 +21,7 @@ export const PAIRING_CODE_LENGTH = 6;
 /** 接続識別子。ブリッジが認証成功時に発行する。 */
 export type ConnectionId = string;
 
-/** セッション識別子。送信側が採番とは別に選ぶ論理名（旧 StreamId）。 */
+/** セッション識別子。送信側が採番とは別に選ぶ論理名。 */
 export type SessionId = string;
 
 /** ペアリング要求の識別子。ブリッジが発行し業務の要求 ID とは別物。 */

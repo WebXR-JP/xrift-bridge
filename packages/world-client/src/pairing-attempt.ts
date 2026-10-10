@@ -28,8 +28,7 @@ const MAX_TIMER_DELAY_MS = 2_147_483_647;
  * 承認応答待ちに上乗せする猶予（ミリ秒）。
  *
  * サーバ側の期限切れと断定しないよう、コードの残り時間にこの猶予を足した
- * 時点で打ち切る。0.2 の `requestTimeoutMs` 由来の加算は撤去し、業務の
- * 要求待機を持たない 0.3 では固定値とする。
+ * 時点で打ち切る。業務の要求待機を持たないため固定値とする。
  */
 const APPROVAL_GRACE_MS = 10_000;
 
@@ -136,9 +135,9 @@ export class PairingAttempt {
     // ADR: `timeoutMs` は接続開始からコード受信までであり、人間の承認待ちを
     // 打ち切らない。コード受信で解除し、承認応答待ちの watchdog へ切り替える。
     // ADR: 承認応答の watchdog は `expiresInMs + APPROVAL_GRACE_MS` とし、
-    // ブリッジ側の期限切れと断定しない符号で打ち切る。0.2 の要求待ち時間の
-    // 加算は撤去し、固定の猶予とする。長時間は期限再判定付きの分割タイマー
-    // で扱い、独自の短い上限で承認待ちを切り詰めない。
+    // ブリッジ側の期限切れと断定しない符号で打ち切る。固定の猶予とし、
+    // 長時間は期限再判定付きの分割タイマーで扱い、独自の短い上限で
+    // 承認待ちを切り詰めない。
     this.startApprovalWatchdog(this.now() + message.expiresInMs + APPROVAL_GRACE_MS);
     return info;
   }
