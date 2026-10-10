@@ -219,23 +219,11 @@ export function errorHint(code: string): string | undefined {
   if (code === "CONNECTION_CHECK_ERROR") {
     return "接続確認に失敗した。bridge の状態を確認して新規に接続開始すること。";
   }
-  if (code === "UNEXPECTED_SEQ") {
-    return "ストリーム内連番が期待値と一致しない。新規に接続開始すること（自動再接続はしない）。";
-  }
   if (code === "UNEXPECTED_DIRECTION") {
     return "想定外の方向のメッセージである。bridge と診断の版を確認して新規に接続開始すること。";
   }
   if (code === "SESSION_MISMATCH") {
     return "セッション識別子が一致しない。新規に接続開始すること。";
-  }
-  if (code === "CREDIT_EXHAUSTED") {
-    return "クレジットの付与を超えた送信である。新規に接続開始すること。";
-  }
-  if (code === "STREAM_LIMIT") {
-    return "ストリーム数が上限を超えた。不要なストリームを減らすか、新規に接続開始すること。";
-  }
-  if (code === "QUEUE_FULL") {
-    return "bridge の応答キューが満杯である。少し待ってから新規に接続開始すること。";
   }
   if (code === "INVALID_JSON" || code === "INVALID_MESSAGE") {
     return "受信メッセージが不正である。版の一致を確認して新規に接続開始すること。";
@@ -271,8 +259,8 @@ export function errorHint(code: string): string | undefined {
 interface EchoPending {
   /** 診断が採番した操作番号。 */
   readonly opNo: number;
-  /** 送出した `value`（`{ id, data }`）。本文はここにだけ留める。 */
-  readonly value: { readonly id: string; readonly data: string };
+  /** 送出した `value`（乱数トークン）。本文はここにだけ留める。 */
+  readonly value: string;
   /** 送信 payload の UTF-8 バイト数。 */
   readonly bytes: number;
   /** 送信時刻（ミリ秒）。 */
@@ -285,13 +273,13 @@ interface EchoPending {
   readonly timer: ReturnType<typeof setTimeout>;
 }
 
-/** ping 要求1件の待機内容。wire に識別子が無いため到着順で対応付ける。 */
+/** ping 要求1件の待機内容。診断 payload 内の明示 `id` で対応付ける。 */
 interface PingPending {
   /** 診断が採番した操作番号。 */
   readonly opNo: number;
   /** 送信時刻（ミリ秒）。 */
   readonly startedAt: number;
-  /** `pong` 到達で真を渡す。 */
+  /** 同 `id` の `pong` 到達で真を渡す。 */
   readonly resolve: (ok: boolean) => void;
   /** 待機打ち切り・終了時の結果不明で失敗を渡す。 */
   readonly reject: (error: WorldClientError) => void;
@@ -329,7 +317,7 @@ export class DiagnosticSession {
   private readonly pingUnsubs: Array<() => void> = [];
   private providerUnsub: (() => void) | null = null;
   private readonly echoPending = new Map<string, EchoPending>();
-  private readonly pingPending: PingPending[] = [];
+  private readonly pingPending = new Map<string, PingPending>();
   private opCounter = 0;
   private connectSettlement: ConnectSettlement | null = null;
   private closeInitiated = false;
@@ -463,10 +451,11 @@ export class DiagnosticSession {
   /**
    * echo を往復させて一致を確認する。本文は結果に残さない。
    *
-   * 診断ハンドラの厳密形状（`{ op: "echo", value }` の2キーのみ）に合わせ、
-   * 相関識別子は `value` 内の `{ id, data }` に格納する。応答の `value` と
-   * 送出の `value` を突き合わせて一致を確認する。送信完了だけでは一致に
-   * しない。相関表と時限は診断が所有し、ブリッジ層へは持ち込まない。
+   * 診断ハンドラの厳密形状（`{ op: "echo", id, value }` の3キーのみ）に合わせ、
+   * 相関識別子は payload 直下の `id` に格納する。応答の `id` で待機表を引き、
+   * `value` の等価で一致を確認する。送信完了だけでは一致にしない。
+   * 相関表と時限は診断が所有し、ブリッジ層へは持ち込まない。
+   * 業務 requestId は wire に載せない（`id` は診断 payload 内の相関用である）。
    *
    * @returns 一致した場合に真、不一致の場合に偽。
    * @throws `WorldClientError` — 未認証・破棄済み・待機打ち切り・結果不明の場合。
@@ -481,15 +470,16 @@ export class DiagnosticSession {
     const opNo = this.nextOpNo();
     // ADR: 送信内容は都度生成する乱数トークンとし、利用者の業務値は扱わない。
     // 照合は送受の等価で行い、写しには真偽・操作番号・バイト数・往復時間のみ残す。
-    // トークンは待機表の局所値に限り、写し・証拠・ログに残さない。
-    const value = { id: crypto.randomUUID(), data: crypto.randomUUID() } as const;
-    const bytes = new TextEncoder().encode(JSON.stringify({ op: "echo", value })).length;
+    // トークンと相関 `id` は待機表の局所値に限り、写し・証拠・ログに残さない。
+    const id = crypto.randomUUID();
+    const value = crypto.randomUUID();
+    const bytes = new TextEncoder().encode(JSON.stringify({ op: "echo", id, value })).length;
     const startedAt = Date.now();
     this.echo = { status: "running", opNo, bytes };
     this.emit();
     const pending = new Promise<boolean>((resolve, reject) => {
       const timer = setTimeout(() => {
-        this.echoPending.delete(value.id);
+        this.echoPending.delete(id);
         const error = new WorldClientError("PROBE_TIMEOUT", "echo の応答が時間内に返らない。");
         if (this.echo.opNo === opNo && this.echo.status === "running") {
           this.echo = { status: "failed", opNo, bytes, error: toErrorView(error) };
@@ -497,7 +487,7 @@ export class DiagnosticSession {
         }
         reject(error);
       }, this.probeTimeoutMs);
-      this.echoPending.set(value.id, {
+      this.echoPending.set(id, {
         opNo,
         value,
         bytes,
@@ -508,9 +498,9 @@ export class DiagnosticSession {
       });
     });
     try {
-      await target.sendReliable({ op: "echo", value: { ...value } });
+      await target.sendReliable({ op: "echo", id, value });
     } catch (error) {
-      this.dropEchoPending(value.id);
+      this.dropEchoPending(id);
       const view = toErrorView(error);
       if (this.echo.opNo === opNo && this.echo.status === "running") {
         this.echo = { status: "failed", opNo, bytes, error: view };
@@ -529,9 +519,10 @@ export class DiagnosticSession {
    * ping を送り `pong` を確認する。
    *
    * 業務ハンドラの応答確認であり、yamux 監視 Ping（接続の生存監視）とは
-   * 別物である。wire 形状は診断ハンドラの厳密形（`{ op: "ping" }` のみ）に
-   * 合わせ、識別子を付けない。応答 `{ op: "pong" }` に識別子が無いため、
-   * 複数待機の対応付けは到着順で行い、待機列と時限は診断が所有する。
+   * 別物である。wire 形状は診断ハンドラの厳密形（`{ op: "ping", id }` のみ）
+   * に合わせ、応答 `{ op: "pong", id }` の `id` で待機表を対応付ける。
+   * 到着順 FIFO では対応付けない。時限切れで脱落した `id` への遅延応答は
+   * 未知 `id` として無視し、次の要求へ誤対応させない。
    * 送信完了だけでは `pong` にしない。
    *
    * @returns `pong` を受けた場合に真。
@@ -545,12 +536,15 @@ export class DiagnosticSession {
       throw new WorldClientError("NOT_CONNECTED", "応答用の Session が無いため実行できない。");
     }
     const opNo = this.nextOpNo();
+    // ADR: 相関 `id` は診断 payload 内の局所値であり、業務 requestId ではない。
+    // wire に業務 requestId は載せない。待機表と時限は診断が所有する。
+    const id = crypto.randomUUID();
     const startedAt = Date.now();
     this.ping = { status: "running", opNo };
     this.emit();
     const pending = new Promise<boolean>((resolve, reject) => {
       const timer = setTimeout(() => {
-        this.dropPingPending(opNo);
+        this.pingPending.delete(id);
         const error = new WorldClientError("PROBE_TIMEOUT", "pong が時間内に返らない。");
         if (this.ping.opNo === opNo && this.ping.status === "running") {
           this.ping = { status: "failed", opNo, error: toErrorView(error) };
@@ -558,12 +552,12 @@ export class DiagnosticSession {
         }
         reject(error);
       }, this.probeTimeoutMs);
-      this.pingPending.push({ opNo, startedAt, resolve, reject, timer });
+      this.pingPending.set(id, { opNo, startedAt, resolve, reject, timer });
     });
     try {
-      await target.sendReliable({ op: "ping" });
+      await target.sendReliable({ op: "ping", id });
     } catch (error) {
-      this.dropPingPending(opNo);
+      this.dropPingPending(id);
       const view = toErrorView(error);
       if (this.ping.opNo === opNo && this.ping.status === "running") {
         this.ping = { status: "failed", opNo, error: view };
@@ -811,15 +805,16 @@ export class DiagnosticSession {
   private handleEchoMessage(payload: unknown): void {
     if (this.disposed) return;
     if (!isRecord(payload) || payload["op"] !== "echo") return;
-    const value: unknown = payload["value"];
-    if (!isRecord(value) || typeof value["id"] !== "string") return;
-    const id = value["id"] as string;
+    const id: unknown = payload["id"];
+    if (typeof id !== "string") return;
     const pending = this.echoPending.get(id);
+    // 未知 `id`（時限切れで脱落した要求への遅延応答を含む）は無視し、
+    // 待機中の別要求へ誤対応させない。
     if (pending === undefined) return;
     this.echoPending.delete(id);
     clearTimeout(pending.timer);
     const rttMs = Date.now() - pending.startedAt;
-    const matched = value["data"] === pending.value.data;
+    const matched = JSON.stringify(payload["value"]) === JSON.stringify(pending.value);
     this.echo = matched
       ? { status: "matched", opNo: pending.opNo, bytes: pending.bytes, rttMs }
       : { status: "mismatched", opNo: pending.opNo, bytes: pending.bytes, rttMs };
@@ -830,8 +825,13 @@ export class DiagnosticSession {
   private handlePingMessage(payload: unknown): void {
     if (this.disposed) return;
     if (!isRecord(payload) || payload["op"] !== "pong") return;
-    const pending = this.pingPending.shift();
+    const id: unknown = payload["id"];
+    if (typeof id !== "string") return;
+    const pending = this.pingPending.get(id);
+    // 未知 `id`（時限切れで脱落した要求への遅延 `pong` を含む）は無視し、
+    // 待機中の別要求へ誤対応させない。
     if (pending === undefined) return;
+    this.pingPending.delete(id);
     clearTimeout(pending.timer);
     const rttMs = Date.now() - pending.startedAt;
     this.ping = { status: "pong", opNo: pending.opNo, rttMs };
@@ -861,12 +861,13 @@ export class DiagnosticSession {
 
   private handlePingTerminated(message: string): void {
     if (this.disposed) return;
-    if (this.pingPending.length === 0) return;
+    if (this.pingPending.size === 0) return;
     const error = new WorldClientError("RESULT_UNKNOWN", message);
-    for (const pending of this.pingPending.splice(0, this.pingPending.length)) {
+    for (const pending of this.pingPending.values()) {
       clearTimeout(pending.timer);
       pending.reject(error);
     }
+    this.pingPending.clear();
     if (this.ping.status === "running") {
       this.ping = { status: "unknown", opNo: this.ping.opNo, error: toErrorView(error) };
       this.emit();
@@ -907,11 +908,11 @@ export class DiagnosticSession {
     clearTimeout(pending.timer);
   }
 
-  private dropPingPending(opNo: number): void {
-    const index = this.pingPending.findIndex((pending) => pending.opNo === opNo);
-    if (index === -1) return;
-    const [pending] = this.pingPending.splice(index, 1);
-    if (pending !== undefined) clearTimeout(pending.timer);
+  private dropPingPending(id: string): void {
+    const pending = this.pingPending.get(id);
+    if (pending === undefined) return;
+    this.pingPending.delete(id);
+    clearTimeout(pending.timer);
   }
 
   private failAllPendingUnknown(): void {
@@ -934,15 +935,16 @@ export class DiagnosticSession {
         };
       }
     }
-    if (this.pingPending.length > 0) {
+    if (this.pingPending.size > 0) {
       const error = new WorldClientError(
         "RESULT_UNKNOWN",
         "応答待ちのまま終了したため ping の結果は不明である。",
       );
-      for (const pending of this.pingPending.splice(0, this.pingPending.length)) {
+      for (const pending of this.pingPending.values()) {
         clearTimeout(pending.timer);
         pending.reject(error);
       }
+      this.pingPending.clear();
       if (this.ping.status === "running") {
         this.ping = { status: "unknown", opNo: this.ping.opNo, error: toErrorView(error) };
       }

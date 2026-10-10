@@ -653,14 +653,14 @@ test("全接続数・未認可数・保留数の上限を同時に踏める（�
     direction: "bidirectional",
   });
   const collected = collectSession(session);
-  await session.sendReliable({ op: "echo", value: { n: 1 } });
+  await session.sendReliable({ op: "echo", id: "cap-ok-1", value: { n: 1 } });
   const echoed = await collected.waitForPayload(
     (payload) =>
       typeof payload === "object" &&
       payload !== null &&
       (payload as Record<string, unknown>)["op"] === "echo",
   );
-  expect(echoed).toEqual({ op: "echo", value: { n: 1 } });
+  expect(echoed).toEqual({ op: "echo", id: "cap-ok-1", value: { n: 1 } });
   second.socket.terminate();
   retry.socket.terminate();
   await waitForCondition(() => server.getConnectionCount() === 6);
@@ -792,7 +792,7 @@ test("拒否・取消で保留が失効し認可済みに影響しない", async
     direction: "bidirectional",
   });
   const collected = collectSession(session);
-  await session.sendReliable({ op: "echo", value: "ok" });
+  await session.sendReliable({ op: "echo", id: "keep-ok-1", value: "ok" });
   await collected.waitForPayload(
     (payload) =>
       typeof payload === "object" &&
@@ -930,7 +930,7 @@ test("受付クローズで開始待ち・承認待ちが終了し認可済み�
     direction: "bidirectional",
   });
   const collected = collectSession(session);
-  await session.sendReliable({ op: "echo", value: 1 });
+  await session.sendReliable({ op: "echo", id: "drain-keep-1", value: 1 });
   await collected.waitForPayload(
     (payload) =>
       typeof payload === "object" &&
@@ -946,7 +946,7 @@ test("受付クローズで開始待ち・承認待ちが終了し認可済み�
     direction: "bidirectional",
   });
   const collected2 = collectSession(second);
-  await second.sendReliable({ op: "echo", value: 2 });
+  await second.sendReliable({ op: "echo", id: "drain-keep-2", value: 2 });
   await collected2.waitForPayload(
     (payload) =>
       typeof payload === "object" &&
@@ -1318,26 +1318,59 @@ test("同一WSでmux→Session往復しlatest反映と診断echo・pongが返る
     direction: "bidirectional",
   });
   const collected = collectSession(diag);
-  await diag.sendReliable({ op: "echo", value: { hello: "world" } });
+  await diag.sendReliable({ op: "echo", id: "diag-1", value: { hello: "world" } });
   const echoed = await collected.waitForPayload(
     (payload) =>
       typeof payload === "object" &&
       payload !== null &&
       (payload as Record<string, unknown>)["op"] === "echo",
   );
-  expect(echoed).toEqual({ op: "echo", value: { hello: "world" } });
-  await diag.sendReliable({ op: "ping" });
+  expect(echoed).toEqual({ op: "echo", id: "diag-1", value: { hello: "world" } });
+  await diag.sendReliable({ op: "ping", id: "diag-p1" });
   const pong = await collected.waitForPayload(
     (payload) =>
       typeof payload === "object" &&
       payload !== null &&
       (payload as Record<string, unknown>)["op"] === "pong",
   );
-  expect(pong).toEqual({ op: "pong" });
+  expect(pong).toEqual({ op: "pong", id: "diag-p1" });
   expect(server.getStats().diagnosticEcho).toBe(1);
   expect(server.getStats().diagnosticPing).toBe(1);
   // 業務 requestId を wire に追加しない。
   expect("requestId" in (echoed as Record<string, unknown>)).toBe(false);
+});
+
+test("診断の旧形状（id無し）は当該Sessionのみ中断する", async () => {
+  const server = await startServer();
+  server.openAcceptance();
+  const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
+  const auth = await authorizeAndMux(server, socket, collector);
+  const old = await auth.mux.conn.createSession({
+    sessionId: "old-shape",
+    kind: "reliable",
+    direction: "bidirectional",
+  });
+  const good = await auth.mux.conn.createSession({
+    sessionId: "new-shape",
+    kind: "reliable",
+    direction: "bidirectional",
+  });
+  const goodCollected = collectSession(good);
+  const oldEnd = waitSessionEnd(old);
+  // `id` の無い旧形状は厳密形状に合わず、当該 Session のみ中断する。
+  await old.sendReliable({ op: "ping" });
+  const end = await oldEnd;
+  expect(end.kind).toBe("aborted");
+  // 他 Session と Connection は継続し、明示 id 付きは応答する。
+  await good.sendReliable({ op: "ping", id: "new-shape-1" });
+  const pong = await goodCollected.waitForPayload(
+    (payload) =>
+      typeof payload === "object" &&
+      payload !== null &&
+      (payload as Record<string, unknown>)["op"] === "pong",
+  );
+  expect(pong).toEqual({ op: "pong", id: "new-shape-1" });
+  expect(auth.mux.conn.closed).toBe(false);
 });
 
 test("auth_ok直後のbinaryを失わず処理する", async () => {
@@ -1361,14 +1394,14 @@ test("auth_ok直後のbinaryを失わず処理する", async () => {
     direction: "bidirectional",
   });
   const collected = collectSession(diag);
-  await diag.sendReliable({ op: "ping" });
+  await diag.sendReliable({ op: "ping", id: "immediate-1" });
   const pong = await collected.waitForPayload(
     (payload) =>
       typeof payload === "object" &&
       payload !== null &&
       (payload as Record<string, unknown>)["op"] === "pong",
   );
-  expect(pong).toEqual({ op: "pong" });
+  expect(pong).toEqual({ op: "pong", id: "immediate-1" });
 });
 
 test("mux移行後のtextは境界違反で終了する", async () => {
@@ -1408,14 +1441,14 @@ test("Session破損時に他Sessionは継続する", async () => {
   const end = await badEnd;
   expect(end.kind).toBe("aborted");
   // 他 Session は継続する。
-  await good.sendReliable({ op: "ping" });
+  await good.sendReliable({ op: "ping", id: "good-1" });
   const pong = await goodCollected.waitForPayload(
     (payload) =>
       typeof payload === "object" &&
       payload !== null &&
       (payload as Record<string, unknown>)["op"] === "pong",
   );
-  expect(pong).toEqual({ op: "pong" });
+  expect(pong).toEqual({ op: "pong", id: "good-1" });
   expect(auth.mux.conn.closed).toBe(false);
 });
 
@@ -1460,7 +1493,7 @@ test("運用切断はmux接続を即時1008で閉じ他接続は維持する", a
     direction: "bidirectional",
   });
   const collected = collectSession(session);
-  await session.sendReliable({ op: "ping" });
+  await session.sendReliable({ op: "ping", id: "survive-1" });
   await collected.waitForPayload(
     (payload) =>
       typeof payload === "object" &&
@@ -1511,7 +1544,7 @@ test("再接続再承認で業務再開しlatestMailboxは維持される", asyn
     direction: "bidirectional",
   });
   const collected = collectSession(diag);
-  await diag.sendReliable({ op: "ping" });
+  await diag.sendReliable({ op: "ping", id: "diag-re-1" });
   await collected.waitForPayload(
     (payload) =>
       typeof payload === "object" &&
@@ -1573,7 +1606,7 @@ test("同名Sessionの二重作成は拒否し既存は継続する", async () =
   const survivor = auth.mux.conn.getSession("dup");
   if (survivor === undefined) throw new Error("既存 Session がない。");
   const collected = collectSession(survivor);
-  await survivor.sendReliable({ op: "ping" });
+  await survivor.sendReliable({ op: "ping", id: "dup-1" });
   await collected.waitForPayload(
     (payload) =>
       typeof payload === "object" &&

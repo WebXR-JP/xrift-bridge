@@ -149,16 +149,18 @@ function collectSession(session: Session): {
   };
 }
 
-function isEchoOf(payload: unknown, value: unknown): boolean {
+function isEchoOf(payload: unknown, id: string, value: unknown): boolean {
   if (typeof payload !== "object" || payload === null) return false;
   const record = payload as Record<string, unknown>;
   if (record["op"] !== "echo") return false;
+  if (record["id"] !== id) return false;
   return JSON.stringify(record["value"]) === JSON.stringify(value);
 }
 
-function isPong(payload: unknown): boolean {
+function isPong(payload: unknown, id: string): boolean {
   if (typeof payload !== "object" || payload === null) return false;
-  return (payload as Record<string, unknown>)["op"] === "pong";
+  const record = payload as Record<string, unknown>;
+  return record["op"] === "pong" && record["id"] === id;
 }
 
 test("実bridgeと実world-clientでペアリングから認可muxまで通る", async () => {
@@ -189,16 +191,19 @@ test("reliable双方向で診断echo往復とping応答が返る", async () => {
   const collected = collectSession(session);
   // 送信完了はローカル送信の完了であり、一致判定は受信で行う。
   await expect(
-    session.sendReliable({ op: "echo", value: { id: 1, data: "x" } }),
+    session.sendReliable({ op: "echo", id: "e2e-1", value: { data: "x" } }),
   ).resolves.toBeUndefined();
   const echoed = await collected.waitForPayload((payload) =>
-    isEchoOf(payload, { id: 1, data: "x" }),
+    isEchoOf(payload, "e2e-1", { data: "x" }),
   );
-  expect(echoed).toEqual({ op: "echo", value: { id: 1, data: "x" } });
+  expect(echoed).toEqual({ op: "echo", id: "e2e-1", value: { data: "x" } });
 
   // 業務ハンドラの ping 相当応答であり、yamux 監視 Ping とは別である。
-  await expect(session.sendReliable({ op: "ping" })).resolves.toBeUndefined();
-  await expect(collected.waitForPayload(isPong)).resolves.toEqual({ op: "pong" });
+  await expect(session.sendReliable({ op: "ping", id: "e2e-p1" })).resolves.toBeUndefined();
+  await expect(collected.waitForPayload((payload) => isPong(payload, "e2e-p1"))).resolves.toEqual({
+    op: "pong",
+    id: "e2e-p1",
+  });
   expect(server.getStats().diagnosticEcho).toBe(1);
   expect(server.getStats().diagnosticPing).toBe(1);
 });
@@ -237,8 +242,8 @@ test("FIN後も他Sessionは継続しConnection終了で認可失効と未決着
     direction: "bidirectional",
   });
   const echoCollected = collectSession(echo);
-  await echo.sendReliable({ op: "echo", value: { id: 1, data: "x" } });
-  await echoCollected.waitForPayload((payload) => isEchoOf(payload, { id: 1, data: "x" }));
+  await echo.sendReliable({ op: "echo", id: "e2e-1", value: { data: "x" } });
+  await echoCollected.waitForPayload((payload) => isEchoOf(payload, "e2e-1", { data: "x" }));
 
   const ping = await provider.tryCreateSession({
     sessionId: "e2e-ping",
@@ -249,8 +254,10 @@ test("FIN後も他Sessionは継続しConnection終了で認可失効と未決着
 
   // FIN 送出は完了し、逆方向（他 Session）は継続する。
   await expect(echo.closeWrite()).resolves.toBeUndefined();
-  await ping.sendReliable({ op: "ping" });
-  await expect(pingCollected.waitForPayload(isPong)).resolves.toEqual({ op: "pong" });
+  await ping.sendReliable({ op: "ping", id: "e2e-p1" });
+  await expect(
+    pingCollected.waitForPayload((payload) => isPong(payload, "e2e-p1")),
+  ).resolves.toEqual({ op: "pong", id: "e2e-p1" });
 
   // 未決着の送信は Connection 終了で結果不明として拒否され、二重決着しない。
   let closedCount = 0;
@@ -258,7 +265,7 @@ test("FIN後も他Sessionは継続しConnection終了で認可失効と未決着
     closedCount += 1;
   });
   let settled = 0;
-  const pending = ping.sendReliable({ op: "ping" });
+  const pending = ping.sendReliable({ op: "ping", id: "e2e-p2" });
   const counted = pending.then(
     () => {
       settled += 1;
@@ -317,10 +324,10 @@ test("再接続で新しいconnectionIdで再承認し送受信できる", async
     direction: "bidirectional",
   });
   const collected = collectSession(echo);
-  await echo.sendReliable({ op: "echo", value: { id: 2, data: "y" } });
+  await echo.sendReliable({ op: "echo", id: "e2e-2", value: { data: "y" } });
   await expect(
-    collected.waitForPayload((payload) => isEchoOf(payload, { id: 2, data: "y" })),
-  ).resolves.toEqual({ op: "echo", value: { id: 2, data: "y" } });
+    collected.waitForPayload((payload) => isEchoOf(payload, "e2e-2", { data: "y" })),
+  ).resolves.toEqual({ op: "echo", id: "e2e-2", value: { data: "y" } });
 });
 
 test("管理切断は対象のみ終了し他に波及しない", async () => {
@@ -364,6 +371,8 @@ test("管理切断は対象のみ終了し他に波及しない", async () => {
     .listConnections()
     .find((item) => item.connectionId === second.connectionId);
   expect(survivor?.authorized).toBe(true);
-  await survivorEcho.sendReliable({ op: "ping" });
-  await expect(survivorCollected.waitForPayload(isPong)).resolves.toEqual({ op: "pong" });
+  await survivorEcho.sendReliable({ op: "ping", id: "e2e-survive-1" });
+  await expect(
+    survivorCollected.waitForPayload((payload) => isPong(payload, "e2e-survive-1")),
+  ).resolves.toEqual({ op: "pong", id: "e2e-survive-1" });
 });

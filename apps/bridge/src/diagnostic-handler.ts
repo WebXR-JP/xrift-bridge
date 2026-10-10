@@ -3,12 +3,14 @@
  *
  * reliable Session で届く payload を検証し、echo 相当（受信値の返送）と
  * ping 相当（固定応答）だけに応答する。業務 requestId を wire に追加せず、
- * 応答相関は Session（yamux stream 単位）に委ねる。任意ローカル操作の
- * 実行口は持たせず、ペイロードは診断用途に限定する。
+ * 応答相関は診断 payload 内の明示 `id` で行う（到着順 FIFO にはしない。
+ * タイムアウト後の遅延応答が次の要求へ誤対応するのを防ぐため）。
+ * 任意ローカル操作の実行口は持たせず、ペイロードは診断用途に限定する。
  *
  * 診断 payload の形状：
- * - echo: `{ "op": "echo", "value": <JSON 値> }` → `{ "op": "echo", "value": <同じ値> }`
- * - ping: `{ "op": "ping" }` → `{ "op": "pong" }`
+ * - echo: `{ "op": "echo", "id": <文字列>, "value": <JSON 値> }`
+ *   → `{ "op": "echo", "id": <同じ>, "value": <同じ値> }`
+ * - ping: `{ "op": "ping", "id": <文字列> }` → `{ "op": "pong", "id": <同じ> }`
  *
  * 不正形状は当該 Session のみ中断（RST）し、他 Session と Connection は維持する。
  *
@@ -43,16 +45,20 @@ function toDiagnosticResponse(payload: unknown): {
   const keys = Object.keys(payload);
   const op: unknown = payload["op"];
   if (op === "ping") {
-    // ping は `op` のみ許し、余分なキーを黙って受理しない。
-    if (keys.length !== 1) return { ok: false, response: null };
-    return { ok: true, response: { op: "pong" } };
+    // ping は `op` と `id` のみ許し、余分なキーを黙って受理しない。
+    if (keys.length !== 2) return { ok: false, response: null };
+    const id: unknown = payload["id"];
+    if (typeof id !== "string" || id.length === 0) return { ok: false, response: null };
+    return { ok: true, response: { op: "pong", id } };
   }
   if (op === "echo") {
-    if (keys.length !== 2) return { ok: false, response: null };
-    if (!("value" in payload)) return { ok: false, response: null };
+    if (keys.length !== 3) return { ok: false, response: null };
+    if (!("id" in payload) || !("value" in payload)) return { ok: false, response: null };
+    const id: unknown = payload["id"];
+    if (typeof id !== "string" || id.length === 0) return { ok: false, response: null };
     const value: unknown = payload["value"];
     if (!isJsonValue(value)) return { ok: false, response: null };
-    return { ok: true, response: { op: "echo", value } };
+    return { ok: true, response: { op: "echo", id, value } };
   }
   return { ok: false, response: null };
 }

@@ -3,8 +3,8 @@
  *
  * 実ネットワークの確認は Unit F の範囲とし、ここでは相関・待機・終了時の
  * 結果不明・表示・後片付けの論理を検証する。スタブの応答挙動はサーバ側の
- * 診断ハンドラの厳密形状（echo は `{ op, value }` の2キー、ping は
- * `{ op }` のみ）に合わせる。
+ * 診断ハンドラの厳密形状（echo は `{ op, id, value }` の3キー、ping は
+ * `{ op, id }` の2キー、応答は同 `id` 付き）に合わせる。
  */
 import { afterEach, expect, test } from "vite-plus/test";
 import {
@@ -258,17 +258,27 @@ class FakeProvider implements SessionProvider {
       return;
     }
     const keys = Object.keys(payload);
-    if (payload["op"] === "echo" && keys.length === 2 && "value" in payload) {
-      const value = payload["value"];
-      if (this.behavior === "tamper-echo" && isRecord(value)) {
-        session.deliver({ op: "echo", value: { ...value, data: "改ざん" } });
+    if (payload["op"] === "echo" && keys.length === 3 && "id" in payload && "value" in payload) {
+      const id = payload["id"];
+      if (typeof id !== "string" || id.length === 0) {
+        session.abort();
         return;
       }
-      session.deliver({ op: "echo", value });
+      const value = payload["value"];
+      if (this.behavior === "tamper-echo") {
+        session.deliver({ op: "echo", id, value: "改ざん" });
+        return;
+      }
+      session.deliver({ op: "echo", id, value });
       return;
     }
-    if (payload["op"] === "ping" && keys.length === 1) {
-      session.deliver({ op: "pong" });
+    if (payload["op"] === "ping" && keys.length === 2 && "id" in payload) {
+      const id = payload["id"];
+      if (typeof id !== "string" || id.length === 0) {
+        session.abort();
+        return;
+      }
+      session.deliver({ op: "pong", id });
       return;
     }
     session.abort();
@@ -505,8 +515,88 @@ test("ping は pong 到達でのみ成功し、送信完了だけでは成功に
   expect(await probed).toBe(true);
   expect(session.getSnapshot().ping.status).toBe("pong");
   expect(session.getSnapshot().ping.opNo).toBe(1);
-  // wire には識別子を付けず、診断ハンドラの厳密形で送る。
-  expect(pingSession.sent).toEqual([{ op: "ping" }]);
+  // wire には業務 requestId を載せず、診断 payload 内の明示 id で送る。
+  expect(pingSession.sent).toHaveLength(1);
+  const sent = pingSession.sent[0];
+  expect(isRecord(sent) ? sent["op"] : undefined).toBe("ping");
+  expect(isRecord(sent) ? typeof sent["id"] : undefined).toBe("string");
+});
+
+test("複数のping待機は到着順ではなくidで対応付ける", async () => {
+  const { createRequest, world } = createFakeWorld();
+  world.provider.behavior = "silent";
+  const session = createSession(createRequest);
+  await session.connect();
+  const pingSession = world.provider.probeSession("diag-ping");
+  const first = session.runPing();
+  const second = session.runPing();
+  await waitFor(() => pingSession.sent.length === 2);
+  const firstSent = pingSession.sent[0];
+  const secondSent = pingSession.sent[1];
+  expect(isRecord(firstSent) ? typeof firstSent["id"] : undefined).toBe("string");
+  expect(isRecord(secondSent) ? typeof secondSent["id"] : undefined).toBe("string");
+  const firstId = isRecord(firstSent) ? firstSent["id"] : undefined;
+  const secondId = isRecord(secondSent) ? secondSent["id"] : undefined;
+  expect(firstId).not.toBe(secondId);
+  // 逆順で応答しても、各要求は自分の id の応答でのみ解決する。
+  pingSession.deliver({ op: "pong", id: secondId });
+  await expect(second).resolves.toBe(true);
+  const raced = await Promise.race([
+    first.then(
+      () => "first",
+      () => "first",
+    ),
+    new Promise((resolve) => setTimeout(() => resolve("timeout"), 20)),
+  ]);
+  expect(raced).toBe("timeout");
+  pingSession.deliver({ op: "pong", id: firstId });
+  await expect(first).resolves.toBe(true);
+});
+
+test("時限切れのpingへの遅延pongは未知idとして無視する", async () => {
+  const { createRequest, world } = createFakeWorld();
+  world.provider.behavior = "silent";
+  const session = createSession(createRequest, { probeTimeoutMs: 30 });
+  await session.connect();
+  const pingSession = world.provider.probeSession("diag-ping");
+  await expect(session.runPing()).rejects.toMatchObject({ code: "PROBE_TIMEOUT" });
+  expect(session.getSnapshot().ping.status).toBe("failed");
+  const stale = pingSession.sent[0];
+  expect(isRecord(stale) ? typeof stale["id"] : undefined).toBe("string");
+  // 脱落した id への遅延応答は無視し、失敗表示を壊さない。
+  pingSession.deliver({ op: "pong", id: isRecord(stale) ? stale["id"] : undefined });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  expect(session.getSnapshot().ping.status).toBe("failed");
+  // 次の ping は自分の id で解決する（遅延 pong の誤対応が無い）。
+  world.provider.behavior = "echo-pong";
+  await expect(session.runPing()).resolves.toBe(true);
+  expect(session.getSnapshot().ping.status).toBe("pong");
+  expect(session.getSnapshot().ping.opNo).toBe(2);
+});
+
+test("時限切れのechoへの遅延応答は未知idとして無視する", async () => {
+  const { createRequest, world } = createFakeWorld();
+  world.provider.behavior = "silent";
+  const session = createSession(createRequest, { probeTimeoutMs: 30 });
+  await session.connect();
+  const echoSession = world.provider.probeSession("diag-echo");
+  await expect(session.runEcho()).rejects.toMatchObject({ code: "PROBE_TIMEOUT" });
+  expect(session.getSnapshot().echo.status).toBe("failed");
+  const stale = echoSession.sent[0];
+  expect(isRecord(stale) ? typeof stale["id"] : undefined).toBe("string");
+  // 脱落した id への遅延応答は無視し、失敗表示を壊さない。
+  echoSession.deliver({
+    op: "echo",
+    id: isRecord(stale) ? stale["id"] : undefined,
+    value: isRecord(stale) ? stale["value"] : undefined,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  expect(session.getSnapshot().echo.status).toBe("failed");
+  // 次の echo は自分の id で解決する（遅延応答の誤対応が無い）。
+  world.provider.behavior = "echo-pong";
+  await expect(session.runEcho()).resolves.toBe(true);
+  expect(session.getSnapshot().echo.status).toBe("matched");
+  expect(session.getSnapshot().echo.opNo).toBe(2);
 });
 
 test("証拠 JSON に比較コード・payload を含めない", async () => {
@@ -643,6 +733,8 @@ test("実在する全符号に案内が付く", () => {
   // サーバが実際に送る符号（受付・ペアリング・承認・境界違反）と、
   // 接続試行・診断待機の符号を網羅する。
   // 送らない符号（`PAIRING_LIMIT`・`PAIRING_CODE_UNAVAILABLE`）は含めない。
+  // 0.3 で発生し得ない符号（`UNEXPECTED_SEQ`・`CREDIT_EXHAUSTED`・
+  // `STREAM_LIMIT`・`QUEUE_FULL`）も含めない。
   const realCodes = [
     "PAIRING_REJECTED",
     "PAIRING_EXPIRED",
@@ -666,12 +758,8 @@ test("実在する全符号に案内が付く", () => {
     "CONNECTION_CHECK_ERROR",
     "NOT_AUTHORIZED",
     "NOT_CONNECTED",
-    "UNEXPECTED_SEQ",
     "UNEXPECTED_DIRECTION",
     "SESSION_MISMATCH",
-    "CREDIT_EXHAUSTED",
-    "STREAM_LIMIT",
-    "QUEUE_FULL",
     "INVALID_JSON",
     "INVALID_MESSAGE",
     "VERSION_MISMATCH",
@@ -692,4 +780,9 @@ test("実在する全符号に案内が付く", () => {
   // 送らない符号には案内を持たない（死に分岐の混入検出）。
   expect(errorHint("PAIRING_LIMIT")).toBeUndefined();
   expect(errorHint("PAIRING_CODE_UNAVAILABLE")).toBeUndefined();
+  // 0.3 で発生し得ない符号の残骸は持たない。
+  expect(errorHint("UNEXPECTED_SEQ")).toBeUndefined();
+  expect(errorHint("CREDIT_EXHAUSTED")).toBeUndefined();
+  expect(errorHint("STREAM_LIMIT")).toBeUndefined();
+  expect(errorHint("QUEUE_FULL")).toBeUndefined();
 });

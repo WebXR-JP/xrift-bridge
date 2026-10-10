@@ -718,7 +718,7 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
     if (!wasAuthorized) {
       sendPreAuthError(state, code, message, requestId);
     }
-    closeSocket(state, 1008, wasAuthorized ? code : code);
+    closeSocket(state, 1008, code);
     armForceClose(state);
   }
 
