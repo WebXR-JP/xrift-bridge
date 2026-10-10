@@ -335,6 +335,28 @@ importers:
         specifier: 'catalog:'
         version: 1.0.0(@types/node@24.19.1)(@vitest/ui@5.0.1)(happy-dom@20.14.5)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1)
 
+  packages/bridge-app-core:
+    dependencies:
+      bridge-protocol:
+        specifier: workspace:*
+        version: link:../bridge-protocol
+      bridge-server:
+        specifier: workspace:*
+        version: link:../bridge-server
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 24.19.1
+      typescript:
+        specifier: 'catalog:'
+        version: 7.0.2
+      vite-plus:
+        specifier: 'catalog:'
+        version: 1.0.0(@types/node@24.19.1)(@vitest/ui@5.0.1)(happy-dom@20.14.5)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1)
+      world-client:
+        specifier: workspace:*
+        version: link:../world-client
+
   packages/bridge-protocol:
     dependencies:
       '@chainsafe/libp2p-yamux':

@@ -1,0 +1,32 @@
+{
+  "name": "bridge-app-core",
+  "version": "0.0.0",
+  "description": "ブリッジアプリのプラグイン基盤。接続口の適合判定・割当て・失効と同梱プラグインを担う。",
+  "license": "MIT",
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./dist/index.mjs",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "vp pack",
+    "dev": "vp pack --watch",
+    "test": "vp test",
+    "test:types": "tsc --noEmit -p tsconfig.json",
+    "check": "vp check",
+    "prepublishOnly": "vp run build"
+  },
+  "dependencies": {
+    "bridge-protocol": "workspace:*",
+    "bridge-server": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:",
+    "world-client": "workspace:*"
+  }
+}
