@@ -3,5 +3,5 @@ import { PROTOCOL_VERSION } from "../src/index.ts";
 
 test("プロトコルバージョンがセマンティック形式である", () => {
   expect(PROTOCOL_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
-  expect(PROTOCOL_VERSION).toBe("0.2.0");
+  expect(PROTOCOL_VERSION).toBe("0.3.0");
 });

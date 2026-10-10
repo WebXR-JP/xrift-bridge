@@ -1,8 +1,8 @@
 /**
  * ブリッジの有限・設定可能な暫定値。
  *
- * 値の正本は下の `DEFAULT_LIMITS` とする。B1 到達性確認のための計測用暫定値
- * であり、合意値・性能保証ではない。計測時の実効設定は証拠に記録する。
+ * 値の正本は下の `DEFAULT_LIMITS` とする。計測用暫定値であり、
+ * 合意値・性能保証ではない。計測時の実効設定は証拠に記録する。
  * 検証計画は `docs/verification/bridge.md` を見る。すべての値は
  * `BridgeOptions.limits` で上書きできる。
  *
@@ -10,45 +10,27 @@
  * `design/bridge.md` の候補節を参照し、形状の正本は
  * `bridge-protocol`（`PAIRING_CODE_LENGTH` 等）に置く。
  *
+ * 0.3 では件数クレジット・応答キュー・ストリーム上限をブリッジ層に持たない。
+ * framing 本体上限（65,536）は transport（`FRAME_MAX_BYTES`）の固定であり、
+ * yamux の stream 上限（各32）も transport（`MAX_INBOUND_STREAMS` 等）の固定である。
+ * ここに残す `maxWebSocketMessageBytes` は WS メッセージ1件の上限（`ws` の
+ * `maxPayload`）だけであり、framing 上限とは別物である。
+ *
  * @packageDocumentation
  */
 
 /** 流れ制御・制限の暫定値。すべて有限で設定可能である。 */
 export interface BridgeLimits {
   /**
-   * 1メッセージの最大長。UTF-8 にシリアライズした JSON メッセージのバイト数。
-   * 受信上限は `ws` の `maxPayload`（分割フレーム合算）に委ね、超過時は
-   * close 1009 で通知する。
+   * WS メッセージ1件の最大長（`ws` の `maxPayload` に渡す）。
    *
-   * @defaultValue `65536`（B1 暫定）。
-   */
-  readonly maxMessageBytes: number;
-  /**
-   * 接続単位の reliable 件数容量。未消費の付与残と保持中（未送信・送信中）の
-   * 応答の合計がこの件数に収まるよう、累積付与で制御する。
+   * 認可前テキスト・認可後バイナリの双方に適用する。分割フレームは合算する。
+   * framing 本体上限とは別であり、yamux の断片をそのまま送るため
+   * framing 上限より大きめに取る。
    *
-   * @defaultValue `256`（B1 暫定）。
+   * @defaultValue `1048576`。
    */
-  readonly maxReliableQueueMessages: number;
-  /**
-   * 接続ごとの reliable 未応答キューの上限バイト数。UTF-8 バイトで計上する。
-   *
-   * @defaultValue `1048576`（B1 暫定）。
-   */
-  readonly maxReliableQueueBytes: number;
-  /**
-   * 接続ごとのストリーム数上限。
-   *
-   * @defaultValue `32`（B1 暫定）。
-   */
-  readonly maxStreamsPerConnection: number;
-  /**
-   * 認証直後に付与する reliable 送信クレジット（累積件数）。
-   * `maxReliableQueueMessages` 以下であること。
-   *
-   * @defaultValue `32`（B1 暫定）。
-   */
-  readonly initialCreditWindow: number;
+  readonly maxWebSocketMessageBytes: number;
   /**
    * 同時接続数の上限。
    *
@@ -124,13 +106,9 @@ export interface BridgeLimits {
   readonly connectionCloseGraceMs: number;
 }
 
-/** B1 の暫定値と設計既定値。計測用であり合意値ではない。 */
+/** 暫定値と設計既定値。計測用であり合意値ではない。 */
 export const DEFAULT_LIMITS: BridgeLimits = {
-  maxMessageBytes: 65_536,
-  maxReliableQueueMessages: 256,
-  maxReliableQueueBytes: 1_048_576,
-  maxStreamsPerConnection: 32,
-  initialCreditWindow: 32,
+  maxWebSocketMessageBytes: 1_048_576,
   maxConnections: 8,
   pairingStartTimeoutMs: 10_000,
   pairingApprovalTimeoutMs: 120_000,
@@ -166,8 +144,7 @@ const TIMER_KEYS: ReadonlySet<keyof BridgeLimits> = new Set([
  * @throws `RangeError` — 正の安全な整数でない項目、タイマーが Node タイマーの
  * 範囲に収まらない場合、または上限の関係
  * （`maxPendingPairings <= maxUnauthorizedConnections <= maxConnections`、
- * `maxPairingRequestsPerOrigin <= maxPairingRequestsTotal`、
- * `initialCreditWindow <= maxReliableQueueMessages`）を満たさない場合。
+ * `maxPairingRequestsPerOrigin <= maxPairingRequestsTotal`）を満たさない場合。
  * @remarks
  * 承認待ち時間（`pairingApprovalTimeoutMs`）と受付時間
  * （`acceptanceDurationMs`）の大小は制限しない。
@@ -195,10 +172,6 @@ export function resolveLimits(partial?: Partial<BridgeLimits>): BridgeLimits {
     throw new RangeError(
       "limits.maxPairingRequestsPerOrigin は maxPairingRequestsTotal 以下であること。",
     );
-  }
-  if (merged.initialCreditWindow > merged.maxReliableQueueMessages) {
-    // 初期付与が件数容量を超えると、受信前に付与した権利が容量に収まらない。
-    throw new RangeError("limits.initialCreditWindow は maxReliableQueueMessages 以下であること。");
   }
   return merged;
 }

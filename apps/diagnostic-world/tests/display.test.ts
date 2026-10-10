@@ -56,9 +56,23 @@ test("進行・応答の文言を返す", () => {
   expect(phaseLabel("authorized")).toBe("認証済み");
   expect(phaseLabel("ended")).toBe("終了（切断・失敗）");
   expect(echoLabel({ status: "none" })).toBe("未実行");
-  expect(echoLabel({ status: "matched", seq: 3, bytes: 36 })).toContain("一致");
+  expect(echoLabel({ status: "matched", opNo: 1, bytes: 36, rttMs: 5 })).toContain("一致");
+  expect(echoLabel({ status: "matched", opNo: 1, bytes: 36, rttMs: 5 })).toContain("op=1");
+  expect(echoLabel({ status: "mismatched", opNo: 2 })).toContain("不一致");
+  expect(echoLabel({ status: "unknown" })).toBe("結果不明");
   expect(pingLabel({ status: "none" })).toBe("未実行");
-  expect(pingLabel({ status: "pong" })).toBe("pong");
+  expect(pingLabel({ status: "pong", opNo: 1, rttMs: 4 })).toContain("pong");
+  expect(pingLabel({ status: "unknown" })).toBe("結果不明");
+});
+
+test("wire 連番を表示に載せない", () => {
+  // reliable の wire 連番は表示せず、操作番号・バイト数・往復時間に置き換える。
+  const echoText = echoLabel({ status: "matched", opNo: 3, bytes: 48, rttMs: 7 });
+  expect(echoText).not.toContain("seq=");
+  expect(echoText).toContain("op=3");
+  const pingText = pingLabel({ status: "pong", opNo: 2, rttMs: 6 });
+  expect(pingText).not.toContain("seq=");
+  expect(pingText).toContain("op=2");
 });
 
 test("比較コードを3桁区切りで表示する", () => {

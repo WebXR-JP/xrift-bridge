@@ -55,15 +55,25 @@ export function formatPairingCode(code: string): string {
 }
 
 /**
- * echo の表示文言を返す。payload 本文は扱わない。
+ * echo の表示文言を返す。payload 本文・wire 連番は扱わない。
+ *
+ * wire の連番は表示せず、診断が採番した操作番号・バイト数・往復時間を載せる。
  *
  * @param echo - echo 往復の表示内容。
  * @returns 日本語の短い表示。
  */
 export function echoLabel(echo: DiagnosticSnapshot["echo"]): string {
-  if (echo.status === "matched") return `一致（seq=${echo.seq ?? "?"} ${echo.bytes ?? "?"}b）`;
-  if (echo.status === "mismatched") return "不一致";
+  const detail =
+    echo.opNo === undefined
+      ? ""
+      : `（op=${echo.opNo}` +
+        (echo.bytes === undefined ? "" : ` ${echo.bytes}b`) +
+        (echo.rttMs === undefined ? "" : ` ${echo.rttMs}ms`) +
+        "）";
+  if (echo.status === "matched") return `一致${detail}`;
+  if (echo.status === "mismatched") return `不一致${detail}`;
   if (echo.status === "running") return "実行中";
+  if (echo.status === "unknown") return "結果不明";
   if (echo.status === "failed") return `失敗（${echo.error?.code ?? "UNKNOWN"}）`;
   return "未実行";
 }
@@ -71,12 +81,20 @@ export function echoLabel(echo: DiagnosticSnapshot["echo"]): string {
 /**
  * ping の表示文言を返す。
  *
+ * 業務ハンドラの応答確認であり、yamux 監視 Ping とは別物である。
+ * wire の連番は表示せず、操作番号・往復時間を載せる。
+ *
  * @param ping - ping の表示内容。
  * @returns 日本語の短い表示。
  */
 export function pingLabel(ping: DiagnosticSnapshot["ping"]): string {
-  if (ping.status === "pong") return "pong";
+  const detail =
+    ping.opNo === undefined
+      ? ""
+      : `（op=${ping.opNo}` + (ping.rttMs === undefined ? "" : ` ${ping.rttMs}ms`) + "）";
+  if (ping.status === "pong") return `pong${detail}`;
   if (ping.status === "running") return "実行中";
+  if (ping.status === "unknown") return "結果不明";
   if (ping.status === "failed") return `失敗（${ping.error?.code ?? "UNKNOWN"}）`;
   return "未実行";
 }

@@ -11,19 +11,6 @@ import {
   type BridgeMessage,
 } from "../src/index.ts";
 
-function validEcho(): Record<string, unknown> {
-  return {
-    v: PROTOCOL_VERSION,
-    type: "echo",
-    sessionId: "session-1",
-    streamId: "main",
-    kind: "reliable",
-    seq: 0,
-    requestId: "req-1",
-    payload: { text: "hello" },
-  };
-}
-
 function validPairingPending(): Record<string, unknown> {
   return {
     v: PROTOCOL_VERSION,
@@ -35,60 +22,88 @@ function validPairingPending(): Record<string, unknown> {
   };
 }
 
-test("echo 要求を受理する", () => {
-  const message = parseBridgeMessage(JSON.stringify(validEcho()));
-  expect(message.type).toBe("echo");
-  if (message.type === "echo") {
-    expect(message.seq).toBe(0);
-    expect(message.payload).toEqual({ text: "hello" });
+function validAuthOk(): Record<string, unknown> {
+  return {
+    v: PROTOCOL_VERSION,
+    type: "auth_ok",
+    requestId: "pair-1",
+    connectionId: "conn-1",
+  };
+}
+
+function validCreateReliable(): Record<string, unknown> {
+  return {
+    v: PROTOCOL_VERSION,
+    type: "create_session",
+    connectionId: "conn-1",
+    sessionId: "main",
+    kind: "reliable",
+    direction: "bidirectional",
+  };
+}
+
+function validCreateLatest(): Record<string, unknown> {
+  return {
+    v: PROTOCOL_VERSION,
+    type: "create_session",
+    connectionId: "conn-1",
+    sessionId: "pose",
+    kind: "latest",
+    direction: "to_client",
+  };
+}
+
+function validReliableData(): Record<string, unknown> {
+  return {
+    v: PROTOCOL_VERSION,
+    type: "data",
+    connectionId: "conn-1",
+    sessionId: "main",
+    payload: { text: "hello" },
+  };
+}
+
+function validLatestData(): Record<string, unknown> {
+  return {
+    v: PROTOCOL_VERSION,
+    type: "data",
+    connectionId: "conn-1",
+    sessionId: "pose",
+    seq: 3,
+    payload: { x: 1 },
+  };
+}
+
+function parseError(raw: unknown): ProtocolError | undefined {
+  try {
+    // ADR: JSON 化できない値（NaN・関数）の検証を素通しさせないため、
+    // 文字列化せず生値のまま検証する。文字列入力の JSON 異常系は別途文字列で渡す。
+    parseBridgeMessage(raw);
+  } catch (caught) {
+    return caught as ProtocolError;
   }
+  return undefined;
+}
+
+test("ペアリング開始を受理する", () => {
+  const message = parseBridgeMessage(
+    JSON.stringify({ v: PROTOCOL_VERSION, type: "pairing_start" }),
+  );
+  expect(message.type).toBe("pairing_start");
 });
 
-test("ペアリング開始・保留・認証応答・コマンド・データ・クレジット・エラー型を受理する", () => {
+test("ペアリング保留・認証応答・セッション作成・データ・エラー型を受理する", () => {
   const samples: Array<{ raw: unknown; type: BridgeMessage["type"] }> = [
     { raw: { v: PROTOCOL_VERSION, type: "pairing_start" }, type: "pairing_start" },
     { raw: validPairingPending(), type: "pairing_pending" },
+    { raw: validAuthOk(), type: "auth_ok" },
+    { raw: validCreateReliable(), type: "create_session" },
+    { raw: validCreateLatest(), type: "create_session" },
+    { raw: validReliableData(), type: "data" },
+    { raw: validLatestData(), type: "data" },
     {
-      raw: { v: PROTOCOL_VERSION, type: "auth_ok", requestId: "pair-1", sessionId: "s", window: 8 },
-      type: "auth_ok",
-    },
-    {
-      raw: { ...validEcho(), type: "echo_response" },
-      type: "echo_response",
-    },
-    {
-      raw: { ...validEcho(), type: "command_request", command: "ping" },
-      type: "command_request",
-    },
-    {
-      raw: {
-        v: PROTOCOL_VERSION,
-        type: "command_response",
-        sessionId: "s",
-        requestId: "r",
-        ok: true,
-        result: "pong",
-      },
-      type: "command_response",
-    },
-    {
-      raw: {
-        v: PROTOCOL_VERSION,
-        type: "command_response",
-        sessionId: "s",
-        requestId: "r",
-        ok: false,
-        error: { code: "UNKNOWN_COMMAND", message: "ng" },
-      },
-      type: "command_response",
-    },
-    {
-      raw: { ...validEcho(), type: "data", kind: "latest", seq: 3 },
+      raw: { ...validReliableData(), payload: null },
       type: "data",
-    },
-    {
-      raw: { v: PROTOCOL_VERSION, type: "credit", sessionId: "s", limit: 4 },
-      type: "credit",
     },
     {
       raw: { v: PROTOCOL_VERSION, type: "error", code: "E", message: "m" },
@@ -100,7 +115,7 @@ test("ペアリング開始・保留・認証応答・コマンド・データ�
         type: "error",
         code: "E",
         message: "m",
-        sessionId: "s",
+        connectionId: "conn-1",
         requestId: "pair-1",
       },
       type: "error",
@@ -111,75 +126,187 @@ test("ペアリング開始・保留・認証応答・コマンド・データ�
   }
 });
 
-test("旧 auth は未知種別として拒否する", () => {
-  let error: unknown;
-  try {
-    parseBridgeMessage(JSON.stringify({ v: PROTOCOL_VERSION, type: "auth", secret: "s" }));
-  } catch (caught) {
-    error = caught;
+test("削除済み種別を未知種別として拒否する", () => {
+  const raws: unknown[] = [
+    { v: PROTOCOL_VERSION, type: "credit", connectionId: "c", limit: 4 },
+    {
+      v: PROTOCOL_VERSION,
+      type: "echo",
+      connectionId: "c",
+      sessionId: "s",
+      seq: 0,
+      requestId: "r",
+      payload: 1,
+    },
+    {
+      v: PROTOCOL_VERSION,
+      type: "echo_response",
+      connectionId: "c",
+      sessionId: "s",
+      seq: 0,
+      requestId: "r",
+      payload: 1,
+    },
+    {
+      v: PROTOCOL_VERSION,
+      type: "command_request",
+      connectionId: "c",
+      sessionId: "s",
+      seq: 0,
+      requestId: "r",
+      command: "ping",
+    },
+    {
+      v: PROTOCOL_VERSION,
+      type: "command_response",
+      connectionId: "c",
+      requestId: "r",
+      ok: true,
+    },
+    { v: PROTOCOL_VERSION, type: "auth", secret: "s" },
+  ];
+  for (const raw of raws) {
+    const error = parseError(raw);
+    expect(error).toBeInstanceOf(ProtocolError);
+    expect((error as ProtocolError).code).toBe("UNKNOWN_TYPE");
   }
-  expect(error).toBeInstanceOf(ProtocolError);
-  expect((error as ProtocolError).code).toBe("UNKNOWN_TYPE");
 });
 
 test("版不一致・未知種別・JSON 異常を拒否する", () => {
-  expect(PROTOCOL_VERSION).toBe("0.2.0");
+  expect(PROTOCOL_VERSION).toBe("0.3.0");
   const cases: Array<{ raw: unknown; code: ProtocolError["code"] }> = [
-    { raw: { ...validEcho(), v: "9.9.9" }, code: "VERSION_MISMATCH" },
-    // 旧版 0.1.0 は版判定で拒否する。
-    { raw: { ...validEcho(), v: "0.1.0" }, code: "VERSION_MISMATCH" },
+    { raw: { ...validReliableData(), v: "9.9.9" }, code: "VERSION_MISMATCH" },
+    // 旧版 0.2.0 は版判定で拒否する。
+    { raw: { ...validReliableData(), v: "0.2.0" }, code: "VERSION_MISMATCH" },
     // 旧版の credit 形式は版判定で拒否する（limit 欠落でも版不一致が先に検出される）。
     {
       raw: { v: "0.0.0", type: "credit", sessionId: "s", window: 4 },
       code: "VERSION_MISMATCH",
     },
-    { raw: { ...validEcho(), type: "teleport" }, code: "UNKNOWN_TYPE" },
+    { raw: { ...validReliableData(), type: "teleport" }, code: "UNKNOWN_TYPE" },
     { raw: "{not json", code: "INVALID_JSON" },
   ];
   for (const { raw, code } of cases) {
-    let error: unknown;
-    try {
-      parseBridgeMessage(typeof raw === "string" ? raw : JSON.stringify(raw));
-    } catch (caught) {
-      error = caught;
-    }
+    const error = parseError(raw);
     expect(error).toBeInstanceOf(ProtocolError);
     expect((error as ProtocolError).code).toBe(code);
   }
 });
 
-test("フィールド不足・型不正・不正連番・不正ストリーム名を拒否する", () => {
+test("create_session の方向制約を検証する", () => {
+  // 受理する組合せ。
+  for (const raw of [
+    validCreateReliable(),
+    validCreateLatest(),
+    { ...validCreateLatest(), direction: "to_server" },
+  ]) {
+    expect(parseBridgeMessage(JSON.stringify(raw)).type).toBe("create_session");
+  }
+  // 不整合・不正値は拒否する。
   const bad: unknown[] = [
-    { ...validEcho(), seq: undefined },
-    { ...validEcho(), seq: -1 },
-    { ...validEcho(), seq: 1.5 },
-    { ...validEcho(), kind: "latest" },
-    { ...validEcho(), streamId: "../evil" },
-    { ...validEcho(), streamId: "" },
-    { ...validEcho(), payload: undefined },
-    { ...validEcho(), requestId: "" },
-    { ...validEcho(), type: "data", kind: "sometimes" },
-    { v: PROTOCOL_VERSION, type: "credit", sessionId: "s" },
-    { v: PROTOCOL_VERSION, type: "credit", sessionId: "s", limit: -1 },
-    { v: PROTOCOL_VERSION, type: "credit", sessionId: "s", limit: 1.5 },
-    { v: PROTOCOL_VERSION, type: "credit", sessionId: "s", limit: "4" },
-    { v: PROTOCOL_VERSION, type: "credit", sessionId: "s", limit: null },
-    // auth_ok は requestId が必須である。
-    { v: PROTOCOL_VERSION, type: "auth_ok", sessionId: "s", window: 8 },
-    { v: PROTOCOL_VERSION, type: "auth_ok", requestId: "", sessionId: "s", window: 8 },
-    { v: PROTOCOL_VERSION, type: "auth_ok", requestId: "a/b", sessionId: "s", window: 8 },
-    { v: PROTOCOL_VERSION, type: "auth_ok", requestId: 42, sessionId: "s", window: 8 },
+    // reliable は bidirectional のみ。
+    { ...validCreateReliable(), direction: "to_client" },
+    { ...validCreateReliable(), direction: "to_server" },
+    // latest は一方向のみ。
+    { ...validCreateLatest(), direction: "bidirectional" },
+    { ...validCreateLatest(), kind: "latest", direction: "sideways" },
+    { ...validCreateReliable(), kind: "sometimes", direction: "bidirectional" },
+    { ...validCreateReliable(), direction: undefined },
+    { ...validCreateReliable(), kind: undefined },
+    // 識別子の不足・書式不正。
+    { ...validCreateReliable(), connectionId: "" },
+    { ...validCreateReliable(), connectionId: undefined },
+    { ...validCreateReliable(), sessionId: "" },
+    { ...validCreateReliable(), sessionId: "../evil" },
+    { ...validCreateReliable(), sessionId: "x".repeat(65) },
+    { ...validCreateReliable(), sessionId: undefined },
+  ];
+  for (const raw of bad) {
+    const error = parseError(raw);
+    expect(error).toBeInstanceOf(ProtocolError);
+    expect((error as ProtocolError).code).toBe("INVALID_MESSAGE");
+  }
+});
+
+test("data の payload 必須と seq 形式を検証する", () => {
+  // `null` の payload は受理する。
+  const nulled = parseBridgeMessage(JSON.stringify({ ...validReliableData(), payload: null }));
+  expect(nulled.type).toBe("data");
+  // seq の有無は形式のみ検証し要否は Session 境界に委ねるため、欠落は受理する。
+  const omitted = parseBridgeMessage(JSON.stringify(validReliableData()));
+  expect(omitted.type).toBe("data");
+  if (omitted.type === "data" && "seq" in omitted) {
+    throw new Error("reliable 形状に seq が含まれないこと。");
+  }
+  const sequenced = parseBridgeMessage(JSON.stringify(validLatestData()));
+  expect(sequenced.type).toBe("data");
+  if (sequenced.type === "data" && "seq" in sequenced) {
+    expect(sequenced.seq).toBe(3);
+  } else {
+    throw new Error("latest 形状に seq が含まれること。");
+  }
+  const bad: unknown[] = [
+    // payload は存在必須（null は許可）。
+    { ...validReliableData(), payload: undefined },
+    { ...validReliableData(), payload: Number.NaN },
+    { ...validReliableData(), payload: () => {} },
+    { ...validLatestData(), payload: undefined },
+    // seq が存在する場合は 0 以上の安全な整数であること。
+    { ...validLatestData(), seq: -1 },
+    { ...validLatestData(), seq: 1.5 },
+    { ...validLatestData(), seq: "3" },
+    { ...validLatestData(), seq: null },
+    // 削除フィールド・未知キーは黙って受理しない。
+    { ...validReliableData(), kind: "reliable" },
+    { ...validLatestData(), kind: "latest" },
+    { ...validReliableData(), streamId: "main" },
+    { ...validReliableData(), window: 8 },
+    // 識別子の不足・書式不正。
+    { ...validReliableData(), connectionId: "" },
+    { ...validReliableData(), sessionId: "" },
+    { ...validReliableData(), sessionId: "../evil" },
+    { ...validReliableData(), sessionId: undefined },
     42,
     null,
     [],
   ];
   for (const raw of bad) {
-    let error: unknown;
-    try {
-      parseBridgeMessage(JSON.stringify(raw));
-    } catch (caught) {
-      error = caught;
-    }
+    const error = parseError(raw);
+    expect(error).toBeInstanceOf(ProtocolError);
+    expect((error as ProtocolError).code).toBe("INVALID_MESSAGE");
+  }
+});
+
+test("auth_ok の旧フィールドを拒否する", () => {
+  const bad: unknown[] = [
+    // 0.3 の auth_ok は requestId と connectionId のみ。旧 sessionId・window は拒否する。
+    { ...validAuthOk(), sessionId: "s" },
+    { ...validAuthOk(), window: 8 },
+    { v: PROTOCOL_VERSION, type: "auth_ok", requestId: "pair-1", sessionId: "s", window: 8 },
+    // 必須の欠落・書式不正。
+    { v: PROTOCOL_VERSION, type: "auth_ok", connectionId: "conn-1" },
+    { v: PROTOCOL_VERSION, type: "auth_ok", requestId: "pair-1" },
+    { ...validAuthOk(), requestId: "" },
+    { ...validAuthOk(), requestId: "a/b" },
+    { ...validAuthOk(), requestId: 42 },
+    { ...validAuthOk(), connectionId: "" },
+    { ...validAuthOk(), connectionId: 42 },
+  ];
+  for (const raw of bad) {
+    const error = parseError(raw);
+    expect(error).toBeInstanceOf(ProtocolError);
+    expect((error as ProtocolError).code).toBe("INVALID_MESSAGE");
+  }
+});
+
+test("pairing_start の余分なフィールドを拒否する", () => {
+  const bad: unknown[] = [
+    { v: PROTOCOL_VERSION, type: "pairing_start", sessionId: "s" },
+    { v: PROTOCOL_VERSION, type: "pairing_start", connectionId: "c" },
+    { v: PROTOCOL_VERSION, type: "pairing_start", window: 8 },
+  ];
+  for (const raw of bad) {
+    const error = parseError(raw);
     expect(error).toBeInstanceOf(ProtocolError);
     expect((error as ProtocolError).code).toBe("INVALID_MESSAGE");
   }
@@ -216,12 +343,7 @@ test("pairing_pending の不正値を拒否する", () => {
     { ...validPairingPending(), expiresInMs: "120000" },
   ];
   for (const raw of bad) {
-    let error: unknown;
-    try {
-      parseBridgeMessage(JSON.stringify(raw));
-    } catch (caught) {
-      error = caught;
-    }
+    const error = parseError(raw);
     expect(error).toBeInstanceOf(ProtocolError);
     expect((error as ProtocolError).code).toBe("INVALID_MESSAGE");
   }
@@ -237,19 +359,22 @@ test("pairing_pending の比較コード境界を受理する", () => {
   }
 });
 
-test("error の任意 sessionId/requestId が不正なら拒否し黙って省略しない", () => {
+test("error の任意 connectionId/requestId が不正なら拒否し黙って省略しない", () => {
   const bad: unknown[] = [
-    { v: PROTOCOL_VERSION, type: "error", code: "E", message: "m", sessionId: "" },
-    { v: PROTOCOL_VERSION, type: "error", code: "E", message: "m", sessionId: 42 },
+    { v: PROTOCOL_VERSION, type: "error", code: "E", message: "m", connectionId: "" },
+    { v: PROTOCOL_VERSION, type: "error", code: "E", message: "m", connectionId: 42 },
     {
       v: PROTOCOL_VERSION,
       type: "error",
       code: "E",
       message: "m",
-      sessionId: "x".repeat(129),
+      connectionId: "x".repeat(129),
     },
     { v: PROTOCOL_VERSION, type: "error", code: "E", message: "m", requestId: "" },
     { v: PROTOCOL_VERSION, type: "error", code: "E", message: "m", requestId: 42 },
+    // requestId はペアリング相関専用のため業務 ID の書式は拒否する。
+    { v: PROTOCOL_VERSION, type: "error", code: "E", message: "m", requestId: "a b" },
+    { v: PROTOCOL_VERSION, type: "error", code: "E", message: "m", requestId: "a/b" },
     {
       v: PROTOCOL_VERSION,
       type: "error",
@@ -257,14 +382,11 @@ test("error の任意 sessionId/requestId が不正なら拒否し黙って省�
       message: "m",
       requestId: "x".repeat(129),
     },
+    // 旧 sessionId は未知フィールドとして拒否する。
+    { v: PROTOCOL_VERSION, type: "error", code: "E", message: "m", sessionId: "s" },
   ];
   for (const raw of bad) {
-    let error: unknown;
-    try {
-      parseBridgeMessage(JSON.stringify(raw));
-    } catch (caught) {
-      error = caught;
-    }
+    const error = parseError(raw);
     expect(error).toBeInstanceOf(ProtocolError);
     expect((error as ProtocolError).code).toBe("INVALID_MESSAGE");
   }
@@ -312,17 +434,32 @@ test("JSON 化できない payload 値を検出する", () => {
 });
 
 test("送信変換が往復する", () => {
-  const message: BridgeMessage = {
+  const reliable: BridgeMessage = {
     v: PROTOCOL_VERSION,
-    type: "echo",
-    sessionId: "s",
-    streamId: "main",
-    kind: "reliable",
-    seq: 7,
-    requestId: "r",
+    type: "data",
+    connectionId: "conn-1",
+    sessionId: "main",
     payload: [1, 2, 3],
   };
-  expect(parseBridgeMessage(stringifyBridgeMessage(message))).toEqual(message);
+  expect(parseBridgeMessage(stringifyBridgeMessage(reliable))).toEqual(reliable);
+  const latest: BridgeMessage = {
+    v: PROTOCOL_VERSION,
+    type: "data",
+    connectionId: "conn-1",
+    sessionId: "pose",
+    seq: 7,
+    payload: [1, 2, 3],
+  };
+  expect(parseBridgeMessage(stringifyBridgeMessage(latest))).toEqual(latest);
+  const created: BridgeMessage = {
+    v: PROTOCOL_VERSION,
+    type: "create_session",
+    connectionId: "conn-1",
+    sessionId: "main",
+    kind: "reliable",
+    direction: "bidirectional",
+  };
+  expect(parseBridgeMessage(stringifyBridgeMessage(created))).toEqual(created);
 });
 
 test("ペアリング往復が変換できる", () => {
@@ -339,49 +476,10 @@ test("ペアリング往復が変換できる", () => {
   expect(parseBridgeMessage(stringifyBridgeMessage(pending))).toEqual(pending);
 });
 
-test("業務IDの空白・`/` は echo/command_request と error では受理する", () => {
-  for (const requestId of ["a b", "a/b"]) {
-    const echo = parseBridgeMessage(JSON.stringify({ ...validEcho(), requestId }));
-    expect(echo.type).toBe("echo");
-    if (echo.type === "echo") {
-      expect(echo.requestId).toBe(requestId);
-    }
-    const command = parseBridgeMessage(
-      JSON.stringify({ ...validEcho(), type: "command_request", command: "ping", requestId }),
-    );
-    expect(command.type).toBe("command_request");
-    const error = parseBridgeMessage(
-      JSON.stringify({ v: PROTOCOL_VERSION, type: "error", code: "E", message: "m", requestId }),
-    );
-    expect(error.type).toBe("error");
-    if (error.type === "error") {
-      expect(error.requestId).toBe(requestId);
-    }
-  }
-});
-
-test("業務IDの空白・`/` は pairing_pending/auth_ok では拒否する", () => {
-  for (const requestId of ["a b", "a/b"]) {
-    for (const raw of [
-      { ...validPairingPending(), requestId },
-      { v: PROTOCOL_VERSION, type: "auth_ok", requestId, sessionId: "s", window: 8 },
-    ]) {
-      let error: unknown;
-      try {
-        parseBridgeMessage(JSON.stringify(raw));
-      } catch (caught) {
-        error = caught;
-      }
-      expect(error).toBeInstanceOf(ProtocolError);
-      expect((error as ProtocolError).code).toBe("INVALID_MESSAGE");
-    }
-  }
-});
-
-test("error の sessionId/requestId の長さ境界・不正型・欠落を扱う", () => {
+test("error の connectionId/requestId の長さ境界・不正型・欠落を扱う", () => {
   // 境界受理: 1 文字と 128 文字。
   for (const id of ["x", "x".repeat(128)]) {
-    for (const field of ["sessionId", "requestId"] as const) {
+    for (const field of ["connectionId", "requestId"] as const) {
       const message = parseBridgeMessage(
         JSON.stringify({
           v: PROTOCOL_VERSION,
@@ -399,21 +497,14 @@ test("error の sessionId/requestId の長さ境界・不正型・欠落を扱�
   }
   // 境界拒否: 空文字・129 文字・非文字列は INVALID_MESSAGE。
   for (const id of ["", "x".repeat(129), 42, null]) {
-    for (const field of ["sessionId", "requestId"] as const) {
-      let error: unknown;
-      try {
-        parseBridgeMessage(
-          JSON.stringify({
-            v: PROTOCOL_VERSION,
-            type: "error",
-            code: "E",
-            message: "m",
-            [field]: id,
-          }),
-        );
-      } catch (caught) {
-        error = caught;
-      }
+    for (const field of ["connectionId", "requestId"] as const) {
+      const error = parseError({
+        v: PROTOCOL_VERSION,
+        type: "error",
+        code: "E",
+        message: "m",
+        [field]: id,
+      });
       expect(error).toBeInstanceOf(ProtocolError);
       expect((error as ProtocolError).code).toBe("INVALID_MESSAGE");
     }
@@ -424,7 +515,7 @@ test("error の sessionId/requestId の長さ境界・不正型・欠落を扱�
   );
   expect(omitted.type).toBe("error");
   if (omitted.type === "error") {
-    expect(omitted.sessionId).toBeUndefined();
+    expect(omitted.connectionId).toBeUndefined();
     expect(omitted.requestId).toBeUndefined();
   }
   const undefineded = parseBridgeMessage({
@@ -432,12 +523,12 @@ test("error の sessionId/requestId の長さ境界・不正型・欠落を扱�
     type: "error",
     code: "E",
     message: "m",
-    sessionId: undefined,
+    connectionId: undefined,
     requestId: undefined,
   });
   expect(undefineded.type).toBe("error");
   if (undefineded.type === "error") {
-    expect(undefineded.sessionId).toBeUndefined();
+    expect(undefineded.connectionId).toBeUndefined();
     expect(undefineded.requestId).toBeUndefined();
   }
 });

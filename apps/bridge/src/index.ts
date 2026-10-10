@@ -193,7 +193,7 @@ export function handleCommand(
           ? ""
           : ` acceptanceEndsAt=${new Date(acceptance.endsAt).toISOString()}`) +
         ` pairingSuccess=${stats.pairingSuccess} pairingFailure=${stats.pairingFailure} ` +
-        `echo=${stats.echoCount} command=${stats.commandCount}` +
+        `latestStored=${stats.latestStored} diagnosticEcho=${stats.diagnosticEcho} diagnosticPing=${stats.diagnosticPing}` +
         (rejections === "" ? "" : ` rejections:${rejections}`) +
         `\n`,
     );

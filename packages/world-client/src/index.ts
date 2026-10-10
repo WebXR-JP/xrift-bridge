@@ -7,16 +7,14 @@
  */
 
 export { BRIDGE_HOST, BRIDGE_PATH, parseBridgeEndpoint } from "./endpoint.ts";
-export { WorldClientError, createWorldClient } from "./client.ts";
+export { WorldClientError, createConnectionRequest } from "./client.ts";
+export type { ConnectOptions, ConnectionRequest, PairingInfo } from "./client.ts";
 export type {
-  ConnectOptions,
-  ConnectResult,
-  ConnectionState,
-  EchoResult,
-  PairingInfo,
-  Unsubscribe,
-  WorldClient,
-  WorldClientEvent,
-  WorldClientListener,
-  WorldClientOptions,
-} from "./client.ts";
+  CreateSessionOptions,
+  Session,
+  SessionDirection,
+  SessionEnd,
+  SessionKind,
+  SessionProvider,
+  ConnectionId,
+} from "./session.ts";

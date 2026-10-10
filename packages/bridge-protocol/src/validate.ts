@@ -11,17 +11,16 @@ import {
   PROTOCOL_VERSION,
   type AuthOkMessage,
   type BridgeMessage,
-  type CommandRequestMessage,
-  type CommandResponseMessage,
-  type CreditMessage,
+  type ConnectionId,
   type DataMessage,
-  type EchoMessage,
-  type EchoResponseMessage,
   type ErrorMessage,
   type PairingCode,
   type PairingPendingMessage,
   type PairingRequestId,
   type PairingStartMessage,
+  type SessionDirection,
+  type SessionId,
+  type SessionKind,
 } from "./messages.ts";
 
 /** 検証失敗の符号。 */
@@ -46,8 +45,8 @@ export class ProtocolError extends Error {
 /** 識別子に使える文字の上限。 */
 export const MAX_ID_LENGTH = 128;
 
-/** ストリーム識別子の書式。 */
-const STREAM_ID_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
+/** セッション識別子（論理名）の書式。 */
+const SESSION_ID_PATTERN = /^[A-Za-z0-9._-]{1,64}$/;
 
 /** 比較コードの書式。ASCII 数字のみで長さは `PAIRING_CODE_LENGTH` に従う。 */
 const PAIRING_CODE_PATTERN = new RegExp(`^[0-9]{${PAIRING_CODE_LENGTH}}$`);
@@ -136,6 +135,18 @@ function readVersion(value: Record<string, unknown>): string {
   return value["v"];
 }
 
+// ADR: 各種別の許可キーを明示し、削除済み・未知のキーを黙って受理しない。
+// `window`・`sessionId`（auth_ok の旧形）・`streamId`・`kind`（data に載せない）
+// などはここで拒否する。`data.seq` の要否（latest 必須・reliable 禁止）は
+// Session が `kind` を保持して判断するため、ここでは形式のみ検証する。
+function assertOnlyKeys(value: Record<string, unknown>, allowed: ReadonlySet<string>): void {
+  for (const key of Object.keys(value)) {
+    if (!allowed.has(key)) {
+      throw new ProtocolError("INVALID_MESSAGE", `未知のフィールドである: \`${key}\`。`);
+    }
+  }
+}
+
 function readId(value: Record<string, unknown>, field: string, pattern?: RegExp): string {
   const raw: unknown = value[field];
   if (typeof raw !== "string" || raw.length === 0 || raw.length > MAX_ID_LENGTH) {
@@ -148,6 +159,14 @@ function readId(value: Record<string, unknown>, field: string, pattern?: RegExp)
     throw new ProtocolError("INVALID_MESSAGE", `フィールド \`${field}\` の書式が不正である。`);
   }
   return raw;
+}
+
+function readConnectionId(value: Record<string, unknown>, field: string): ConnectionId {
+  return readId(value, field);
+}
+
+function readSessionId(value: Record<string, unknown>, field: string): SessionId {
+  return readId(value, field, SESSION_ID_PATTERN);
 }
 
 function readPairingCode(value: Record<string, unknown>, field: string): PairingCode {
@@ -165,7 +184,31 @@ function readPairingRequestId(value: Record<string, unknown>, field: string): Pa
   return readId(value, field, PAIRING_REQUEST_ID_PATTERN);
 }
 
-function readSeq(value: Record<string, unknown>): number {
+function readKind(value: Record<string, unknown>): SessionKind {
+  const raw: unknown = value["kind"];
+  if (raw !== "reliable" && raw !== "latest") {
+    throw new ProtocolError(
+      "INVALID_MESSAGE",
+      "フィールド `kind` は `reliable` または `latest` であること。",
+    );
+  }
+  return raw;
+}
+
+function readDirection(value: Record<string, unknown>): SessionDirection {
+  const raw: unknown = value["direction"];
+  if (raw !== "to_client" && raw !== "to_server" && raw !== "bidirectional") {
+    throw new ProtocolError(
+      "INVALID_MESSAGE",
+      "フィールド `direction` は `to_client`・`to_server`・`bidirectional` のいずれかであること。",
+    );
+  }
+  return raw;
+}
+
+// `data.seq` は存在する場合のみ形式を検証する。要否の判断は Session 境界に委ねる。
+function readOptionalSeq(value: Record<string, unknown>): number | undefined {
+  if (!("seq" in value) || value["seq"] === undefined) return undefined;
   const raw: unknown = value["seq"];
   if (
     typeof raw !== "number" ||
@@ -181,17 +224,6 @@ function readSeq(value: Record<string, unknown>): number {
   return raw;
 }
 
-function readKind(value: Record<string, unknown>): "reliable" | "latest" {
-  const raw: unknown = value["kind"];
-  if (raw !== "reliable" && raw !== "latest") {
-    throw new ProtocolError(
-      "INVALID_MESSAGE",
-      "フィールド `kind` は `reliable` または `latest` であること。",
-    );
-  }
-  return raw;
-}
-
 function readPayload(value: Record<string, unknown>): unknown {
   if (!("payload" in value) || !isJsonValue(value["payload"])) {
     throw new ProtocolError("INVALID_MESSAGE", "フィールド `payload` は JSON 値であること。");
@@ -199,18 +231,8 @@ function readPayload(value: Record<string, unknown>): unknown {
   return value["payload"];
 }
 
-function readOptionalPayload(value: Record<string, unknown>): unknown {
-  if (!("params" in value) && !("result" in value)) return undefined;
-  const raw: unknown = "params" in value ? value["params"] : value["result"];
-  if (raw === undefined) return undefined;
-  if (!isJsonValue(raw)) {
-    throw new ProtocolError("INVALID_MESSAGE", "任意フィールドは JSON 値であること。");
-  }
-  return raw;
-}
-
 /**
- * 受信した生データ（文字列または未知値）を v0.2 メッセージとして検証する。
+ * 受信した生データ（文字列または未知値）を v0.3 メッセージとして検証する。
  *
  * @param raw - WebSocket 受信値。文字列は JSON として構文解析する。
  * @returns 検証済みのメッセージ。
@@ -234,12 +256,17 @@ export function parseBridgeMessage(raw: unknown): BridgeMessage {
   const v = readVersion(value);
   switch (value["type"]) {
     case "pairing_start": {
+      assertOnlyKeys(value, new Set(["v", "type"]));
       return {
         v,
         type: "pairing_start",
       } satisfies PairingStartMessage;
     }
     case "pairing_pending": {
+      assertOnlyKeys(
+        value,
+        new Set(["v", "type", "requestId", "code", "expiresAt", "expiresInMs"]),
+      );
       return {
         v,
         type: "pairing_pending",
@@ -250,108 +277,56 @@ export function parseBridgeMessage(raw: unknown): BridgeMessage {
       } satisfies PairingPendingMessage;
     }
     case "auth_ok": {
-      const window = readWindow(value);
+      assertOnlyKeys(value, new Set(["v", "type", "requestId", "connectionId"]));
       return {
         v,
         type: "auth_ok",
         requestId: readPairingRequestId(value, "requestId"),
-        sessionId: readId(value, "sessionId"),
-        window,
+        connectionId: readConnectionId(value, "connectionId"),
       } satisfies AuthOkMessage;
     }
-    case "echo": {
-      return {
-        v,
-        type: "echo",
-        sessionId: readId(value, "sessionId"),
-        streamId: readId(value, "streamId", STREAM_ID_PATTERN),
-        kind: readReliable(value),
-        seq: readSeq(value),
-        requestId: readId(value, "requestId"),
-        payload: readPayload(value),
-      } satisfies EchoMessage;
-    }
-    case "echo_response": {
-      return {
-        v,
-        type: "echo_response",
-        sessionId: readId(value, "sessionId"),
-        streamId: readId(value, "streamId", STREAM_ID_PATTERN),
-        kind: readReliable(value),
-        seq: readSeq(value),
-        requestId: readId(value, "requestId"),
-        payload: readPayload(value),
-      } satisfies EchoResponseMessage;
-    }
-    case "command_request": {
-      const message: CommandRequestMessage = {
-        v,
-        type: "command_request",
-        sessionId: readId(value, "sessionId"),
-        streamId: readId(value, "streamId", STREAM_ID_PATTERN),
-        kind: readReliable(value),
-        seq: readSeq(value),
-        requestId: readId(value, "requestId"),
-        command: readId(value, "command"),
-      };
-      const params = readOptionalPayload(value);
-      return params === undefined ? message : { ...message, params };
-    }
-    case "command_response": {
-      if (typeof value["ok"] !== "boolean") {
-        throw new ProtocolError("INVALID_MESSAGE", "フィールド `ok` は真偽値であること。");
-      }
-      const message: CommandResponseMessage = {
-        v,
-        type: "command_response",
-        sessionId: readId(value, "sessionId"),
-        requestId: readId(value, "requestId"),
-        ok: value["ok"],
-      };
-      if ("result" in value && value["result"] !== undefined) {
-        if (!isJsonValue(value["result"])) {
-          throw new ProtocolError("INVALID_MESSAGE", "フィールド `result` は JSON 値であること。");
+    case "create_session": {
+      assertOnlyKeys(
+        value,
+        new Set(["v", "type", "connectionId", "sessionId", "kind", "direction"]),
+      );
+      const connectionId = readConnectionId(value, "connectionId");
+      const sessionId = readSessionId(value, "sessionId");
+      const kind = readKind(value);
+      const direction = readDirection(value);
+      // ADR: `kind` と `direction` の組合せは型でも表すが、外部入力はここで
+      // 検証する。reliable は双方向のみ、latest は一方向のみである。
+      if (kind === "reliable") {
+        if (direction !== "bidirectional") {
+          throw new ProtocolError(
+            "INVALID_MESSAGE",
+            "reliable セッションの `direction` は `bidirectional` であること。",
+          );
         }
-        return { ...message, result: value["result"] };
+        return { v, type: "create_session", connectionId, sessionId, kind, direction };
       }
-      if ("error" in value && value["error"] !== undefined) {
-        if (
-          !isRecord(value["error"]) ||
-          typeof value["error"]["code"] !== "string" ||
-          typeof value["error"]["message"] !== "string"
-        ) {
-          throw new ProtocolError("INVALID_MESSAGE", "フィールド `error` は符号と説明を持つこと。");
-        }
-        return {
-          ...message,
-          error: {
-            code: value["error"]["code"],
-            message: value["error"]["message"],
-          },
-        };
+      if (direction === "bidirectional") {
+        throw new ProtocolError(
+          "INVALID_MESSAGE",
+          "latest セッションの `direction` は `to_client` または `to_server` であること。",
+        );
       }
-      return message;
+      return { v, type: "create_session", connectionId, sessionId, kind, direction };
     }
     case "data": {
-      return {
+      assertOnlyKeys(value, new Set(["v", "type", "connectionId", "sessionId", "payload", "seq"]));
+      const seq = readOptionalSeq(value);
+      const base = {
         v,
         type: "data",
-        sessionId: readId(value, "sessionId"),
-        streamId: readId(value, "streamId", STREAM_ID_PATTERN),
-        kind: readKind(value),
-        seq: readSeq(value),
+        connectionId: readConnectionId(value, "connectionId"),
+        sessionId: readSessionId(value, "sessionId"),
         payload: readPayload(value),
-      } satisfies DataMessage;
-    }
-    case "credit": {
-      return {
-        v,
-        type: "credit",
-        sessionId: readId(value, "sessionId"),
-        limit: readCount(value, "limit"),
-      } satisfies CreditMessage;
+      } as const;
+      return (seq === undefined ? { ...base } : { ...base, seq }) satisfies DataMessage;
     }
     case "error": {
+      assertOnlyKeys(value, new Set(["v", "type", "code", "message", "connectionId", "requestId"]));
       if (
         typeof value["code"] !== "string" ||
         value["code"].length === 0 ||
@@ -365,33 +340,21 @@ export function parseBridgeMessage(raw: unknown): BridgeMessage {
         code: value["code"],
         message: value["message"],
       };
-      // ADR: 任意の sessionId/requestId は存在すれば検証し、不正な値を黙って
+      // ADR: 任意の connectionId/requestId は存在すれば検証し、不正な値を黙って
       // 省略しない。`undefined` は JSON 往復で消えるため欠落として扱う。
-      // `error.requestId` は業務相関ID（汎用 `RequestId`）とペアリングID
-      // （`PairingRequestId`）の両方を運ぶため、共通フィールドでは文字列・
-      // 長さ1〜128のみを検証し、ドメインは処理文脈で判断する。
-      const withSession =
-        "sessionId" in value && value["sessionId"] !== undefined
-          ? { ...message, sessionId: readId(value, "sessionId") }
+      // `error.requestId` はペアリング相関専用であり業務相関には使わないため、
+      // ペアリング要求 ID の書式で検証する。
+      const withConnection =
+        "connectionId" in value && value["connectionId"] !== undefined
+          ? { ...message, connectionId: readConnectionId(value, "connectionId") }
           : message;
       return "requestId" in value && value["requestId"] !== undefined
-        ? { ...withSession, requestId: readId(value, "requestId") }
-        : withSession;
+        ? { ...withConnection, requestId: readPairingRequestId(value, "requestId") }
+        : withConnection;
     }
     default:
       throw new ProtocolError("UNKNOWN_TYPE", `未知のメッセージ種別である: ${value["type"]}`);
   }
-}
-
-function readReliable(value: Record<string, unknown>): "reliable" {
-  if (value["kind"] !== "reliable") {
-    throw new ProtocolError("INVALID_MESSAGE", "この種別は `kind: reliable` のみ扱う。");
-  }
-  return "reliable";
-}
-
-function readWindow(value: Record<string, unknown>): number {
-  return readCount(value, "window");
 }
 
 /** 累積付与などの件数を 0 以上の安全な整数として読む。 */
@@ -431,7 +394,7 @@ function readPositiveCount(value: Record<string, unknown>, field: string): numbe
 /**
  * 送信メッセージを wire 形式の文字列へ変換する。
  *
- * @param message - 送信する v0.2 メッセージ。
+ * @param message - 送信する v0.3 メッセージ。
  * @returns JSON 文字列。`payload` 等は JSON 値であることが前提。
  */
 export function stringifyBridgeMessage(message: BridgeMessage): string {

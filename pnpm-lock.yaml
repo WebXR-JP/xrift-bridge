@@ -339,6 +339,19 @@ importers:
         version: 1.0.0(@types/node@24.19.1)(@vitest/ui@5.0.1)(happy-dom@20.14.5)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1)
 
   packages/bridge-protocol:
+    dependencies:
+      '@chainsafe/libp2p-yamux':
+        specifier: 8.0.1
+        version: 8.0.1
+      '@libp2p/interface':
+        specifier: 3.3.0
+        version: 3.3.0
+      '@libp2p/utils':
+        specifier: 7.4.1
+        version: 7.4.1
+      uint8arraylist:
+        specifier: 3.0.2
+        version: 3.0.2
     devDependencies:
       '@types/node':
         specifier: 'catalog:'

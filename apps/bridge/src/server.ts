@@ -2,10 +2,14 @@
  * PC上で動く中継（WebSocket サーバ）。
  *
  * `127.0.0.1` に明示 bind し、`0.0.0.0`/`::` には bind しない。昇格前の検証、
- * 受付モード中の比較コード方式による認可（開始待ち→承認待ち→認可）、認可後の
- * echo 応答、流れ制御の枠組み（有限キュー、クレジット、latest 受信箱、
- * 制御優先の配送順、最大長、切断時破棄）を担う。
+ * 受付モード中の比較コード方式による認可（開始待ち→承認待ち→切替→認可）、
+ * 認可後の同一 WS 上での yamux Connection と Session（`data` 一本化）を担う。
  * 上位層（AI 連携・RPC・プラグイン）は扱わない。
+ *
+ * 認可前は text（`pairing_start`・`pairing_pending`・`auth_ok`・`error`）だけを
+ * 扱い、認可後は binary の mux だけを扱う。受信入口は一つにし、状態
+ * （認可前 text／切替中／mux／closing）で分ける。承認時に `auth_ok` を text で
+ * 送り、その完了（`ws.send` callback）で mux を開始する。
  *
  * 比較コードは両画面への表示と照合にだけ使い、構造化ログ・URL・永続保存・
  * 診断 JSON には出さない。承認操作はローカル管理境界だけに置き、
@@ -13,17 +17,18 @@
  *
  * @packageDocumentation
  */
-import { randomUUID } from "node:crypto";
 import {
   PROTOCOL_VERSION,
   ProtocolError,
   parseBridgeMessage,
   stringifyBridgeMessage,
   type BridgeToClientMessage,
-  type StreamId,
+  type SessionId,
 } from "bridge-protocol";
+import type { TimerScheduler } from "bridge-protocol/transport";
 import { resolveLimits, type BridgeLimits } from "./config.ts";
-import { AuthorizedSession, type AuthorizedSessionHost } from "./authorized-session.ts";
+import { AuthorizedConnection } from "./authorized-connection.ts";
+import { NodeWsSocket } from "./node-socket.ts";
 import { defaultLogger, logEvent, type BridgeLogger } from "./log.ts";
 import { systemClock, type Clock } from "./clock.ts";
 import { AcceptanceController, PairingRateLimiter, PairingStore } from "./pairing.ts";
@@ -54,13 +59,6 @@ export interface BridgeOptions {
   readonly allowedOrigins: readonly string[];
   /** 流れ制御・制限の暫定値の上書き。 */
   readonly limits?: Partial<BridgeLimits>;
-  /**
-   * 送信処理の差し替え点。未指定なら WebSocket へ直接送る。
-   *
-   * 応答の保持容量は完了通知で解放するため、差し替え実装も完了・失敗の
-   * いずれかで必ず一度だけ `done` を呼ぶこと。
-   */
-  readonly transport?: BridgeTransport;
   /** 構造化ログの出力先。 */
   readonly logger?: BridgeLogger;
   /**
@@ -81,6 +79,12 @@ export interface BridgeOptions {
    * 製品の API や CLI に固定コード機能は設けない。
    */
   readonly generateCode?: () => string;
+  /**
+   * keepalive 等のタイマー実装。省略時は環境のタイマーを使う。
+   *
+   * 試験で時間を手で進める場合に差し替える。
+   */
+  readonly scheduler?: TimerScheduler;
 }
 
 /** 計測の土台になる動作カウンタ。 */
@@ -91,17 +95,22 @@ export interface BridgeStats {
   readonly pairingSuccess: number;
   /** 認可前の終端拒否・承認失敗の数。 */
   readonly pairingFailure: number;
-  readonly echoCount: number;
-  readonly commandCount: number;
   readonly latestStored: number;
   readonly latestDropped: number;
-  readonly queueFull: number;
+  readonly diagnosticEcho: number;
+  readonly diagnosticPing: number;
   /** 拒否・失敗の理由別集計。upgrade 拒否とペアリング失敗の符号を数える。 */
   readonly rejectionsByReason: Readonly<Record<string, number>>;
 }
 
-/** 接続の認可段階。認可を独立 bool にせず段階で表す。 */
-export type ConnectionPhase = "awaiting_start" | "pending" | "authorized" | "closing" | "closed";
+/** 接続の認可段階。切替中は `auth_ok` 送出から mux 開始までの間である。 */
+export type ConnectionPhase =
+  | "awaiting_start"
+  | "pending"
+  | "switching"
+  | "authorized"
+  | "closing"
+  | "closed";
 
 /** 接続単位の公開情報。比較コードとは無関係。 */
 export interface ConnectionInfo {
@@ -240,16 +249,17 @@ export interface BridgeServer {
   /**
    * 指定接続だけを切断する。
    *
-   * 切断後は当該接続の業務メッセージを受理せず、認可・キュー・未完了状態を
-   * 破棄する。待ち受けと他接続は維持する。close は `1008`・固定 reason
+   * 切断後は当該接続の業務メッセージを受理せず、認可状態を破棄する。
+   * 待ち受けと他接続は維持する。close は `1008`・固定 reason
    * `operator disconnect` とし、応答しない相手は有限時間で強制終了する。
+   * 排出待ちはせず即時に閉じる。未決着送信の拒否は transport（B2/B3）に委ねる。
    *
    * @param connectionId - `listConnections` で得た接続ID。
    * @throws `RangeError` — 不明な接続IDの場合。全接続切断へは fallback しない。
    */
   disconnectConnection(connectionId: string): void;
   /** 直近に受信した latest 値。未受信なら `undefined`。 */
-  getLatest(streamId: StreamId): unknown;
+  getLatest(sessionId: SessionId): unknown;
   /** 動作カウンタの写し。 */
   getStats(): BridgeStats;
   /** 全接続を閉じて待ち受けを止める。 */
@@ -263,48 +273,21 @@ interface ConnectionState {
   phase: ConnectionPhase;
   /** `closing` に入る直前に認可済みだったか。枠会計用。 */
   closingWasAuthorized: boolean;
-  sessionId: string | null;
   pendingRequestId: string | null;
   startTimer: ReturnType<typeof setTimeout> | null;
   expiryTimer: ReturnType<typeof setTimeout> | null;
   forceTimer: ReturnType<typeof setTimeout> | null;
   operatorDisconnected: boolean;
   /**
-   * 認可後の受信セッション。`authorized` と有無は一致する。
-   * 会計・採番・業務分岐の所有者はセッションであり、送出・切断の実体はサーバ側に置く。
+   * 切替中に届いた正規 binary の保持（受信順）。mux 開始後に順序どおり戻す。
+   * 切替中以外では空である。
    */
-  session: AuthorizedSession | null;
-  controlQueue: string[];
-  responseQueue: Array<{ readonly text: string; readonly bytes: number }>;
-  queuedBytes: number;
-  flushScheduled: boolean;
+  pendingBinary: Uint8Array[];
+  /** 認可後の mux 包み。`authorized` と有無は一致する。 */
+  authorizedConnection: AuthorizedConnection | null;
+  /** mux 用の binary 適合。`switching`・`authorized` で使う。 */
+  rawSocket: NodeWsSocket | null;
 }
-
-/**
- * ブリッジ→クライアント方向の送信を担う境界。
- *
- * 既定では WebSocket へ直接送り、書出し完了（または失敗）を `done` で返す。
- * 内部試験では完了通知の保留・解放を操作するために差し替える。
- */
-export interface BridgeTransport {
-  /**
-   * フレームを送る。
-   *
-   * @param socket - 送信先の接続ソケット。
-   * @param text - wire 形式のメッセージ。
-   * @param done - 書出し完了時は `null`、失敗時は理由で一度だけ呼ぶ。
-   */
-  send(socket: WebSocket, text: string, done: (error: Error | null) => void): void;
-}
-
-/** 既定の送信処理。WebSocket へ直接送る。 */
-const defaultTransport: BridgeTransport = {
-  send: (socket, text, done) => {
-    socket.send(text, (error?: Error) => {
-      done(error ?? null);
-    });
-  },
-};
 
 /** 運用切断の固定 reason。 */
 export const OPERATOR_DISCONNECT_REASON = "operator disconnect";
@@ -334,20 +317,23 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
   }
   const allowedOrigins = new Set(options.allowedOrigins.map(parseAllowedOrigin));
   const limits = resolveLimits(options.limits);
-  const transport = options.transport ?? defaultTransport;
   const logger: BridgeLogger = options.logger ?? defaultLogger;
   const clock: Clock =
     options.clock ??
     (options.now === undefined
       ? systemClock
       : { now: options.now, monotonic: () => systemClock.monotonic() });
+  const scheduler: TimerScheduler | undefined = options.scheduler;
   const acceptance = new AcceptanceController({ limits, clock });
   const rateLimiter = new PairingRateLimiter({ limits, clock });
-  const latestMailbox = new Map<StreamId, { seq: number; payload: unknown }>();
+  // ADR: `latestMailbox` は接続をまたぐサーバ全体の記録であり、切断で消さない。
+  // 論理名（SessionId）キーで最新値を保持する。
+  const latestMailbox = new Map<SessionId, unknown>();
   const connections = new Set<ConnectionState>();
   const managementListeners = new Set<ManagementListener>();
   // ADR: 接続IDはプロセス内で単調に払い出し再利用しない。認証前にも付与し、
-  // 比較コードやワールドIDとは無関係の管理用識別子として扱う。
+  // 比較コードやワールドIDとは無関係の管理用識別子であり、認可後は wire の
+  // `connectionId` としても使う（Connection 単位認可）。
   let nextConnectionSeq = 1;
   // upgrade 許可から接続登録までの同時 upgrade で上限を超えないための予約数。
   let pendingUpgrades = 0;
@@ -391,22 +377,20 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
     upgradeRejected: number;
     pairingSuccess: number;
     pairingFailure: number;
-    echoCount: number;
-    commandCount: number;
     latestStored: number;
     latestDropped: number;
-    queueFull: number;
+    diagnosticEcho: number;
+    diagnosticPing: number;
     rejectionsByReason: Record<string, number>;
   } = {
     connectionsAccepted: 0,
     upgradeRejected: 0,
     pairingSuccess: 0,
     pairingFailure: 0,
-    echoCount: 0,
-    commandCount: 0,
     latestStored: 0,
     latestDropped: 0,
-    queueFull: 0,
+    diagnosticEcho: 0,
+    diagnosticPing: 0,
     rejectionsByReason: {},
   };
 
@@ -461,7 +445,7 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
   const wss = new WebSocketServer({
     host,
     port: options.port,
-    maxPayload: limits.maxMessageBytes,
+    maxPayload: limits.maxWebSocketMessageBytes,
     verifyClient: (info, done) => {
       // 1. 接続前検証（loopback・endpoint 一致・Origin 完全一致）。
       const verdict = verifyUpgrade(
@@ -523,7 +507,7 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
   });
 
   // 受付クローズの drain（サーバの責務）。開始待ち・承認待ちを終了し、
-  // 認可済みは対象外にする。承認と閉は同期的に直列化する。
+  // 切替中・認可済みは対象外にする。承認と閉は同期的に直列化する。
   acceptance.onClose(() => {
     for (const state of [...connections]) {
       if (state.phase === "awaiting_start") {
@@ -560,24 +544,20 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
       origin,
       phase: "awaiting_start",
       closingWasAuthorized: false,
-      sessionId: null,
       pendingRequestId: null,
       startTimer: null,
       expiryTimer: null,
       forceTimer: null,
       operatorDisconnected: false,
-      session: null,
-      controlQueue: [],
-      responseQueue: [],
-      queuedBytes: 0,
-      flushScheduled: false,
+      pendingBinary: [],
+      authorizedConnection: null,
+      rawSocket: null,
     };
     connections.add(state);
     stats.connectionsAccepted += 1;
     logger(logEvent("connection_accepted", { connectionId: state.id, origin }));
 
-    // awaiting_start の期限。ペアリング制御はクレジットを消費せず、
-    // 認可前の credit はゼロのままである。
+    // awaiting_start の期限。
     state.startTimer = setTimeout(() => {
       state.startTimer = null;
       if (state.phase === "awaiting_start") {
@@ -591,13 +571,25 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
     }, limits.pairingStartTimeoutMs);
     state.startTimer.unref?.();
 
-    socket.on("message", (data: RawData) => {
-      handleMessage(state, rawToText(data));
+    // ADR: 受信入口は一つにし、`isBinary` で text/binary を分ける。
+    // `typeof data` では判別しない（text も Buffer で届く）。
+    socket.on("message", (data: RawData, isBinary: boolean) => {
+      handleSocketMessage(state, data, isBinary);
     });
     socket.on("close", (code: number, reason: Buffer) => {
-      const wasAuthorized = state.phase === "authorized";
+      const wasAuthorized = state.phase === "authorized" || state.phase === "switching";
+      // 切替中の保持は破棄し、認可は失効する。
+      if (state.authorizedConnection !== null) {
+        const conn = state.authorizedConnection;
+        state.authorizedConnection = null;
+        try {
+          conn.terminate(new Error("ws closed"));
+        } catch {
+          // 終端の失敗は無視する。
+        }
+      }
+      state.pendingBinary.length = 0;
       cleanupConnection(state, "disconnected");
-      // 切断で認可は失効する。待ち行列と未完了は破棄済みである。
       logger(
         logEvent("connection_closed", {
           code,
@@ -611,181 +603,21 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
     });
   });
 
-  function rawToText(data: RawData): string | null {
+  /** text 受信値を文字列へ復元する（認可前専用）。 */
+  function rawToText(data: RawData): string {
     if (typeof data === "string") return data;
     if (Buffer.isBuffer(data)) return data.toString("utf-8");
     if (Array.isArray(data)) return Buffer.concat(data).toString("utf-8");
-    return Buffer.from(data).toString("utf-8");
+    return Buffer.from(data as ArrayBuffer).toString("utf-8");
   }
 
-  function enqueueControl(state: ConnectionState, message: BridgeToClientMessage): void {
-    state.controlQueue.push(stringifyBridgeMessage(message));
-    scheduleFlush(state);
-  }
-
-  function enqueueResponse(state: ConnectionState, text: string): boolean {
-    // ADR: 容量は UTF-8 バイトで計上する。`text.length`（UTF-16 単位）では
-    // 多バイト文字の超過を見逃すため `Buffer.byteLength` で統一する。
-    const bytes = Buffer.byteLength(text, "utf8");
-    if (
-      state.responseQueue.length >= limits.maxReliableQueueMessages ||
-      state.queuedBytes + bytes > limits.maxReliableQueueBytes
-    ) {
-      stats.queueFull += 1;
-      logger(logEvent("queue_full", {}));
-      return false;
-    }
-    state.responseQueue.push({ text, bytes });
-    state.queuedBytes += bytes;
-    scheduleFlush(state);
-    return true;
-  }
-
-  function scheduleFlush(state: ConnectionState): void {
-    if (state.flushScheduled) return;
-    state.flushScheduled = true;
-    queueMicrotask(() => {
-      state.flushScheduled = false;
-      flush(state);
-    });
-  }
-
-  function flush(state: ConnectionState): void {
-    if (state.socket.readyState !== WebSocket.OPEN) {
-      state.controlQueue.length = 0;
-      state.responseQueue.length = 0;
-      state.queuedBytes = 0;
-      return;
-    }
-    // 制御を優先し、応答は FIFO で流す（B1 の最小配送順）。
-    let next = state.controlQueue.shift();
-    let responseBytes = 0;
-    let isResponse = false;
-    if (next === undefined) {
-      const entry = state.responseQueue.shift();
-      if (entry !== undefined) {
-        next = entry.text;
-        responseBytes = entry.bytes;
-        isResponse = true;
-      }
-    }
-    if (next === undefined) {
-      return;
-    }
-    // ADR: 送信キューからの取出しでは容量を解放しない。未送信応答と送信中応答を
-    // 容量に含め、書出し完了の通知で枠と保持バイトを解放する。通知と送信の交差は
-    // 累積付与で安全にするため、完了前の追加付与は解放時の advertise に任せ、
-    // ここでは送らない。
-    let settled = false;
-    try {
-      transport.send(state.socket, next, (error) => {
-        // 差し替え境界の多重通知では二重解放しない。
-        if (settled) return;
-        settled = true;
-        if (error !== null) {
-          // 送信失敗は切断として扱い、残りは破棄する。
-          state.controlQueue.length = 0;
-          state.responseQueue.length = 0;
-          state.queuedBytes = 0;
-          terminateWithClose(state, 1011, "send failure");
-          return;
-        }
-        if (isResponse) {
-          state.queuedBytes = Math.max(0, state.queuedBytes - responseBytes);
-          state.session?.releaseHold();
-        }
-      });
-    } catch {
-      // 送信失敗は切断として扱い、残りは破棄する。
-      state.controlQueue.length = 0;
-      state.responseQueue.length = 0;
-      state.queuedBytes = 0;
-      terminateWithClose(state, 1011, "send failure");
-      return;
-    }
-    if (state.controlQueue.length > 0 || state.responseQueue.length > 0) {
-      scheduleFlush(state);
-      return;
-    }
-  }
-
-  /**
-   * 認可後セッションが使う小さな操作を束ねる。`ConnectionState` 全体は渡さない。
-   *
-   * 送出・切断・記録の実体はサーバ側に置き、セッションは状態と判定・会計だけを持つ。
-   * `latestMailbox` は接続をまたぐサーバ全体の記録であり、所有は移さず
-   * 書き込み操作だけを渡す。
-   */
-  function createAuthorizedHost(state: ConnectionState): AuthorizedSessionHost {
-    return {
-      isAuthorized: () => state.phase === "authorized",
-      enqueueResponse: (text) => enqueueResponse(state, text),
-      sendError: (code, message, requestId?, direct = false) =>
-        sendError(state, code, message, requestId, direct),
-      terminate: (code, message, requestId) => terminateConnection(state, code, message, requestId),
-      terminateWithClose: (code, reason) => terminateWithClose(state, code, reason),
-      notifyCredit: (limit) => {
-        if (state.phase !== "authorized") return;
-        try {
-          state.socket.send(
-            stringifyBridgeMessage({
-              v: PROTOCOL_VERSION,
-              type: "credit",
-              sessionId: state.sessionId ?? "",
-              limit,
-            }),
-          );
-        } catch {
-          terminateWithClose(state, 1011, "send failure");
-        }
-      },
-      recordEcho: () => {
-        stats.echoCount += 1;
-      },
-      recordCommand: () => {
-        stats.commandCount += 1;
-      },
-      recordLatestDropped: () => {
-        stats.latestDropped += 1;
-      },
-      storeLatest: (streamId, seq, payload: unknown) => {
-        stats.latestStored += 1;
-        latestMailbox.set(streamId, { seq, payload });
-      },
-    };
-  }
-
-  function sendError(
-    state: ConnectionState,
-    code: string,
-    message: string,
-    requestId?: string,
-    direct = false,
-  ): void {
-    const text = stringifyBridgeMessage({
-      v: PROTOCOL_VERSION,
-      type: "error",
-      code,
-      message,
-      ...(state.sessionId === null ? {} : { sessionId: state.sessionId }),
-      ...(requestId === undefined ? {} : { requestId }),
-    } satisfies BridgeToClientMessage);
-    if (direct) {
-      try {
-        state.socket.send(text);
-      } catch {
-        // 閉塞中の送信失敗は無視する。
-      }
-      return;
-    }
-    enqueueControl(state, {
-      v: PROTOCOL_VERSION,
-      type: "error",
-      code,
-      message,
-      ...(state.sessionId === null ? {} : { sessionId: state.sessionId }),
-      ...(requestId === undefined ? {} : { requestId }),
-    });
+  /** binary 受信値を複写した `Uint8Array` へ変換する。 */
+  function rawToBytes(data: RawData): Uint8Array {
+    if (typeof data === "string") return new TextEncoder().encode(data);
+    if (Buffer.isBuffer(data)) return new Uint8Array(data);
+    if (Array.isArray(data)) return new Uint8Array(Buffer.concat(data));
+    const view = data as ArrayBuffer;
+    return new Uint8Array(view.slice(0));
   }
 
   function closeSocket(state: ConnectionState, code: number, reason: string): void {
@@ -814,11 +646,32 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
     state.forceTimer.unref?.();
   }
 
+  /** 認可前の明示エラーを text で送る。送出失敗は無視する。 */
+  function sendPreAuthError(
+    state: ConnectionState,
+    code: string,
+    message: string,
+    requestId: string | undefined,
+  ): void {
+    const text = stringifyBridgeMessage({
+      v: PROTOCOL_VERSION,
+      type: "error",
+      code,
+      message,
+      ...(requestId === undefined ? {} : { requestId }),
+    } satisfies BridgeToClientMessage);
+    try {
+      state.socket.send(text);
+    } catch {
+      // 閉塞中の送信失敗は無視する。
+    }
+  }
+
   /**
    * 終端エラー付きで接続を閉塞状態へ移す。冪等であり、配送失敗でも巻き戻さない。
    *
-   * 認可前は sessionId を含めず、ペアリングエラーには `PairingRequestId`、
-   * 業務エラーには受信した業務 `requestId` をそのまま載せる。
+   * 認可前は `error` を text で送ってから `1008` で閉じる。切替中・認可後の
+   * binary 相では text を送らず `1008` で閉じる（binary 列を汚さない）。
    * 物理切断まで枠を保持する。
    */
   function terminateConnection(
@@ -828,7 +681,7 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
     requestId: string | undefined,
   ): void {
     if (state.phase === "closing" || state.phase === "closed") return;
-    const wasAuthorized = state.phase === "authorized";
+    const wasAuthorized = state.phase === "authorized" || state.phase === "switching";
     state.closingWasAuthorized = wasAuthorized;
     const hadPending = state.phase === "pending" ? state.pendingRequestId : null;
     state.phase = "closing";
@@ -840,9 +693,17 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
       clearTimeout(state.expiryTimer);
       state.expiryTimer = null;
     }
-    state.controlQueue.length = 0;
-    state.responseQueue.length = 0;
-    state.queuedBytes = 0;
+    state.pendingBinary.length = 0;
+    if (state.authorizedConnection !== null) {
+      const conn = state.authorizedConnection;
+      state.authorizedConnection = null;
+      try {
+        conn.terminate(new Error(code));
+      } catch {
+        // 終端の失敗は無視する。
+      }
+    }
+    state.rawSocket = null;
     if (!wasAuthorized) {
       stats.pairingFailure += 1;
       countRejection(code);
@@ -854,19 +715,21 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
       emitManagement({ kind: "pending-ended", requestId: hadPending, reason: code });
       state.pendingRequestId = null;
     }
-    sendError(state, code, message, requestId, true);
-    closeSocket(state, 1008, code);
+    if (!wasAuthorized) {
+      sendPreAuthError(state, code, message, requestId);
+    }
+    closeSocket(state, 1008, wasAuthorized ? code : code);
     armForceClose(state);
   }
 
   /**
-   * 認可後の送信失敗・容量超過などで閉塞へ移す（枠は物理切断まで保持）。
+   * 認可後の送信失敗・mux 異常などで閉塞へ移す（枠は物理切断まで保持）。
    *
    * 受信処理を止め、応答しない相手は有限時間で強制終了する。
    */
   function terminateWithClose(state: ConnectionState, code: number, reason: string): void {
     if (state.phase === "closing" || state.phase === "closed") return;
-    state.closingWasAuthorized = state.phase === "authorized";
+    state.closingWasAuthorized = state.phase === "authorized" || state.phase === "switching";
     state.phase = "closing";
     if (state.startTimer !== null) {
       clearTimeout(state.startTimer);
@@ -876,6 +739,17 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
       clearTimeout(state.expiryTimer);
       state.expiryTimer = null;
     }
+    state.pendingBinary.length = 0;
+    if (state.authorizedConnection !== null) {
+      const conn = state.authorizedConnection;
+      state.authorizedConnection = null;
+      try {
+        conn.terminate(new Error(reason));
+      } catch {
+        // 終端の失敗は無視する。
+      }
+    }
+    state.rawSocket = null;
     closeSocket(state, code, reason);
     armForceClose(state);
   }
@@ -904,25 +778,24 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
       pairing.remove(requestId);
       emitManagement({ kind: "pending-ended", requestId, reason });
     }
-    state.controlQueue.length = 0;
-    state.responseQueue.length = 0;
-    state.queuedBytes = 0;
+    state.pendingBinary.length = 0;
+    state.authorizedConnection = null;
+    state.rawSocket = null;
     state.phase = "closed";
-    state.sessionId = null;
-    state.session = null;
     connections.delete(state);
   }
 
   /**
    * 運用指示で指定接続だけを切断する。
    *
-   * 当該接続の業務受理を止め、認可・キュー・未完了状態を破棄して `1008` で
-   * 閉じる。待ち受けと他接続は維持する。応答しない相手は有限時間で強制終了する。
+   * 当該接続の業務受理を止め、認可状態を破棄して `1008` で閉じる。
+   * 待ち受けと他接続は維持する。排出待ちはせず即時に閉じ、
+   * 応答しない相手は有限時間で強制終了する。
    */
   function operatorDisconnect(state: ConnectionState): void {
     if (state.phase === "closing" || state.phase === "closed" || state.operatorDisconnected) return;
     state.operatorDisconnected = true;
-    state.closingWasAuthorized = state.phase === "authorized";
+    state.closingWasAuthorized = state.phase === "authorized" || state.phase === "switching";
     const hadPending = state.phase === "pending" ? state.pendingRequestId : null;
     state.phase = "closing";
     if (state.startTimer !== null) {
@@ -942,49 +815,78 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
       });
       state.pendingRequestId = null;
     }
-    state.controlQueue.length = 0;
-    state.responseQueue.length = 0;
-    state.queuedBytes = 0;
-    state.sessionId = null;
-    // 認可ごとのセッションを捨てることで会計・採番も作り直しになる。
-    state.session = null;
+    state.pendingBinary.length = 0;
+    if (state.authorizedConnection !== null) {
+      const conn = state.authorizedConnection;
+      state.authorizedConnection = null;
+      state.rawSocket = null;
+      try {
+        conn.disconnect(OPERATOR_DISCONNECT_REASON);
+      } catch {
+        // 切断の失敗は無視する。
+      }
+      logger(logEvent("operator_disconnect", { connectionId: state.id }));
+      return;
+    }
+    state.rawSocket = null;
     logger(logEvent("operator_disconnect", { connectionId: state.id }));
     closeSocket(state, 1008, OPERATOR_DISCONNECT_REASON);
     armForceClose(state);
   }
 
-  function handleMessage(state: ConnectionState, text: string | null): void {
-    if (text === null) return;
-    // ADR: 受信上限は `ws` の `maxPayload`（UTF-8 の JSON テキストのバイト数、
-    // 分割フレーム合算）に委ね、超過時は close 1009 で通知する。JSON の
-    // `MESSAGE_TOO_LARGE` や非空 reason は保証しない。到達不能な自前の長さ
-    // 判定は置かない。
+  /**
+   * 単一の受信入口。`isBinary` で text/binary を分け、状態で処理を変える。
+   *
+   * - 認可前（`awaiting_start`・`pending`）は text のみ受理し、binary は境界違反で終了する。
+   * - 切替中は binary を保持し、text は境界違反で終了する。
+   * - mux 中（`authorized`）は binary のみ mux へ流し、text は境界違反で終了する。
+   */
+  function handleSocketMessage(state: ConnectionState, data: RawData, isBinary: boolean): void {
+    // ADR: 受信上限は `ws` の `maxPayload`（WS メッセージのバイト数、
+    // 分割フレーム合算）に委ね、超過時は close 1009 で通知する。
+    // 到達不能な自前の長さ判定は置かない。
     // 閉塞中は受信処理をしない。物理切断まで枠を保持する。
     if (state.phase === "closing" || state.phase === "closed") return;
     // 運用切断の指示後は当該接続の業務メッセージを受理しない。
     if (state.operatorDisconnected) return;
+    if (state.phase === "switching") {
+      if (isBinary) {
+        // ADR: 切替中に届く正規 binary を失わない。mux 開始後に順序どおり戻す。
+        state.pendingBinary.push(rawToBytes(data));
+        return;
+      }
+      // 切替中の text（重複 `auth_ok` を含む）は境界違反として終了する。
+      terminateWithClose(state, 1008, "PROTOCOL_VIOLATION");
+      return;
+    }
+    if (state.phase === "authorized") {
+      if (!isBinary) {
+        // mux 移行後の text は境界違反として終了する（binary 列を汚さない）。
+        terminateWithClose(state, 1008, "PROTOCOL_VIOLATION");
+        return;
+      }
+      const raw = state.rawSocket;
+      if (raw === null) {
+        terminateWithClose(state, 1011, "mux missing");
+        return;
+      }
+      raw.receiveBytes(rawToBytes(data));
+      return;
+    }
+    // 認可前は text のみ受理する。
+    if (isBinary) {
+      // ADR: 認可前の binary は推測判別せず境界違反として終了する。
+      terminateConnection(state, "UNEXPECTED_BINARY", "認可前は text のみ受け付ける。", undefined);
+      return;
+    }
+    const text = rawToText(data);
     let parsed: ReturnType<typeof parseBridgeMessage>;
     try {
       parsed = parseBridgeMessage(text);
     } catch (error) {
       const detail = error instanceof ProtocolError ? error.code : "INVALID_MESSAGE";
-      if (state.phase === "authorized") {
-        sendError(state, detail, "受信メッセージが不正である。");
-      } else {
-        // 認証前は終端エラーとし、入力再試行を許さない。
-        terminateConnection(state, detail, "受信メッセージが不正である。", undefined);
-      }
-      return;
-    }
-    if (state.phase === "authorized") {
-      // 認可判定は接続状態の所有者（サーバ）が行い、本体はセッションに委ねる。
-      // `authorized` とセッションの有無は一致する。不一致は到達しない。
-      const session = state.session;
-      if (session === null) {
-        sendError(state, "SESSION_MISMATCH", "セッション識別子が一致しない。", undefined);
-        return;
-      }
-      session.handleAuthorizedMessage(parsed);
+      // 認証前は終端エラーとし、入力再試行を許さない。
+      terminateConnection(state, detail, "受信メッセージが不正である。", undefined);
       return;
     }
     handlePairingMessage(state, parsed);
@@ -1004,9 +906,6 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
       switch (parsed.type) {
         case "pairing_pending":
         case "auth_ok":
-        case "echo_response":
-        case "command_response":
-        case "credit":
         case "error":
           // 逆方向の型は認証前も受け付けず、1回で終了する。
           terminateConnection(
@@ -1016,15 +915,7 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
             undefined,
           );
           return;
-        case "echo":
-        case "command_request":
-          terminateConnection(
-            state,
-            "NOT_AUTHORIZED",
-            "認可前に業務メッセージは送れない。",
-            parsed.requestId,
-          );
-          return;
+        case "create_session":
         case "data":
           terminateConnection(
             state,
@@ -1074,15 +965,22 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
         }
       }, expiresInMs);
       state.expiryTimer.unref?.();
-      // 比較コードは制御キューへ積み、ログには出さない。
-      enqueueControl(state, {
-        v: PROTOCOL_VERSION,
-        type: "pairing_pending",
-        requestId: result.requestId,
-        code: result.code,
-        expiresAt: result.expiresAt,
-        expiresInMs,
-      });
+      // 比較コードは直接送り、ログには出さない。
+      try {
+        state.socket.send(
+          stringifyBridgeMessage({
+            v: PROTOCOL_VERSION,
+            type: "pairing_pending",
+            requestId: result.requestId,
+            code: result.code,
+            expiresAt: result.expiresAt,
+            expiresInMs,
+          }),
+        );
+      } catch {
+        terminateWithClose(state, 1011, "send failure");
+        return;
+      }
       logger(logEvent("pairing_pending", { connectionId: state.id, origin: state.origin }));
       emitManagement({
         kind: "pending-created",
@@ -1108,6 +1006,109 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
           ? "承認待ちが満杯である。"
           : "比較コードを生成できない。";
     terminateConnection(state, result.status, message, undefined);
+  }
+
+  /**
+   * 承認成功時に `auth_ok` を text で送り、完了で mux を開始する。
+   *
+   * `ws.send` callback の成功で binary 出力を解放し、`Connection` を作る。
+   * 送信失敗・mux 初期化失敗・途中切断は Connection 終端とする。
+   */
+  function beginSwitch(state: ConnectionState, requestId: string): void {
+    state.phase = "switching";
+    state.pendingBinary.length = 0;
+    const text = stringifyBridgeMessage({
+      v: PROTOCOL_VERSION,
+      type: "auth_ok",
+      requestId,
+      connectionId: state.id,
+    } satisfies BridgeToClientMessage);
+    try {
+      state.socket.send(text, (error?: Error) => {
+        if (state.phase !== "switching") return;
+        if (state.socket.readyState !== WebSocket.OPEN) {
+          // 途中切断は Connection 終端とする。
+          terminateWithClose(state, 1011, "switch aborted");
+          return;
+        }
+        if (error !== undefined && error !== null) {
+          terminateWithClose(state, 1011, "send failure");
+          return;
+        }
+        startMux(state);
+      });
+    } catch {
+      terminateWithClose(state, 1011, "send failure");
+    }
+  }
+
+  /**
+   * mux を開始する。失敗時は Connection 終端とする。
+   *
+   * `NodeWsSocket`＋`WsMessageStream`＋`AuthorizedConnection`（role `"server"`、
+   * keepalive 組み込み）を作り、切替中の保持 binary を順序どおり戻す。
+   */
+  function startMux(state: ConnectionState): void {
+    let raw: NodeWsSocket;
+    let conn: AuthorizedConnection;
+    try {
+      raw = new NodeWsSocket(state.socket);
+      conn = new AuthorizedConnection({
+        connectionId: state.id,
+        socket: state.socket,
+        rawSocket: raw,
+        closeGraceMs: limits.connectionCloseGraceMs,
+        ...(scheduler === undefined ? {} : { scheduler }),
+        host: {
+          storeLatest: (sessionId, payload) => {
+            stats.latestStored += 1;
+            latestMailbox.set(sessionId, payload);
+          },
+          recordLatestDropped: (delta) => {
+            stats.latestDropped += delta;
+          },
+          recordDiagnosticEcho: () => {
+            stats.diagnosticEcho += 1;
+          },
+          recordDiagnosticPing: () => {
+            stats.diagnosticPing += 1;
+          },
+          onClosed: (connection, cause) => {
+            // 管理一覧からの除外。切断で認可は失効する。
+            if (state.authorizedConnection === connection) {
+              state.authorizedConnection = null;
+              state.rawSocket = null;
+            }
+            if (state.phase === "authorized") {
+              state.phase = "closing";
+              state.closingWasAuthorized = true;
+              if (state.socket.readyState === WebSocket.OPEN) {
+                try {
+                  state.socket.close(1008, cause.message.slice(0, 123));
+                } catch {
+                  // 閉塞時の例外は無視する。
+                }
+              }
+              armForceClose(state);
+            }
+            logger(logEvent("authorized_closed", { connectionId: state.id }));
+          },
+        },
+      });
+    } catch {
+      terminateWithClose(state, 1011, "mux failure");
+      return;
+    }
+    state.rawSocket = raw;
+    state.authorizedConnection = conn;
+    state.phase = "authorized";
+    logger(logEvent("pairing_approved", { connectionId: state.id }));
+    // 切替中の保持を順序どおり戻す。
+    const held = state.pendingBinary.splice(0, state.pendingBinary.length);
+    for (const bytes of held) {
+      if (state.phase !== "authorized") return;
+      raw.receiveBytes(bytes);
+    }
   }
 
   function findById(connectionId: string): ConnectionState | undefined {
@@ -1180,7 +1181,7 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
         remainingMs: entry.remainingMs,
       })),
     approvePairing: (requestId: string, code: string): ApprovalResult => {
-      // 承認と閉は同期的に直列化する。承認成功なら通知前に認可状態まで確定する。
+      // 承認と閉は同期的に直列化する。承認成功なら切替開始まで確定する。
       const result = pairing.approve(requestId, code);
       if (result.status === "APPROVED") {
         const state = findById(result.connectionId);
@@ -1194,31 +1195,16 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
           countRejection("CONNECTION_GONE");
           return { status: "CONNECTION_GONE" };
         }
-        // 認可成立時のみ session を発行し、初期 credit 会計を設定する。
-        // 会計・採番の実体は認可ごとの新規セッションが持つ。送出・切断の実体はサーバ側のままである。
-        state.phase = "authorized";
-        state.sessionId = randomUUID();
-        state.session = new AuthorizedSession(
-          state.sessionId,
-          limits.initialCreditWindow,
-          limits,
-          createAuthorizedHost(state),
-        );
         state.pendingRequestId = null;
         if (state.expiryTimer !== null) {
           clearTimeout(state.expiryTimer);
           state.expiryTimer = null;
         }
         stats.pairingSuccess += 1;
-        logger(logEvent("pairing_approved", { connectionId: state.id }));
         emitManagement({ kind: "pending-ended", requestId, reason: "approved" });
-        enqueueControl(state, {
-          v: PROTOCOL_VERSION,
-          type: "auth_ok",
-          requestId,
-          sessionId: state.sessionId,
-          window: limits.initialCreditWindow,
-        });
+        // ADR: `auth_ok` は text で送り、完了で mux を開始する。`window` は載せない。
+        // 推測判別・0.2 フォールバックは作らない。
+        beginSwitch(state, requestId);
         return { status: "APPROVED", connectionId: result.connectionId, origin: result.origin };
       }
       if (result.status === "INVALID_CODE" || result.status === "CODE_MISMATCH") {
@@ -1271,7 +1257,9 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
       [...connections].map((state) => ({
         connectionId: state.id,
         origin: state.origin,
-        authorized: state.phase === "authorized" && !state.operatorDisconnected,
+        authorized:
+          (state.phase === "authorized" || state.phase === "switching") &&
+          !state.operatorDisconnected,
         phase: state.phase === "closed" ? "closed" : state.phase,
       })),
     disconnectConnection: (connectionId: string): void => {
@@ -1284,17 +1272,16 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
       // ADR: 不明IDで全切断へ fallback しない。呼び出し側へ明示する。
       throw new RangeError(`不明な接続IDである: ${connectionId}`);
     },
-    getLatest: (streamId: StreamId): unknown => latestMailbox.get(streamId)?.payload,
+    getLatest: (sessionId: SessionId): unknown => latestMailbox.get(sessionId),
     getStats: (): BridgeStats => ({
       connectionsAccepted: stats.connectionsAccepted,
       upgradeRejected: stats.upgradeRejected,
       pairingSuccess: stats.pairingSuccess,
       pairingFailure: stats.pairingFailure,
-      echoCount: stats.echoCount,
-      commandCount: stats.commandCount,
       latestStored: stats.latestStored,
       latestDropped: stats.latestDropped,
-      queueFull: stats.queueFull,
+      diagnosticEcho: stats.diagnosticEcho,
+      diagnosticPing: stats.diagnosticPing,
       rejectionsByReason: { ...stats.rejectionsByReason },
     }),
     close: (): Promise<void> => {
@@ -1305,6 +1292,13 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
       pendingUpgrades = 0;
       for (const state of connections) {
         clearTimers(state);
+        if (state.authorizedConnection !== null) {
+          try {
+            state.authorizedConnection.terminate(new Error("bridge shutdown"));
+          } catch {
+            // 終端の失敗は無視する。
+          }
+        }
         try {
           state.socket.close(1001, "bridge shutdown");
         } catch {

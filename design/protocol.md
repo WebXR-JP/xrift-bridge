@@ -13,7 +13,7 @@
 
 - WebSocket 上のセッション管理（旧 "Stream" → "Session"）を **yamux on WebSocket（libp2p なし）**へ置き換える破壊的変更を protocol **0.3** として扱う。0.x 台では破壊的変更を許容し、異なるバージョン間の互換設計はしない（ルートの `AGENTS.md` の方針どおり）。
 - 本改訂は**採用済みの方向と理由の記録**である。形状・数値の正本は従来どおりコードだが、コードは現状 0.2 のままであり実装は未着手である。調整可能な採用値の置き場は[検証計画](../docs/verification/bridge.md)の暫定値表とし、コード実装後に正本をコードへ移す。
-- packages/bridge-protocol/src/messages.example.ts は作業中の構想スケッチ（正本でも語彙の正本でもない）であり、設計判断の根拠として引用しない。
+- packages/bridge-protocol/src/messages.ts が 0.3 の形状の正本である（旧 messages.example.ts の構想は正本化に伴い削除した）。設計判断の根拠として削除済み文書を引用しない。
 
 ## 用語
 

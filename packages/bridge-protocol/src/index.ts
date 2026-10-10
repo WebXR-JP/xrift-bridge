@@ -14,23 +14,24 @@ export type {
   BridgeMessage,
   BridgeToClientMessage,
   ClientToBridgeMessage,
-  CommandErrorDetail,
-  CommandRequestMessage,
-  CommandResponseMessage,
-  CreditMessage,
+  ConnectionId,
+  CreateLatestSessionMessage,
+  CreateReliableSessionMessage,
+  CreateSessionMessage,
   DataMessage,
-  EchoMessage,
-  EchoResponseMessage,
   ErrorMessage,
+  LatestDataMessage,
   MessageBase,
+  MessageType,
   PairingCode,
   PairingPendingMessage,
   PairingRequestId,
   PairingStartMessage,
-  RequestId,
+  ReliableDataMessage,
+  SessionDirection,
   SessionId,
-  StreamId,
-  StreamKind,
+  SessionKind,
+  SimplexSessionDirection,
 } from "./messages.ts";
 export {
   MAX_ID_LENGTH,
@@ -43,4 +44,3 @@ export {
   stringifyBridgeMessage,
 } from "./validate.ts";
 export type { ProtocolErrorCode } from "./validate.ts";
-export type * as MessagesExample from "./messages.example.ts";
