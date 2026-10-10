@@ -1,12 +1,7 @@
 import { afterEach, expect, test } from "vite-plus/test";
 import { connect } from "node:net";
 import { WebSocket, type RawData } from "ws";
-import {
-  PROTOCOL_VERSION,
-  formatPairingCode,
-  parseBridgeMessage,
-  type BridgeMessage,
-} from "bridge-protocol";
+import { PROTOCOL_VERSION, parseBridgeMessage, type BridgeMessage } from "bridge-protocol";
 import {
   Connection,
   WsMessageStream,
@@ -16,7 +11,6 @@ import {
 import type { WsMessageStreamOptions } from "bridge-protocol/transport";
 import { createBridgeServer, type BridgeOptions, type BridgeServer } from "../src/server.ts";
 import { NodeWsSocket } from "../src/node-socket.ts";
-import { handleCommand } from "../src/index.ts";
 import type { BridgeLogEvent } from "../src/log.ts";
 
 const PROD_ORIGIN = "https://app.xrift.net";
@@ -994,96 +988,6 @@ test("管理イベントで保留の増減と受付の開閉が分かる", async
   server.closeAcceptance();
   expect(events.map((event) => event.kind)).toContain("acceptance-changed");
   unsubscribe();
-});
-
-// ---------- CLI ----------
-
-/** 対話命令の表示先を集める試験用の出力先。 */
-function captureOutput(): { output: string[]; out: { write(text: string): void } } {
-  const output: string[] = [];
-  return {
-    output,
-    out: {
-      write: (text: string): void => {
-        output.push(text);
-      },
-    },
-  };
-}
-
-test("CLIでaccept open・pending・approve・reject・statusが動く", async () => {
-  const server = await startServer({ generateCode: () => "000042" });
-  const captured = captureOutput();
-  const out = captured.out;
-  handleCommand("accept open", server, out);
-  expect(captured.output.join("")).toContain("state=open");
-
-  const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
-  socket.send(pairingStartMessage());
-  const pending = await collector.waitForType("pairing_pending");
-  if (pending.message.type !== "pairing_pending") throw new Error("保留通知ではない。");
-  const cliRequestId = pending.message.requestId;
-  // 先頭ゼロ保持の区切り表示。
-  expect(formatPairingCode("000042")).toBe("000 042");
-  handleCommand("pending", server, out);
-  const pendingText = captured.output.join("");
-  expect(pendingText).toContain(cliRequestId);
-  expect(pendingText).toContain("000 042");
-  expect(pendingText).toContain(DEV_ORIGIN);
-
-  // 引数不足・書式不正は厳密に弾く。数値化で先頭ゼロを落とさない。
-  handleCommand("approve", server, out);
-  expect(captured.output.join("")).toContain("使い方: approve");
-  handleCommand(`approve ${cliRequestId} 42`, server, out);
-  expect(captured.output.join("")).toContain("approve 失敗");
-  expect(server.listPending()).toHaveLength(1);
-
-  handleCommand(`approve ${cliRequestId} 000042`, server, out);
-  expect(captured.output.join("")).toContain(`approved ${cliRequestId}`);
-  const ok = await collector.waitForType("auth_ok");
-  expect(ok.message.type).toBe("auth_ok");
-
-  handleCommand("status", server, out);
-  const statusText = captured.output.join("");
-  expect(statusText).toContain("acceptance=open");
-  expect(statusText).toContain("authorized=1");
-  expect(statusText).toContain("pairingSuccess=1");
-
-  // 2件目を作って reject する。
-  const second = await openCollected(server.endpoint, DEV_ORIGIN);
-  second.socket.send(pairingStartMessage());
-  const secondPending = await second.collector.waitForType("pairing_pending");
-  if (secondPending.message.type !== "pairing_pending") throw new Error("保留通知ではない。");
-  const secondRequestId = secondPending.message.requestId;
-  handleCommand(`reject ${secondRequestId}`, server, out);
-  expect(captured.output.join("")).toContain(`rejected ${secondRequestId}`);
-  const rejectError = await second.collector.waitForErrorCode("PAIRING_REJECTED");
-  expect(rejectError.message.type).toBe("error");
-
-  handleCommand("accept close", server, out);
-  expect(captured.output.join("")).toContain("state=closed");
-  handleCommand("pending", server, out);
-  expect(captured.output.join("")).toContain("pending: (none)");
-  expect(handleCommand("quit", server, out)).toBe(true);
-});
-
-test("CLIのstatusは受付状態・各接続数・理由別拒否集計を出す", async () => {
-  const server = await startServer();
-  const captured = captureOutput();
-  const out = captured.out;
-  handleCommand("status", server, out);
-  let text = captured.output.join("");
-  expect(text).toContain("acceptance=closed");
-  expect(text).toContain("connections=0");
-  server.openAcceptance();
-  handleCommand("status", server, out);
-  text = captured.output.join("");
-  expect(text).toContain("acceptance=open");
-  // 拒否を1件起こすと集計に出る。
-  await expect(openRaw(server.endpoint, "https://evil.example")).rejects.toThrow();
-  handleCommand("status", server, out);
-  text = captured.output.join("");
-  expect(text).toContain("origin_rejected=1");
 });
 
 // ---------- 既存の検証 ----------

@@ -1,0 +1,29 @@
+{
+  "name": "bridge-cli",
+  "version": "0.0.0",
+  "private": true,
+  "description": "PC上で動作するワールドとローカルをつなぐ中継アプリ。",
+  "type": "module",
+  "exports": {
+    ".": "./dist/index.mjs",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "dev": "node --watch src/index.ts",
+    "build": "vp pack",
+    "start": "node dist/index.mjs",
+    "test": "vp test",
+    "check": "vp check"
+  },
+  "dependencies": {
+    "bridge-protocol": "workspace:*",
+    "bridge-server": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "@types/ws": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:",
+    "ws": "catalog:"
+  }
+}

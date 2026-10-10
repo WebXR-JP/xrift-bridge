@@ -33,8 +33,8 @@ XRift とローカルブリッジの接続を診断するワールド（開発�
 
 ```bash
 # 1) ブリッジ（明示開発モードで開発 Origin を許可）
-vp run bridge#build
-node apps/bridge/dist/index.mjs --dev --origin http://localhost:5173
+vp run bridge-cli#build
+node apps/bridge-cli/dist/index.mjs --dev --origin http://localhost:5173
 # ブリッジの対話命令で受付を開く
 #   accept open
 

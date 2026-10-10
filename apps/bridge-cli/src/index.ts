@@ -13,8 +13,7 @@
  */
 import { createInterface } from "node:readline";
 import { formatPairingCode, isPairingCode } from "bridge-protocol";
-import { PRODUCTION_ORIGIN } from "./verify.ts";
-import { createBridgeServer, type BridgeServer } from "./server.ts";
+import { createBridgeServer, PRODUCTION_ORIGIN, type BridgeServer } from "bridge-server";
 
 const DEFAULT_PORT = 3100;
 
@@ -54,7 +53,7 @@ export function parseArgs(argv: readonly string[]): CliOptions {
       index += 1;
     } else if (arg === "--help" || arg === "-h") {
       process.stdout.write(
-        "使い方: bridge [--port N] [--dev] [--origin ORIGIN]...\n" +
+        "使い方: bridge-cli [--port N] [--dev] [--origin ORIGIN]...\n" +
           "  --origin は --dev 指定時のみ受け付ける。\n" +
           "対話命令: accept open / accept close / pending / approve <requestId> <code> / reject <requestId> / status / connections / disconnect <connectionId> / quit\n",
       );

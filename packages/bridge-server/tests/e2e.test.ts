@@ -1,7 +1,7 @@
 /**
  * 製品 E2E（Unit F1）。
  *
- * 実 `createBridgeServer`（`apps/bridge`）と実 `world-client`
+ * 実 `createBridgeServer`（`packages/bridge-server`）と実 `world-client`
  * （`createConnectionRequest`、ビルド済み `dist` 経由）を1本の実 WebSocket
  * （Node 22 の global `WebSocket` を world-client のブラウザ適合経由）で
  * 接続し、ペアリング→認可→同一 WS 上の mux→Session 往復→latest→終了までを

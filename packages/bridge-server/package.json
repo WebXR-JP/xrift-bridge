@@ -1,19 +1,23 @@
 {
-  "name": "bridge",
+  "name": "bridge-server",
   "version": "0.0.0",
-  "private": true,
-  "description": "PC上で動作するワールドとローカルをつなぐ中継アプリ。",
+  "description": "PC上で動作するブリッジのサーバーコア。GUI/CLIが利用する管理境界。",
+  "license": "MIT",
+  "files": [
+    "dist"
+  ],
   "type": "module",
   "exports": {
     ".": "./dist/index.mjs",
     "./package.json": "./package.json"
   },
   "scripts": {
-    "dev": "node --watch src/index.ts",
     "build": "vp pack",
-    "start": "node dist/index.mjs",
+    "dev": "vp pack --watch",
     "test": "vp test",
-    "check": "vp check"
+    "test:types": "tsc --noEmit -p tsconfig.json",
+    "check": "vp check",
+    "prepublishOnly": "vp run build"
   },
   "dependencies": {
     "bridge-protocol": "workspace:*",

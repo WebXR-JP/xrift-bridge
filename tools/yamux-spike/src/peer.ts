@@ -2,7 +2,7 @@
  * 試作の相手方（Node サーバ・Node クライアント）の組み立て。
  *
  * 各シナリオは一時ポートのサーバを立て、mux を両端に作って閉じる。
- * 製品の `apps/bridge` とは無関係の隔離した組み立てである。
+ * 製品の `packages/bridge-server`（サーバーコア）とは無関係の隔離した組み立てである。
  *
  * @packageDocumentation
  */

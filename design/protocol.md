@@ -35,9 +35,9 @@ Session capability（`kind`・`direction` 別の公開型）の形状の正本�
 - 欠落した `Origin`、`null`、ワイルドカード、接尾辞一致は拒否する方針とする。具体的な符号・書式は型・境界検証・テストを参照する。
 - ペアリングはワールド側から `pairing_start` で開始する。開始を受けるとブリッジは比較コードを発行し `pairing_pending` で通知し、人間がブリッジ側（ローカル CLI、将来は GUI）で承認したその接続だけを `auth_ok{requestId,connectionId}` で接続単位に認可する。ブリッジが発行するのは暗号学的乱数による数字6桁の比較コードであり、OTP 認証ではない（照合のための比較コード）。使い捨て秘密値（ワールド側での入力）は採用しない。
 - 認証前はデータとローカル情報を送受信しない。ただしペアリングに限定した制御メッセージ（`pairing_start`・`pairing_pending`・認証前エラー）は例外として送受信する。
-- 受付モードは起動時は閉じ、ローカル操作で開き、120秒で自動クローズする。保留の絶対期限は「コード発行＋120秒」と「受付終了時刻」の早い方である。権限範囲は現行同等とし、認可はその接続だけに属し、切断で失効し、再接続は再承認である。これらを設計判断とする。形状・数値・状態遷移の詳細は正本（[packages/bridge-protocol/src/messages.ts](../packages/bridge-protocol/src/messages.ts)・[packages/bridge-protocol/src/validate.ts](../packages/bridge-protocol/src/validate.ts)・[apps/bridge/src/config.ts](../apps/bridge/src/config.ts)・実装・テスト）へ置き、ここでは複製しない。
+- 受付モードは起動時は閉じ、ローカル操作で開き、120秒で自動クローズする。保留の絶対期限は「コード発行＋120秒」と「受付終了時刻」の早い方である。権限範囲は現行同等とし、認可はその接続だけに属し、切断で失効し、再接続は再承認である。これらを設計判断とする。形状・数値・状態遷移の詳細は正本（[packages/bridge-protocol/src/messages.ts](../packages/bridge-protocol/src/messages.ts)・[packages/bridge-protocol/src/validate.ts](../packages/bridge-protocol/src/validate.ts)・[packages/bridge-server/src/config.ts](../packages/bridge-server/src/config.ts)・実装・テスト）へ置き、ここでは複製しない。
 - 比較コード・要求 ID を URL・クエリ・Cookie・ログ・ブラウザの永続ストレージに入れない。比較コードは両画面への表示と照合にだけ使う。
-- 受付レート・未認可接続数・保留数に上限を設け、超過は保留せず拒否する。具体値は `apps/bridge/src/config.ts` の `DEFAULT_LIMITS`・実装・テストを参照する。
+- 受付レート・未認可接続数・保留数に上限を設け、超過は保留せず拒否する。具体値は `packages/bridge-server/src/config.ts` の `DEFAULT_LIMITS`・実装・テストを参照する。
 - ローカル管理は受付の開閉・保留一覧・要求 ID と比較コードの両方を指定する承認／拒否、接続一覧と接続 ID 指定の切断を提供し、指定接続だけを切断して待ち受けと他接続は維持する。全体停止とは区別する。承認操作はローカル管理境界だけに置き、ワールド向け WebSocket には公開しない。
 - 認可は接続単位にする。長期資格情報の保持と、再接続時の誤った権限継承を避けるためである。成功した WebSocket 接続だけを認可し、切断で認可は失効し、再接続には再承認が必要である。
 - `Origin` は「そのワールド」の識別に使えない。同一文書・同一スクリプト実行基盤のため、XRift ホストと同じ基盤内のコードから比較コードや通信を隔離できない。コード一致は表示された要求との対応確認であり、ワールドの真正性の証明ではない。ワールド ID・表示名・SDK 内部変数は認証境界にならない。

@@ -3,7 +3,7 @@
 > 製品輸送は `packages/bridge-protocol/src/transport/` に引き継がれた。以下は採用判断時の試作記録として残し、製品の正本にはしない。
 
 libp2p なしの **yamux（muxer のみ）on 自前 WebSocket** の採用可否を判断するための限定試作。
-製品実装ではなく、採用判断の証拠集めだけが目的。`apps/bridge`・`packages/*` の `src/` は変更しない。
+製品実装ではなく、採用判断の証拠集めだけが目的。`apps/bridge-cli`・`packages/bridge-server` の `src/` は変更しない。
 
 ## 採用版
 

@@ -1,6 +1,6 @@
 # 比較コード承認の実機手順書
 
-人間が実機で比較コード方式の接続承認を通し、結果を記録するための手順書である。検証計画の正本は[ブリッジ検証計画](bridge.md)のままとし、本書は実施手順と記録用紙に限定する。設計判断は[ブリッジ接続](../../design/bridge.md)と[プロトコル](../../design/protocol.md)を正本とし、ここでは繰り返さない。形状・符号は `packages/bridge-protocol/src/messages.ts`、制限値の正本は `apps/bridge/src/config.ts` の `DEFAULT_LIMITS` とする。
+人間が実機で比較コード方式の接続承認を通し、結果を記録するための手順書である。検証計画の正本は[ブリッジ検証計画](bridge.md)のままとし、本書は実施手順と記録用紙に限定する。設計判断は[ブリッジ接続](../../design/bridge.md)と[プロトコル](../../design/protocol.md)を正本とし、ここでは繰り返さない。形状・符号は `packages/bridge-protocol/src/messages.ts`、制限値の正本は `packages/bridge-server/src/config.ts` の `DEFAULT_LIMITS` とする。
 
 ## 目的と前提
 
@@ -17,16 +17,16 @@
 
 ### ブリッジの起動
 
-手順は `apps/bridge/README.md` に従う。
+手順は `apps/bridge-cli/README.md` に従う。
 
 ```bash
-vp run bridge#build
-node apps/bridge/dist/index.mjs --port 3100
+vp run bridge-cli#build
+node apps/bridge-cli/dist/index.mjs --port 3100
 # 開発時（明示的開発モードでのみ追加 Origin を許可）
-node apps/bridge/dist/index.mjs --dev --origin http://localhost:5173
+node apps/bridge-cli/dist/index.mjs --dev --origin http://localhost:5173
 ```
 
-- 本番経路の既定許可 `Origin` は `https://app.xrift.net` であり、正本は `apps/bridge/src/verify.ts` の `PRODUCTION_ORIGIN` とする。
+- 本番経路の既定許可 `Origin` は `https://app.xrift.net` であり、正本は `packages/bridge-server/src/verify.ts` の `PRODUCTION_ORIGIN` とする。
 - 開発時は `--dev` と `--origin http://localhost:5173` を付け、`accept open` の前に許可 `Origin` を確認する。`--origin` は `--dev` なしでは起動失敗する。
 - 待ち受けは `127.0.0.1` への明示 bind であり、正規接続先は `ws://127.0.0.1:3100/v1` である。ポート競合時は探索せず失敗する。
 - 対話命令の一覧は起動時の表示と `--help` の出力が正本である（`accept open`・`accept close`・`pending`・`approve <requestId> <code>`・`reject <requestId>`・`status`・`connections`・`disconnect <connectionId>`・`quit`）。
@@ -51,7 +51,7 @@ vp run diagnostic-world#dev
 - 実行ビルドの識別子（診断盤の `build` 表示：版・コミット・ビルド時刻）。
 - プロトコル版 `0.3.0`（正本は `packages/bridge-protocol/src/messages.ts` の `PROTOCOL_VERSION`）。
 - OS と Chrome の正確な版。
-- ブリッジの実効制限値（正本は `apps/bridge/src/config.ts`。上書き時は `BridgeOptions.limits` の実効値を残す）。
+- ブリッジの実効制限値（正本は `packages/bridge-server/src/config.ts`。上書き時は `BridgeOptions.limits` の実効値を残す）。
 - 許可 `Origin` の一覧と使用した接続先。
 - 診断盤の環境表示（`origin`・SecureContext・top-level／embedded）。
 
@@ -75,7 +75,7 @@ vp run diagnostic-world#dev
 14. 期限切れを確認する。承認せずに放置し、保留が失効して接続が終了すること（`PAIRING_EXPIRED`）を確認する。以降は新規に接続開始する。
 15. CLI で `status` を入力する。受付状態・終了時刻・接続数・認可数・保留数・成功／失敗数・理由別拒否集計を確認し、記録用紙へ転記する。
 
-期限・上限・レートの期待値（開始10秒・承認120秒・受付120秒・全8／未認可2／保留2・レート等）は `apps/bridge/src/config.ts` を正本とし、ここでは再掲しない。
+期限・上限・レートの期待値（開始10秒・承認120秒・受付120秒・全8／未認可2／保留2・レート等）は `packages/bridge-server/src/config.ts` を正本とし、ここでは再掲しない。
 
 ## 記録用紙
 
@@ -129,7 +129,7 @@ vp run diagnostic-world#dev
 
 ### 異常系の理由別集計
 
-CLI の `status` に出る理由別カウンタを転記する。符号の正本は `apps/bridge/src/pairing.ts`・`apps/bridge/src/server.ts` とする。
+CLI の `status` に出る理由別カウンタを転記する。符号の正本は `packages/bridge-server/src/pairing.ts`・`packages/bridge-server/src/server.ts` とする。
 
 | 理由 | 件数 |
 | ---- | ---- |
