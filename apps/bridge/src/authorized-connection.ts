@@ -18,7 +18,7 @@ import { WebSocket } from "ws";
 import {
   Connection,
   WsMessageStream,
-  type Session,
+  type InboundSession,
   type TimerScheduler,
   type WsMessageStreamOptions,
 } from "bridge-protocol/transport";
@@ -84,13 +84,13 @@ export class AuthorizedConnection {
 
   private readonly socket: WebSocket;
   private readonly stream: WsMessageStream;
-  private readonly connection: Connection;
+  private readonly connection: Connection<"server">;
   private readonly host: AuthorizedConnectionHost;
   private readonly closeGraceMs: number;
   private forceTimer: ReturnType<typeof setTimeout> | null = null;
   private terminated = false;
   /** 生存 Session の追跡（統計の欠番補正用）。終了で外す。 */
-  private readonly liveSessions = new Map<string, Session>();
+  private readonly liveSessions = new Map<string, InboundSession<"server">>();
   private readonly lastStaleSeen = new Map<string, number>();
 
   /**
@@ -106,7 +106,7 @@ export class AuthorizedConnection {
       direction: "inbound",
       log: createNoopLogger(),
     });
-    this.connection = new Connection({
+    this.connection = new Connection<"server">({
       transport: this.stream,
       role: "server",
       connectionId: options.connectionId,
@@ -182,9 +182,11 @@ export class AuthorizedConnection {
   }
 
   /** inbound Session を業務へ配線する。 */
-  private attachSession(session: Session): void {
+  private attachSession(session: InboundSession<"server">): void {
     this.liveSessions.set(session.sessionId, session);
     this.lastStaleSeen.set(session.sessionId, session.staleDroppedCount);
+    // `kind` で絞る：`"latest"` は受信側（`LatestReceiverSession<"server">`、
+    // 方向 `to_server`）、それ以外は `ReliableSession<"server">` である。
     if (session.kind === "latest") {
       session.onMessage((payload) => {
         // ADR: stale は Session が黙って捨てるため、配送時に差分で補正する。
@@ -210,7 +212,7 @@ export class AuthorizedConnection {
   }
 
   /** Session の stale 計数を差分で回収する。 */
-  private reconcileStale(session: Session): void {
+  private reconcileStale(session: InboundSession<"server">): void {
     // ADR: stale は Session が黙って捨てるため、配送・終了の時点で差分を回収する。
     const last = this.lastStaleSeen.get(session.sessionId) ?? 0;
     const current = session.staleDroppedCount;

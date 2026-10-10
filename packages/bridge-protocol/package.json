@@ -16,6 +16,7 @@
     "build": "vp pack",
     "dev": "vp pack --watch",
     "test": "vp test",
+    "test:types": "tsc --noEmit -p tsconfig.json",
     "check": "vp check",
     "prepublishOnly": "vp run build"
   },

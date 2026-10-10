@@ -1,98 +1,89 @@
 /**
  * 認可後に使う Session と Session 管理口。
  *
- * 送受信・終了の本体は transport（B2 の `Session`・B3 の `Connection`）が
- * 担い、ここでは公開名（`isAlive` 等）への整形と、購読前の inbound 通知の
- * 保持だけを行う。業務 request/response 相関・自動再送・要求待機タイマーは
- * 持たず、上位層の責務とする。
+ * 公開 Session は client 固定の capability 合併（reliable 双方向・latest 送信・
+ * latest 受信）であり、`kind`・`direction` で判別して使う。送受信・終了の本体は
+ * transport（`Connection` が返す engine）が担い、ここでは同一 engine に同一
+ * ファサードを返す適合と、購読前の inbound 通知の保持だけを行う。業務
+ * request/response 相関・自動再送・要求待機タイマーは持たず、上位層の責務とする。
  *
  * @packageDocumentation
  */
 import type { ConnectionId, SessionDirection, SessionKind } from "bridge-protocol";
-import {
+import type {
   Connection,
-  type RawSocket,
-  type Session as TransportSession,
-  type SessionEnd,
+  CreateSessionRequest,
+  InboundSession as TransportInboundSession,
+  LatestCreateSessionRequest,
+  LatestReceiverSession as TransportLatestReceiverSession,
+  LatestSenderSession as TransportLatestSenderSession,
+  OutboundSession as TransportOutboundSession,
+  RawSocket,
+  ReliableCreateSessionRequest,
+  ReliableSession as TransportReliableSession,
+  Session as TransportSession,
+  SessionEnd,
 } from "bridge-protocol/transport";
 import { WorldClientError } from "./errors.ts";
 
 export type { SessionEnd };
 export type { SessionKind, SessionDirection, ConnectionId };
-
-/** `tryCreateSession` に渡す Session の生成条件。 */
-export interface CreateSessionOptions {
-  /** 作成する Session の論理名。接続内で一意であること。 */
-  readonly sessionId: string;
-  /** 配送種別。`reliable` は双方向のみ、`latest` は一方向のみである。 */
-  readonly kind: SessionKind;
-  /** 許す送信方向。役割（client は送信側）との整合が必要である。 */
-  readonly direction: SessionDirection;
-}
+export type {
+  CreateSessionRequest,
+  LatestCreateSessionRequest,
+  ReliableCreateSessionRequest,
+} from "bridge-protocol/transport";
 
 /**
- * セッション1つあたりの送受信口。
+ * client 側の公開 Session（`kind`・`direction` で判別する合併）。
  *
- * Session は一連のやりとりの単位であり、既定は双方向 yamux stream 1本で
- * ある。request/response 相関は持たず、上位層の責務とする。
+ * `kind` が `"reliable"` なら双方向送受信、`"latest"` なら `direction` で送信側
+ * （`to_server`）・受信側（`to_client`）が決まる。使える API は枝ごとに型で
+ * 制限する。実行時の誤用は engine の検査で拒否する（従来の `SessionError`）。
  */
-export interface Session {
-  /** この Session の論理名。 */
-  readonly sessionId: string;
-  /** 配送種別。 */
-  readonly kind: SessionKind;
-  /** 許す送信方向。 */
-  readonly direction: SessionDirection;
-  /** 全体終端していなければ真。 */
-  readonly isAlive: boolean;
-  /**
-   * 確実に届けたい値を送る。
-   *
-   * Session 内で直列化し下位 backpressure を待つ。
-   *
-   * @param value - 配送する JSON 値。
-   * @returns 完了はローカル送信処理完了であり、相手の受信・業務完了ではない。
-   */
-  sendReliable(value: unknown): Promise<void>;
-  /**
-   * 最新の状態を送る（同期受付）。
-   *
-   * yamux 投入前に未投入値を置換する。戻りは配送完了を意味しない。
-   * 値ごとの配送 Promise は作らない。
-   *
-   * @param value - 配送する JSON 値。
-   */
-  sendLatest(value: unknown): void;
-  /**
-   * 受信した payload を購読する。
-   *
-   * @param handler - payload を受け取る処理。
-   * @returns 購読解除。
-   */
-  onMessage(handler: (payload: unknown) => void): () => void;
-  /**
-   * 相手 FIN（読み終わり）を購読する。
-   *
-   * @param handler - 相手 FIN の処理。
-   * @returns 購読解除。
-   */
-  onRemoteEnd(handler: () => void): () => void;
-  /**
-   * Session 全体の終端を購読する。
-   *
-   * @param handler - 終端内容を受け取る処理。
-   * @returns 購読解除。
-   */
-  onEnd(handler: (end: SessionEnd) => void): () => void;
-  /**
-   * 送信方向を正常終了する（FIN）。
-   *
-   * @returns FIN 送出の完了で解ける約束。
-   */
-  closeWrite(): Promise<void>;
-  /** 即時中断する（RST）。他 Session は維持する。 */
-  abort(): void;
-}
+export type Session = TransportSession<"client">;
+
+/**
+ * client 側の双方向 reliable Session。
+ *
+ * `sendReliable` と `onMessage` を持つ。
+ */
+export type ReliableSession = TransportReliableSession<"client">;
+
+/**
+ * client 側の latest 送信 Session。
+ *
+ * `sendLatest` だけを持ち、`onMessage` は持たない。
+ */
+export type LatestSenderSession = TransportLatestSenderSession<"client">;
+
+/**
+ * client 側の latest 受信 Session。
+ *
+ * `onMessage` だけを持ち、`sendLatest` は持たない。
+ */
+export type LatestReceiverSession = TransportLatestReceiverSession<"client">;
+
+/**
+ * client 側が受け取れる Session（reliable または latest 受信側）。
+ *
+ * `onSession` 通知の型である。
+ */
+export type InboundSession = TransportInboundSession<"client">;
+
+/**
+ * client 側が開ける Session（reliable または latest 送信側）。
+ *
+ * 動的な合法要求に対する `tryCreateSession` の戻り型である。
+ */
+export type OutboundSession = TransportOutboundSession<"client">;
+
+/**
+ * `tryCreateSession` に渡す Session の生成条件。
+ *
+ * 合法な組合せの合併（reliable 双方向・client の latest 送信）の別名である。
+ */
+export type CreateSessionOptions = CreateSessionRequest<"client">;
 
 /**
  * 認証完了後に受け取れる、セッション管理口。
@@ -107,20 +98,36 @@ export interface SessionProvider {
   /** 終端していなければ真。 */
   readonly isAlive: boolean;
   /**
-   * Session を開く。
+   * reliable Session を開く。
+   *
+   * @param options - 論理名・種別（`"reliable"`）・方向（`"bidirectional"`）。
+   * @returns 開いた Session で解ける約束。解決はローカル処理の完了であり、
+   * 相手の業務受付成功ではない。
+   */
+  tryCreateSession(options: ReliableCreateSessionRequest): Promise<ReliableSession>;
+  /**
+   * latest 送信 Session を開く。
+   *
+   * @param options - 論理名・種別（`"latest"`）・方向（`"to_server"`）。
+   * @returns 開いた Session で解ける約束。解決はローカル処理の完了であり、
+   * 相手の業務受付成功ではない。
+   */
+  tryCreateSession(options: LatestCreateSessionRequest<"client">): Promise<LatestSenderSession>;
+  /**
+   * Session を開く（動的な合法要求用）。
    *
    * @param options - 論理名・種別・方向。
    * @returns 開いた Session で解ける約束。解決はローカル処理の完了であり、
    * 相手の業務受付成功ではない。
    */
-  tryCreateSession(options: CreateSessionOptions): Promise<Session>;
+  tryCreateSession(options: CreateSessionOptions): Promise<OutboundSession>;
   /**
    * 相手起点の Session を購読する。購読前の到着分は順序どおり渡す。
    *
    * @param handler - inbound Session を受け取る処理。
    * @returns 購読解除。
    */
-  onSession(handler: (session: Session) => void): () => void;
+  onSession(handler: (session: InboundSession) => void): () => void;
   /**
    * 管理口全体の終端を購読する。一度だけ通知する。
    *
@@ -133,18 +140,35 @@ export interface SessionProvider {
 }
 
 /**
- * transport の `Session` への公開名適合。
- *
- * 送受信・終了は委ね、終了判定だけを `isAlive` に読み替える。
+ * engine 実行時の全体像。公開狭窄型の合併に、型には現れない送信・購読口を
+ * 加えたものであり、adapter 内の委譲だけに使う。
  */
-export class ClientSession implements Session {
-  private readonly inner: TransportSession;
+type EngineWide = TransportSession<"client"> & {
+  sendReliable(value: unknown): Promise<void>;
+  sendLatest(value: unknown): void;
+  onMessage(handler: (payload: unknown) => void): () => void;
+};
+
+/**
+ * transport の engine への適合（内部の wide 委譲）。
+ *
+ * 送受信・終了は engine に委ね、終了判定だけを `isAlive` に読み替える。
+ * 公開の狭窄型には現れない送信・購読口も実行時には持ち、誤用は engine の
+ * 検査に委ねる（従来の `SessionError` での拒否を保つ）。公開型への切替えは
+ * `ClientSessionProvider` の生成関数側で行う。
+ */
+class ClientSessionFacade {
+  private readonly inner: EngineWide;
 
   /**
-   * @param inner - 適合させる transport の Session。
+   * @param inner - 適合させる transport の Session（client 側）。
    */
-  constructor(inner: TransportSession) {
-    this.inner = inner;
+  constructor(inner: TransportSession<"client">) {
+    // ADR: `Connection` は engine そのものを狭窄型で返すため、型に無い送信・
+    // 購読口も実行時には残り、誤用は従来の `SessionError` で拒否する。この
+    // 委譲を保つため、engine の全体像への見なしはこの一句に限定する。以降の
+    // 委譲では `as` を置かず、getter は委譲のため生成時の値写しはしない。
+    this.inner = inner as unknown as EngineWide;
   }
 
   /** この Session の論理名。 */
@@ -162,44 +186,79 @@ export class ClientSession implements Session {
     return this.inner.direction;
   }
 
-  /** 全体終端していなければ真。 */
-  get isAlive(): boolean {
-    return !this.inner.closed;
+  /** この側（常に `"client"`）。 */
+  get side(): "client" {
+    return this.inner.side;
   }
 
-  /** {@inheritDoc Session.sendReliable} */
+  /** 全体終端していなければ真。 */
+  get isAlive(): boolean {
+    return this.inner.isAlive;
+  }
+
+  /** 受け渡し済みの受信件数。 */
+  get receivedCount(): number {
+    return this.inner.receivedCount;
+  }
+
+  /** latest で古い・同値のため捨てた受信件数。 */
+  get staleDroppedCount(): number {
+    return this.inner.staleDroppedCount;
+  }
+
+  /** latest で飛び越えた連番の合計。 */
+  get missingSeqCount(): number {
+    return this.inner.missingSeqCount;
+  }
+
+  /** latest の受信連番の最大値。未受信は -1 である。 */
+  get lastRecvSeq(): number {
+    return this.inner.lastRecvSeq;
+  }
+
+  /** 自側の送信終了（`closeWrite` 受付）済みか。 */
+  get writeEnded(): boolean {
+    return this.inner.writeEnded;
+  }
+
+  /** 相手 FIN の処理（EOF 通知）済みか。 */
+  get peerEnded(): boolean {
+    return this.inner.peerEnded;
+  }
+
+  /** engine への委譲。種別不一致は engine が拒否する。 */
   sendReliable(value: unknown): Promise<void> {
     return this.inner.sendReliable(value);
   }
 
-  /** {@inheritDoc Session.sendLatest} */
+  /** engine への委譲。種別不一致は engine が拒否する。 */
   sendLatest(value: unknown): void {
     this.inner.sendLatest(value);
   }
 
-  /** {@inheritDoc Session.onMessage} */
+  /** engine への委譲。 */
   onMessage(handler: (payload: unknown) => void): () => void {
     return this.inner.onMessage(handler);
   }
 
-  /** {@inheritDoc Session.onRemoteEnd} */
+  /** engine への委譲。 */
   onRemoteEnd(handler: () => void): () => void {
     return this.inner.onRemoteEnd(handler);
   }
 
-  /** {@inheritDoc Session.onEnd} */
+  /** engine への委譲。 */
   onEnd(handler: (end: SessionEnd) => void): () => void {
     return this.inner.onEnd(handler);
   }
 
-  /** {@inheritDoc Session.closeWrite} */
+  /** engine への委譲。 */
   closeWrite(): Promise<void> {
     return this.inner.closeWrite();
   }
 
-  /** {@inheritDoc Session.abort} */
-  abort(): void {
-    this.inner.abort();
+  /** engine への委譲。 */
+  abort(error?: Error): void {
+    this.inner.abort(error);
   }
 }
 
@@ -214,11 +273,11 @@ export class ClientSessionProvider implements SessionProvider {
   /** 紐付ける接続の識別子。 */
   readonly connectionId: ConnectionId;
 
-  private readonly connection: Connection;
+  private readonly connection: Connection<"client">;
   private readonly rawSocket: RawSocket;
-  private readonly wrapped = new Map<TransportSession, ClientSession>();
-  private readonly backlog: ClientSession[] = [];
-  private readonly sessionHandlers = new Set<(session: Session) => void>();
+  private readonly wrapped = new WeakMap<TransportSession<"client">, ClientSessionFacade>();
+  private readonly backlog: InboundSession[] = [];
+  private readonly sessionHandlers = new Set<(session: InboundSession) => void>();
   private readonly closedHandlers = new Set<(cause: Error) => void>();
   private closed = false;
   private closeCause: Error | undefined;
@@ -227,7 +286,7 @@ export class ClientSessionProvider implements SessionProvider {
    * @param connection - 適合させる transport の Connection（role `"client"`）。
    * @param rawSocket - mux 用のソケット適合。`close()` で閉じる。
    */
-  constructor(connection: Connection, rawSocket: RawSocket) {
+  constructor(connection: Connection<"client">, rawSocket: RawSocket) {
     this.connection = connection;
     this.connectionId = connection.connectionId;
     this.rawSocket = rawSocket;
@@ -239,20 +298,23 @@ export class ClientSessionProvider implements SessionProvider {
   }
 
   /** {@inheritDoc SessionProvider.tryCreateSession} */
-  async tryCreateSession(options: CreateSessionOptions): Promise<Session> {
+  async tryCreateSession(options: ReliableCreateSessionRequest): Promise<ReliableSession>;
+  /** {@inheritDoc SessionProvider.tryCreateSession} */
+  async tryCreateSession(
+    options: LatestCreateSessionRequest<"client">,
+  ): Promise<LatestSenderSession>;
+  /** {@inheritDoc SessionProvider.tryCreateSession} */
+  async tryCreateSession(options: CreateSessionOptions): Promise<OutboundSession>;
+  async tryCreateSession(options: CreateSessionOptions): Promise<OutboundSession> {
     if (this.closed) {
       throw new WorldClientError("CONNECTION_CLOSED", "終端した接続では Session を開けない。");
     }
-    const inner = await this.connection.createSession({
-      sessionId: options.sessionId,
-      kind: options.kind,
-      direction: options.direction,
-    });
+    const inner = await this.connection.createSession(options);
     return this.wrap(inner);
   }
 
   /** {@inheritDoc SessionProvider.onSession} */
-  onSession(handler: (session: Session) => void): () => void {
+  onSession(handler: (session: InboundSession) => void): () => void {
     this.sessionHandlers.add(handler);
     // ADR: 購読前の到着分を失わないため、登録時に順序どおり渡す。
     if (this.backlog.length > 0) {
@@ -300,7 +362,7 @@ export class ClientSessionProvider implements SessionProvider {
    *
    * @param inner - 成立した transport の Session。
    */
-  handleInbound(inner: TransportSession): void {
+  handleInbound(inner: TransportInboundSession<"client">): void {
     if (this.closed) return;
     const session = this.wrap(inner);
     if (this.sessionHandlers.size === 0) {
@@ -344,12 +406,23 @@ export class ClientSessionProvider implements SessionProvider {
     }
   }
 
-  /** transport の Session を1対1で包む。 */
-  private wrap(inner: TransportSession): ClientSession {
-    const known = this.wrapped.get(inner);
-    if (known !== undefined) return known;
-    const session = new ClientSession(inner);
-    this.wrapped.set(inner, session);
-    return session;
+  /** transport の Session を outbound 側の公開枝として包む。 */
+  private wrap(inner: TransportOutboundSession<"client">): OutboundSession;
+  /** transport の Session を inbound 側の公開枝として包む。 */
+  private wrap(inner: TransportInboundSession<"client">): InboundSession;
+  /** transport の Session を公開枝として包む。 */
+  private wrap(inner: TransportSession<"client">): Session;
+  private wrap(inner: TransportSession<"client">): Session {
+    let facade = this.wrapped.get(inner);
+    if (facade === undefined) {
+      facade = new ClientSessionFacade(inner);
+      this.wrapped.set(inner, facade);
+    }
+    // ADR: ファサードは実行時に全 capability を engine へ委譲する同一物であり、
+    // 公開型は inner の `kind`・`direction` で決まる枝として返す。同一 inner
+    // には常に同一物を返し、getter は委譲のため生成時の値写しはしない。
+    if (inner.kind === "reliable") return facade as ReliableSession;
+    if (inner.direction === "to_server") return facade as LatestSenderSession;
+    return facade as LatestReceiverSession;
   }
 }

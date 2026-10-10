@@ -15,15 +15,16 @@ import { PROTOCOL_VERSION, parseBridgeMessage, stringifyBridgeMessage } from "br
 import {
   Connection,
   WsMessageStream,
+  type InboundSession as TransportInboundSession,
+  type LatestSenderSession as TransportLatestSenderSession,
   type RawSocket,
-  type Session as TransportSession,
   type TimerScheduler,
   type WsMessageStreamOptions,
 } from "bridge-protocol/transport";
 import {
   WorldClientError,
   createConnectionRequest,
-  type Session,
+  type InboundSession,
   type SessionProvider,
 } from "../src/index.ts";
 import { normalizeSocketData } from "../src/browser-socket.ts";
@@ -187,6 +188,20 @@ function rawToBytes(data: RawData): Uint8Array {
   return new Uint8Array((data as ArrayBuffer).slice(0));
 }
 
+/**
+ * 型に無い送信口を試験限定で見せる。実行時は engine の検査に委ね、型の誤用が
+ * 実行時の拒否（`SessionError`）になることを確かめる。
+ */
+function misuse(session: unknown): {
+  sendReliable(value: unknown): Promise<void>;
+  sendLatest(value: unknown): void;
+} {
+  return session as {
+    sendReliable(value: unknown): Promise<void>;
+    sendLatest(value: unknown): void;
+  };
+}
+
 /** 出来事の到達を待つ。時刻の長さではなく到達で確定する。 */
 async function waitFor(condition: () => boolean, what: string): Promise<void> {
   const deadline = Date.now() + 3_000;
@@ -204,15 +219,15 @@ interface Harness {
   readonly latestMailbox: Map<string, unknown>;
   readonly latestLog: Array<{ sessionId: string; payload: unknown }>;
   readonly receivedReliable: Array<{ sessionId: string; payload: unknown }>;
-  readonly serverSessions: Map<string, TransportSession>;
+  readonly serverSessions: Map<string, TransportInboundSession<"server">>;
   approve(): void;
-  openServerLatest(sessionId: string): Promise<TransportSession>;
+  openServerLatest(sessionId: string): Promise<TransportLatestSenderSession<"server">>;
   abortServerSession(sessionId: string, cause?: Error): void;
   sendText(text: string): void;
   sendBinary(bytes: Uint8Array): void;
   closeServerSide(code?: number, reason?: string): void;
   observedClose(): Promise<{ code: number; reason: string }>;
-  serverConnection(): Connection | null;
+  serverConnection(): Connection<"server"> | null;
 }
 
 /**
@@ -228,13 +243,13 @@ function startHarness(options?: { expiresInMs?: number }): Promise<Harness> {
   const latestMailbox = new Map<string, unknown>();
   const latestLog: Array<{ sessionId: string; payload: unknown }> = [];
   const receivedReliable: Array<{ sessionId: string; payload: unknown }> = [];
-  const serverSessions = new Map<string, TransportSession>();
+  const serverSessions = new Map<string, TransportInboundSession<"server">>();
   const serverScheduler = new ManualScheduler();
   let connectionSeq = 0;
   let active: WebSocket | null = null;
   let muxed = false;
   let raw: TestServerSocket | null = null;
-  let connection: Connection | null = null;
+  let connection: Connection<"server"> | null = null;
   let closeResolve: ((close: { code: number; reason: string }) => void) | null = null;
   const closedPromise = new Promise<{ code: number; reason: string }>((resolve) => {
     closeResolve = resolve;
@@ -283,7 +298,7 @@ function startHarness(options?: { expiresInMs?: number }): Promise<Harness> {
     });
   });
 
-  function attachSession(session: TransportSession): void {
+  function attachSession(session: TransportInboundSession<"server">): void {
     serverSessions.set(session.sessionId, session);
     session.onEnd(() => {
       if (serverSessions.get(session.sessionId) === session) {
@@ -346,7 +361,9 @@ function startHarness(options?: { expiresInMs?: number }): Promise<Harness> {
           });
           muxed = true;
         },
-        openServerLatest: async (sessionId: string): Promise<TransportSession> => {
+        openServerLatest: async (
+          sessionId: string,
+        ): Promise<TransportLatestSenderSession<"server">> => {
           const current = connection;
           if (current === null) throw new Error("mux 開始前に開けない。");
           return current.createSession({ sessionId, kind: "latest", direction: "to_client" });
@@ -369,7 +386,7 @@ function startHarness(options?: { expiresInMs?: number }): Promise<Harness> {
           active.close(code, reason);
         },
         observedClose: (): Promise<{ code: number; reason: string }> => closedPromise,
-        serverConnection: (): Connection | null => connection,
+        serverConnection: (): Connection<"server"> | null => connection,
       });
     });
   });
@@ -469,6 +486,7 @@ test("比較コード表示・承認・同一WS上のmuxでreliable往復でき�
   await waitFor(() => harness.serverSessions.has("chat"), "サーバ側 Session の成立");
   const serverSession = harness.serverSessions.get("chat");
   if (serverSession === undefined) throw new Error("サーバ側 Session を特定できない。");
+  if (serverSession.kind !== "reliable") throw new Error("サーバ側 Session の種別が想定外である。");
   await serverSession.sendReliable({ hello: "server" });
 
   await session.sendReliable({ op: "ping" });
@@ -501,10 +519,25 @@ test("latestの同期受付・置換・サーバ側反映と種別境界", async
     kind: "reliable",
     direction: "bidirectional",
   });
-  // 種別と送信 API の不一致は受け付けない。
-  expect(() => chat.sendLatest({ x: 1 })).toThrow();
+  // 種別と送信 API の不一致は受け付けない（型に無い誤用は試験限定の見なしで
+  // 実行し、engine の `SessionError` になることを確かめる）。
+  let chatMisuse: unknown;
+  try {
+    misuse(chat).sendLatest({ x: 1 });
+  } catch (error) {
+    chatMisuse = error;
+  }
+  expect(chatMisuse).toBeInstanceOf(Error);
+  expect((chatMisuse as { code?: unknown }).code).toBe("kind-violation");
   await expect(chat.sendReliable({ x: 1 })).resolves.toBeUndefined();
-  await expect(pose.sendReliable({ x: 1 })).rejects.toThrow();
+  const poseMisuse = await misuse(pose)
+    .sendReliable({ x: 1 })
+    .then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+  expect(poseMisuse).toBeInstanceOf(Error);
+  expect((poseMisuse as { code?: unknown }).code).toBe("kind-violation");
 });
 
 test("サーバ起点latest to_clientをinbound Sessionで受ける", async () => {
@@ -512,7 +545,7 @@ test("サーバ起点latest to_clientをinbound Sessionで受ける", async () =
   const scheduler = new ManualScheduler();
   const { provider } = await connectApproved(harness, scheduler);
 
-  const inbound: Session[] = [];
+  const inbound: InboundSession[] = [];
   provider.onSession((session) => {
     inbound.push(session);
   });

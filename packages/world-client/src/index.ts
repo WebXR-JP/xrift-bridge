@@ -11,6 +11,14 @@ export { WorldClientError, createConnectionRequest } from "./client.ts";
 export type { ConnectOptions, ConnectionRequest, PairingInfo } from "./client.ts";
 export type {
   CreateSessionOptions,
+  CreateSessionRequest,
+  InboundSession,
+  LatestCreateSessionRequest,
+  LatestReceiverSession,
+  LatestSenderSession,
+  OutboundSession,
+  ReliableCreateSessionRequest,
+  ReliableSession,
   Session,
   SessionDirection,
   SessionEnd,

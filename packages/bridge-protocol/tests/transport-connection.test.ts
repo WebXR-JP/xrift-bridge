@@ -7,7 +7,12 @@ import type { YamuxStream } from "@chainsafe/libp2p-yamux/stream";
 import { bridgeMuxer, type BridgeMuxer } from "../src/transport/muxer.ts";
 import { FrameDecoder, encodeFrameJson } from "../src/transport/framing.ts";
 import { Connection } from "../src/transport/connection.ts";
-import { Session, type SessionEnd } from "../src/transport/session.ts";
+import type {
+  LatestCreateSessionRequest,
+  ReliableCreateSessionRequest,
+} from "../src/transport/connection.ts";
+import { type SessionEnd, type SessionEngine } from "../src/transport/session.ts";
+import type { ReliableSession, Session } from "../src/transport/session-types.ts";
 import type { TimerScheduler } from "../src/transport/timers.ts";
 import { PROTOCOL_VERSION, type SessionDirection, type SessionKind } from "../src/messages.ts";
 import { parseBridgeMessage } from "../src/validate.ts";
@@ -193,6 +198,9 @@ function tick(): Promise<void> {
 
 /** 期待件数の payload を購読して集める。 */
 function collectPayloads(session: Session, count: number, timeoutMs = 5000): Promise<unknown[]> {
+  // ADR: 公開 Union 型では sender が `onMessage` を持たないが、ここで渡すのは
+  // 受信可能な Session であり、実行時の公開値は engine そのもののため委譲で動く。
+  const engine = session as unknown as SessionEngine;
   return new Promise((resolve, reject) => {
     const out: unknown[] = [];
     // ADR: 登録前の到着分は登録時に同期で渡るため、`unsub` の確定前に
@@ -202,7 +210,7 @@ function collectPayloads(session: Session, count: number, timeoutMs = 5000): Pro
       unsub?.();
       reject(new Error(`payload ${count}件の受信が期限切れになった（${out.length}件のみ）`));
     }, timeoutMs);
-    unsub = session.onMessage((payload) => {
+    unsub = engine.onMessage((payload) => {
       out.push(payload);
       if (out.length === count) {
         clearTimeout(timer);
@@ -235,6 +243,14 @@ function waitSessionEnd(session: Session, timeoutMs = 5000): Promise<SessionEnd>
 async function waitInboundSession(endpoint: ConnEndpoint, index: number): Promise<Session> {
   await waitFor(() => endpoint.sessions.length > index, 5000, "相手側 Session の登録");
   return endpoint.sessions[index]!;
+}
+
+/** reliable であることを確かめて返す。テスト設定の誤りは投げる。 */
+function requireReliable(session: Session): ReliableSession {
+  if (session.kind !== "reliable") {
+    throw new Error("テスト設定の誤り：reliable ではない Session を使った。");
+  }
+  return session;
 }
 
 /** 生 stream の `close` を待つ（RST の観測）。 */
@@ -339,7 +355,7 @@ test("client起点のreliable双方向で双方のSessionが登録・対応す�
     // 往復できる。
     await clientSession.sendReliable({ n: 1 });
     expect(await collectPayloads(serverSession, 1)).toEqual([{ n: 1 }]);
-    await serverSession.sendReliable({ n: 2 });
+    await requireReliable(serverSession).sendReliable({ n: 2 });
     expect(await collectPayloads(clientSession, 1)).toEqual([{ n: 2 }]);
   } finally {
     client.conn.terminate(new Error("片付け"));
@@ -378,17 +394,19 @@ test("役割と方向が不整合な作成は送出前に拒否する", async ()
     await expect(
       server.conn.createSession({ sessionId: "bad-2", kind: "latest", direction: "to_server" }),
     ).rejects.toThrow();
-    // 種別と方向の組合せ違反も送出前に拒否する。
-    await expect(
-      client.conn.createSession({ sessionId: "bad-3", kind: "reliable", direction: "to_client" }),
-    ).rejects.toThrow();
-    await expect(
-      server.conn.createSession({
-        sessionId: "bad-4",
-        kind: "latest",
-        direction: "bidirectional",
-      }),
-    ).rejects.toThrow();
+    // 種別と方向の組合せ違反も送出前に拒否する。型で禁じる組合せのため動的に組む。
+    const reliableMismatch = {
+      sessionId: "bad-3",
+      kind: "reliable",
+      direction: "to_client",
+    } as unknown as ReliableCreateSessionRequest;
+    await expect(client.conn.createSession(reliableMismatch)).rejects.toThrow();
+    const latestMismatch = {
+      sessionId: "bad-4",
+      kind: "latest",
+      direction: "bidirectional",
+    } as unknown as LatestCreateSessionRequest;
+    await expect(server.conn.createSession(latestMismatch)).rejects.toThrow();
     // 拒否した分は登録に残らない。
     expect(client.conn.sessionCount).toBe(0);
     expect(server.conn.sessionCount).toBe(0);
@@ -449,9 +467,9 @@ test("重複sessionIdの新規streamはRSTし既存Sessionを維持する", asyn
     expect(serverConn.getSession("dup")).toBe(kept);
     expect(serverConn.sessionCount).toBe(1);
     expect(sessions).toHaveLength(1);
-    expect(kept.closed).toBe(false);
+    expect(kept.isAlive).toBe(true);
     // 既存 Session は送受信できる。
-    await kept.sendReliable({ n: 1 });
+    await requireReliable(kept).sendReliable({ n: 1 });
     const frames = await collectRawFrames(first, 1);
     const parsed = parseBridgeMessage(frames[0]);
     expect(parsed.type).toBe("data");
@@ -548,8 +566,8 @@ test("初回フレーム不正・宛先不一致・方向不整合は当該strea
     // 不正は登録に残らず、正常 Session は継続する。
     expect(sessions).toHaveLength(1);
     expect(serverConn.sessionCount).toBe(1);
-    expect(healthySession.closed).toBe(false);
-    await healthySession.sendReliable({ n: 9 });
+    expect(healthySession.isAlive).toBe(true);
+    await requireReliable(healthySession).sendReliable({ n: 9 });
     const frames = await collectRawFrames(healthy, 1);
     expect(parseBridgeMessage(frames[0])).toMatchObject({ type: "data" });
   } finally {
@@ -742,7 +760,7 @@ test("Session単位の終了・中断をConnection経由で行える", async () 
     // 方向別終了の後は送信できないが受信は継続する。
     await client.conn.closeSessionWrite("op-1");
     await expect(clientSession.sendReliable({ n: 1 })).rejects.toThrow();
-    await serverSession.sendReliable({ n: 2 });
+    await requireReliable(serverSession).sendReliable({ n: 2 });
     expect(await collectPayloads(clientSession, 1)).toEqual([{ n: 2 }]);
     // 不在の操作は拒否する（同期 throw）。
     expect(() => client.conn.closeSessionWrite("missing")).toThrow();

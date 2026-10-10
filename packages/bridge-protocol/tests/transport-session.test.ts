@@ -6,7 +6,7 @@ import { Uint8ArrayList } from "uint8arraylist";
 import type { YamuxStream } from "@chainsafe/libp2p-yamux/stream";
 import { bridgeMuxer, type BridgeMuxer } from "../src/transport/muxer.ts";
 import { FrameRejectedError, encodeFrameJson } from "../src/transport/framing.ts";
-import { Session, SessionError, type SessionEnd } from "../src/transport/session.ts";
+import { SessionEngine, SessionError, type SessionEnd } from "../src/transport/session.ts";
 import type { SessionDirection, SessionKind } from "../src/messages.ts";
 import { PROTOCOL_VERSION } from "../src/messages.ts";
 
@@ -93,8 +93,8 @@ interface SessionPair {
   readonly pair: MuxPair;
   readonly clientStream: YamuxStream;
   readonly serverStream: YamuxStream;
-  readonly clientSession: Session;
-  readonly serverSession: Session;
+  readonly clientSession: SessionEngine;
+  readonly serverSession: SessionEngine;
 }
 
 const CONNECTION_ID = "conn-1";
@@ -124,7 +124,7 @@ async function createSessionPair(
   });
   const clientStream = await pair.clientMuxer.createStream();
   const serverStream = await accepted;
-  const clientSession = new Session({
+  const clientSession = new SessionEngine({
     connectionId: CONNECTION_ID,
     sessionId,
     kind: options.kind,
@@ -132,7 +132,7 @@ async function createSessionPair(
     side: "client",
     stream: clientStream,
   });
-  const serverSession = new Session({
+  const serverSession = new SessionEngine({
     connectionId: CONNECTION_ID,
     sessionId,
     kind: options.kind,
@@ -154,7 +154,11 @@ async function waitFor(condition: () => boolean, timeoutMs: number, what: string
 }
 
 /** 期待件数の payload を購読して集める。 */
-function collectPayloads(session: Session, count: number, timeoutMs = 5000): Promise<unknown[]> {
+function collectPayloads(
+  session: SessionEngine,
+  count: number,
+  timeoutMs = 5000,
+): Promise<unknown[]> {
   return new Promise((resolve, reject) => {
     const out: unknown[] = [];
     // ADR: 登録前の到着分は登録時に同期で渡るため、`unsub` の確定前に
@@ -176,7 +180,7 @@ function collectPayloads(session: Session, count: number, timeoutMs = 5000): Pro
 }
 
 /** 終端通知を1件待つ。 */
-function waitSessionEnd(session: Session, timeoutMs = 5000): Promise<SessionEnd> {
+function waitSessionEnd(session: SessionEngine, timeoutMs = 5000): Promise<SessionEnd> {
   return new Promise((resolve, reject) => {
     // ADR: 終端済みへの登録は同期で即時通知されるため、`unsub` の確定前に
     // 呼ばれる場合がある。`let`＋任意呼びで TDZ を避ける。
@@ -194,7 +198,7 @@ function waitSessionEnd(session: Session, timeoutMs = 5000): Promise<SessionEnd>
 }
 
 /** 相手 FIN 通知を待つ。 */
-function waitRemoteEnd(session: Session, timeoutMs = 5000): Promise<void> {
+function waitRemoteEnd(session: SessionEngine, timeoutMs = 5000): Promise<void> {
   return new Promise((resolve, reject) => {
     let unsub: (() => void) | undefined;
     const timer = setTimeout(() => {
@@ -219,7 +223,7 @@ test("種別と方向の組合せで送受信可否が決まる", async () => {
     // reliable は双方向であり、不正な組合せは構築時に拒否する。
     expect(
       () =>
-        new Session({
+        new SessionEngine({
           connectionId: CONNECTION_ID,
           sessionId: SESSION_ID,
           kind: "reliable",

@@ -11,11 +11,15 @@ import {
   WorldClientError,
   type ConnectionRequest,
   type ConnectOptions,
+  type CreateSessionOptions,
+  type InboundSession,
+  type LatestCreateSessionRequest,
+  type LatestSenderSession,
+  type OutboundSession,
   type PairingInfo,
-  type Session,
-  type SessionDirection,
+  type ReliableCreateSessionRequest,
+  type ReliableSession,
   type SessionEnd,
-  type SessionKind,
   type SessionProvider,
 } from "world-client";
 import {
@@ -62,15 +66,17 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
- * 試験用の Session。送受信・終端を手で操作する。
+ * 試験用の reliable Session。送受信・終端を手で操作する。
  *
- * 応答は `respond` へ委ね、診断ハンドラ相当の折り返し・無応答・改ざんを
- * 切り替える。送出と応答は別報告とし、送信完了だけでは応答にしない。
+ * 診断が開くのは reliable 双方向のみのため、`ReliableSession` 枝として
+ * 振る舞う。応答は `respond` へ委ね、診断ハンドラ相当の折り返し・無応答・
+ * 改ざんを切り替える。送出と応答は別報告とし、送信完了だけでは応答にしない。
  */
-class FakeSession implements Session {
+class FakeSession implements ReliableSession {
   readonly sessionId: string;
-  readonly kind: SessionKind;
-  readonly direction: SessionDirection;
+  readonly kind = "reliable" as const;
+  readonly direction = "bidirectional" as const;
+  readonly side = "client" as const;
   private alive = true;
   readonly sent: unknown[] = [];
   respond: ((payload: unknown) => void) | null = null;
@@ -78,14 +84,36 @@ class FakeSession implements Session {
   private readonly remoteEndHandlers = new Set<() => void>();
   private readonly endHandlers = new Set<(end: SessionEnd) => void>();
 
-  constructor(sessionId: string, kind: SessionKind, direction: SessionDirection) {
+  constructor(sessionId: string) {
     this.sessionId = sessionId;
-    this.kind = kind;
-    this.direction = direction;
   }
 
   get isAlive(): boolean {
     return this.alive;
+  }
+
+  get receivedCount(): number {
+    return 0;
+  }
+
+  get staleDroppedCount(): number {
+    return 0;
+  }
+
+  get missingSeqCount(): number {
+    return 0;
+  }
+
+  get lastRecvSeq(): number {
+    return -1;
+  }
+
+  get writeEnded(): boolean {
+    return false;
+  }
+
+  get peerEnded(): boolean {
+    return false;
   }
 
   async sendReliable(value: unknown): Promise<void> {
@@ -99,11 +127,6 @@ class FakeSession implements Session {
         if (this.alive) respond(value);
       }, 0);
     }
-  }
-
-  sendLatest(value: unknown): void {
-    if (!this.alive) throw new Error("終端した Session には送れない。");
-    this.sent.push(value);
   }
 
   onMessage(handler: (payload: unknown) => void): () => void {
@@ -198,18 +221,24 @@ class FakeProvider implements SessionProvider {
     return this.alive;
   }
 
-  async tryCreateSession(options: {
-    sessionId: string;
-    kind: SessionKind;
-    direction: SessionDirection;
-  }): Promise<Session> {
+  async tryCreateSession(options: ReliableCreateSessionRequest): Promise<ReliableSession>;
+  async tryCreateSession(
+    options: LatestCreateSessionRequest<"client">,
+  ): Promise<LatestSenderSession>;
+  async tryCreateSession(options: CreateSessionOptions): Promise<OutboundSession>;
+  async tryCreateSession(options: CreateSessionOptions): Promise<OutboundSession> {
     if (!this.alive) {
       throw new WorldClientError("CONNECTION_CLOSED", "終端した接続では Session を開けない。");
     }
     if (this.sessions.has(options.sessionId)) {
       throw new WorldClientError("DUPLICATE_SESSION", "同名の Session がある。");
     }
-    const session = new FakeSession(options.sessionId, options.kind, options.direction);
+    // ADR: 診断が開くのは reliable 双方向のみであり、スタブもその枝だけを
+    // 作る。latest 要求は診断経路では来ないため実行時検査で拒否する。
+    if (options.kind !== "reliable" || options.direction !== "bidirectional") {
+      throw new WorldClientError("UNEXPECTED_DIRECTION", "想定外の方向の Session 要求である。");
+    }
+    const session = new FakeSession(options.sessionId);
     session.respond = (payload) => {
       this.respond(session, payload);
     };
@@ -217,7 +246,7 @@ class FakeProvider implements SessionProvider {
     return session;
   }
 
-  onSession(): () => void {
+  onSession(_handler: (session: InboundSession) => void): () => void {
     return () => undefined;
   }
 

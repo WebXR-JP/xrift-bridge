@@ -19,7 +19,7 @@ import {
   type ConnectOptions,
   type ConnectionRequest,
   type PairingInfo,
-  type Session,
+  type ReliableSession,
   type SessionProvider,
 } from "world-client";
 import type { DiagnosticBuildInfo } from "../build-info.ts";
@@ -311,8 +311,8 @@ export class DiagnosticSession {
   private ping: PingView = { status: "none" };
   private aborter: AbortController | null = null;
   private provider: SessionProvider | null = null;
-  private echoSession: Session | null = null;
-  private pingSession: Session | null = null;
+  private echoSession: ReliableSession | null = null;
+  private pingSession: ReliableSession | null = null;
   private readonly echoUnsubs: Array<() => void> = [];
   private readonly pingUnsubs: Array<() => void> = [];
   private providerUnsub: (() => void) | null = null;

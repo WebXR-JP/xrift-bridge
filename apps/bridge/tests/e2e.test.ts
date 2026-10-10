@@ -15,7 +15,7 @@
  */
 import { afterEach, expect, test } from "vite-plus/test";
 import type { TimerScheduler } from "bridge-protocol/transport";
-import { createConnectionRequest, type Session, type SessionProvider } from "world-client";
+import { createConnectionRequest, type ReliableSession, type SessionProvider } from "world-client";
 import { createBridgeServer, type BridgeServer } from "../src/server.ts";
 
 const TEST_ORIGIN = "http://localhost:5173";
@@ -113,7 +113,7 @@ async function connectApproved(
 }
 
 /** Session の受信 payload を集める。到着待ちは出来事の到達で確定する。 */
-function collectSession(session: Session): {
+function collectSession(session: ReliableSession): {
   waitForPayload(predicate: (payload: unknown) => boolean): Promise<unknown>;
 } {
   const payloads: unknown[] = [];

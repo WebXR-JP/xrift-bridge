@@ -17,7 +17,7 @@
  * @packageDocumentation
  */
 import { isJsonValue } from "bridge-protocol";
-import type { Session } from "bridge-protocol/transport";
+import type { ReliableSession } from "bridge-protocol/transport";
 
 /** 診断応答の計数口。 */
 export interface DiagnosticCounter {
@@ -71,7 +71,7 @@ function toDiagnosticResponse(payload: unknown): {
  * @param counter - 応答の計数口。
  */
 export function handleDiagnosticPayload(
-  session: Session,
+  session: ReliableSession<"server">,
   payload: unknown,
   counter: DiagnosticCounter,
 ): void {

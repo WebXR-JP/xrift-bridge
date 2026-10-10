@@ -23,15 +23,19 @@ export {
   type BridgeMuxer,
 } from "./muxer.ts";
 export {
-  Session,
   SessionError,
   type SessionEnd,
   type SessionEndKind,
   type SessionErrorCode,
-  type SessionOptions,
-  type SessionSide,
-  type SessionTerminateReason,
 } from "./session.ts";
+export type {
+  InboundSession,
+  LatestReceiverSession,
+  LatestSenderSession,
+  OutboundSession,
+  ReliableSession,
+  Session,
+} from "./session-types.ts";
 export {
   KEEPALIVE_FIRST_DELAY_MS,
   KEEPALIVE_INTERVAL_MS,
@@ -44,5 +48,7 @@ export {
   type ConnectionOptions,
   type ConnectionRole,
   type CreateSessionRequest,
+  type LatestCreateSessionRequest,
+  type ReliableCreateSessionRequest,
 } from "./connection.ts";
 export { defaultTimerScheduler, type TimerScheduler } from "./timers.ts";

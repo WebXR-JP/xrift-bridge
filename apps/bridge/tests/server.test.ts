@@ -7,7 +7,12 @@ import {
   parseBridgeMessage,
   type BridgeMessage,
 } from "bridge-protocol";
-import { Connection, WsMessageStream, type Session } from "bridge-protocol/transport";
+import {
+  Connection,
+  WsMessageStream,
+  type InboundSession,
+  type Session,
+} from "bridge-protocol/transport";
 import type { WsMessageStreamOptions } from "bridge-protocol/transport";
 import { createBridgeServer, type BridgeOptions, type BridgeServer } from "../src/server.ts";
 import { NodeWsSocket } from "../src/node-socket.ts";
@@ -19,7 +24,7 @@ const DEV_ORIGIN = "http://localhost:5173";
 
 const servers: BridgeServer[] = [];
 const sockets: WebSocket[] = [];
-const muxConns: Connection[] = [];
+const muxConns: Connection<"client">[] = [];
 
 afterEach(async () => {
   for (const socket of sockets.splice(0)) {
@@ -293,7 +298,7 @@ async function authorizeCollected(
 interface ClientMux {
   readonly raw: NodeWsSocket;
   readonly stream: WsMessageStream;
-  readonly conn: Connection;
+  readonly conn: Connection<"client">;
   readonly closes: Error[];
 }
 
@@ -312,7 +317,7 @@ function startClientMux(
   const raw = new NodeWsSocket(socket);
   const stream = new WsMessageStream(raw, { direction: "outbound", log: createTestLogger() });
   const closes: Error[] = [];
-  const conn = new Connection({
+  const conn = new Connection<"client">({
     transport: stream,
     role: "client",
     connectionId,
@@ -351,7 +356,7 @@ async function authorizeAndMux(
 }
 
 /** Session の受信 payload を集める。 */
-function collectSession(session: Session): {
+function collectSession(session: InboundSession<"client">): {
   payloads: unknown[];
   waitForCount(count: number, timeoutMs?: number): Promise<unknown[]>;
   waitForPayload(predicate: (payload: unknown) => boolean, timeoutMs?: number): Promise<unknown>;
@@ -413,7 +418,7 @@ function collectSession(session: Session): {
 
 /** Session 終端を1件待つ。 */
 function waitSessionEnd(
-  session: Session,
+  session: Session<"client">,
   timeoutMs = 3_000,
 ): Promise<{ kind: string; error?: Error }> {
   return new Promise((resolve, reject) => {
@@ -1604,6 +1609,8 @@ test("同名Sessionの二重作成は拒否し既存は継続する", async () =
   ).rejects.toThrow();
   const survivor = auth.mux.conn.getSession("dup");
   if (survivor === undefined) throw new Error("既存 Session がない。");
+  // `dup` は reliable 双方向で開いたため、受信・送信の前に絞る。
+  if (survivor.kind !== "reliable") throw new Error("既存 Session が reliable ではない。");
   const collected = collectSession(survivor);
   await survivor.sendReliable({ op: "ping", id: "dup-1" });
   await collected.waitForPayload(

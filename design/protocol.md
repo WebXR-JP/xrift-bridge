@@ -9,6 +9,7 @@
 動的契約は各テスト、上位の設計判断はこの文書を正本とする。
 輸送の採用値の正本は `packages/bridge-protocol/src/transport/` の各定数（`framing.ts` の `FRAME_MAX_BYTES`・`muxer.ts` の `MUX_STREAM_WINDOW_BYTES`・`MAX_INBOUND_STREAMS`・`MAX_OUTBOUND_STREAMS`・`keepalive.ts` の `KEEPALIVE_*`）とし、本文に複製しない。
 ワールド側の公開操作の正本は `packages/world-client/src/client.ts` の `createConnectionRequest`・`packages/world-client/src/session.ts` の `SessionProvider`・`Session` とする。
+Session capability（`kind`・`direction` 別の公開型）の形状の正本は [packages/bridge-protocol/src/transport/session-types.ts](../packages/bridge-protocol/src/transport/session-types.ts)、生成口の overload は [packages/bridge-protocol/src/transport/connection.ts](../packages/bridge-protocol/src/transport/connection.ts) の `Connection` とする。
 
 ### 版の方針
 
@@ -106,6 +107,9 @@
 - `reliable` 送信は `Promise<void>` を返し、stream 内で直列化して下位 backpressure を待つ。成功＝ローカル送信処理完了であり、相手の受信・業務完了ではない。
 - `sendLatest` は同期受付を維持する（検証後、yamux 投入前に最新値を置換）。戻りは配送完了を意味しない。投入中1件＋未投入最新1件で動く。
 - `latest` の非同期失敗は Session／Connection の終端通知で知らせる。値ごとの配送 Promise は作らない。
+- 公開 `Session` は `kind`・`direction` を判別子とする合併で capability を型に表す。`reliable`（双方向のみ）は `sendReliable` と `onMessage` を持ち、`latest`（一方向のみ）は送信側が `sendLatest` のみ・受信側が `onMessage` のみを持つ。
+- 生成側は常に送信側であり、`createSession` は合法な組合せ（`kind` と `direction`、role に応じた向き）だけを受ける overload とする。client の送信は `to_server`・受信は `to_client` であり、server は逆である。組合せ違いの誤用は型で棄却し、相手の主張しうる不正値に対する実行時の境界検証（種別・方向・方向違反・終端後の拒否）は残す。形状の詳細は正本の型に置き、ここでは複製しない。
+- 相手起点の Session（`onSession` 通知）と取得口（`getSession`）は合併を返し、`kind`・`direction` で絞ってから使う。
 
 ## 図
 
@@ -154,4 +158,5 @@ flowchart LR
 - 外部入力の境界検証: [packages/bridge-protocol/src/validate.ts](../packages/bridge-protocol/src/validate.ts)
 - 輸送の採用値: [framing.ts](../packages/bridge-protocol/src/transport/framing.ts)（`FRAME_MAX_BYTES`）・[muxer.ts](../packages/bridge-protocol/src/transport/muxer.ts)（`MUX_STREAM_WINDOW_BYTES`・`MAX_INBOUND_STREAMS`・`MAX_OUTBOUND_STREAMS`・`enableKeepAlive: false`）・[keepalive.ts](../packages/bridge-protocol/src/transport/keepalive.ts)（`KEEPALIVE_*`）
 - ワールド側の公開操作: [packages/world-client/src/client.ts](../packages/world-client/src/client.ts)（`createConnectionRequest`）・[packages/world-client/src/session.ts](../packages/world-client/src/session.ts)（`SessionProvider`・`Session`）
+- Session capability の公開型: [session-types.ts](../packages/bridge-protocol/src/transport/session-types.ts)（`Session`・`InboundSession`・`OutboundSession`）、生成口の overload は [connection.ts](../packages/bridge-protocol/src/transport/connection.ts)（`Connection` の `createSession`・`getSession`・`onSession`）
 - 検証計画: [docs/verification/bridge.md](../docs/verification/bridge.md)

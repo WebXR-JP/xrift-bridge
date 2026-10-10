@@ -108,14 +108,16 @@ function toError(value: unknown, fallback: string): Error {
 }
 
 /**
- * 1本の yamux stream 上でのアプリ Session の送受信と終了。
+ * 1本の yamux stream 上でのアプリ Session の送受信と終了（内部の状態機械）。
  *
- * 送信可否・受信可否は `direction` と `side` の組合せで決まる（`to_client` は
- * server が送信・client が受信、`to_server` は逆、`bidirectional` は双方）。
- * 受信した `data` の購読と終端通知は `onMessage`・`onRemoteEnd`・`onEnd` で受ける。
- * 購読者の例外は隔離し、Session 内部を壊さない。
+ * 公開する capability 別の見え方は `session-types.ts` が定め、`Connection` は
+ * この engine そのものを狭窄型で返す。送信可否・受信可否は `direction` と
+ * `side` の組合せで決まる（`to_client` は server が送信・client が受信、
+ * `to_server` は逆、`bidirectional` は双方）。受信した `data` の購読と終端通知は
+ * `onMessage`・`onRemoteEnd`・`onEnd` で受ける。購読者の例外は隔離し、
+ * Session 内部を壊さない。
  */
-export class Session {
+export class SessionEngine {
   /** 紐付ける接続の識別子。 */
   readonly connectionId: string;
   /** この Session の論理名。 */
@@ -239,6 +241,16 @@ export class Session {
   /** 全体終端済みか。 */
   get closed(): boolean {
     return this.terminated;
+  }
+
+  /**
+   * 全体終端していなければ真（`closed` の読み替え）。
+   *
+   * 公開 capability 型が参照する名前であり、`closed` と同値である。
+   * engine を狭窄型でそのまま返すため、実行時に欠けないようここに置く。
+   */
+  get isAlive(): boolean {
+    return !this.terminated;
   }
 
   /** 自側の送信終了（`closeWrite` 受付）済みか。 */

@@ -20,7 +20,15 @@ import { PROTOCOL_VERSION, type SessionDirection, type SessionKind } from "../me
 import { parseBridgeMessage } from "../validate.ts";
 import { FrameDecoder, encodeFrameJson } from "./framing.ts";
 import { bridgeMuxer, type BridgeMuxer } from "./muxer.ts";
-import { Session } from "./session.ts";
+import { SessionEngine } from "./session.ts";
+import type {
+  InboundSession,
+  LatestSenderSession,
+  LatestSendDirectionMap,
+  OutboundSession,
+  ReliableSession,
+  Session,
+} from "./session-types.ts";
 import { Keepalive } from "./keepalive.ts";
 import { defaultTimerScheduler, type TimerScheduler } from "./timers.ts";
 
@@ -28,7 +36,7 @@ import { defaultTimerScheduler, type TimerScheduler } from "./timers.ts";
 export type ConnectionRole = "client" | "server";
 
 /** Connection の生成条件。 */
-export interface ConnectionOptions {
+export interface ConnectionOptions<R extends ConnectionRole = ConnectionRole> {
   /**
    * 認可後のバイナリ専用輸送。認可プリリュードは外で済ませること。
    *
@@ -37,26 +45,55 @@ export interface ConnectionOptions {
    */
   readonly transport: MessageStream;
   /** この側が `client`・`server` のどちらであるか。 */
-  readonly role: ConnectionRole;
+  readonly role: R;
   /** 紐付ける接続の識別子。送受信する全メッセージに載せ照合する。 */
   readonly connectionId: string;
   /** タイマーの実装。省略時は環境のタイマーを使う。 */
   readonly scheduler?: TimerScheduler;
-  /** inbound の `create_session` が成立したときの通知。例外は隔離する。 */
-  readonly onSession?: (session: Session) => void;
+  /**
+   * inbound の `create_session` が成立したときの通知。例外は隔離する。
+   *
+   * `NoInfer` はコールバックから `role` の推論が広がるのを防ぐ。
+   */
+  readonly onSession?: (session: InboundSession<NoInfer<R>>) => void;
   /** Connection 終端の通知。一度だけ呼ぶ。例外は隔離する。 */
   readonly onClose?: (cause: Error) => void;
 }
 
-/** `createSession` に渡す Session の生成条件。 */
-export interface CreateSessionRequest {
+/** `createSession` に渡す reliable Session の生成条件（双方向のみ）。 */
+export interface ReliableCreateSessionRequest {
   /** 作成する Session の論理名。接続内で一意であること。 */
   readonly sessionId: string;
-  /** 配送種別。`reliable` は双方向のみ、`latest` は一方向のみである。 */
-  readonly kind: SessionKind;
-  /** 許す送信方向。役割との整合が必要である。 */
-  readonly direction: SessionDirection;
+  /** 配送種別。`reliable` は双方向のみである。 */
+  readonly kind: "reliable";
+  /** 許す送信方向。`reliable` は双方向のみである。 */
+  readonly direction: "bidirectional";
 }
+
+/**
+ * `createSession` に渡す latest Session の生成条件（一方向のみ）。
+ *
+ * 作成側は送信側であり、方向は役割で決まる（client は `to_server`、
+ * server は `to_client`）。
+ */
+export interface LatestCreateSessionRequest<R extends ConnectionRole = ConnectionRole> {
+  /** 作成する Session の論理名。接続内で一意であること。 */
+  readonly sessionId: string;
+  /** 配送種別。`latest` は一方向のみである。 */
+  readonly kind: "latest";
+  /** 許す送信方向。役割に応じた送信方向のみである。 */
+  readonly direction: LatestSendDirectionMap[R];
+}
+
+/**
+ * `createSession` に渡す Session の生成条件（合法な組合せの合併）。
+ *
+ * 動的な要求には最後の overload（`OutboundSession` 戻り）を使う。
+ * 種別・方向・役割の不正な組合せを受ける公開 fallback は設けない。
+ */
+export type CreateSessionRequest<R extends ConnectionRole = ConnectionRole> =
+  | ReliableCreateSessionRequest
+  | LatestCreateSessionRequest<R>;
 
 /**
  * 方向と役割の整合を確かめる。
@@ -82,20 +119,20 @@ function isDirectionAllowedForRole(
  * `create_session` ハンドシェイクの成立で Session 化して `onSession` へ
  * 通知する。`terminate()` で GoAway＋全 Session 終端＋待機破棄を行う。
  */
-export class Connection {
+export class Connection<R extends ConnectionRole = ConnectionRole> {
   /** 紐付ける接続の識別子。 */
   readonly connectionId: string;
   /** この側が `client`・`server` のどちらであるか。 */
-  readonly role: ConnectionRole;
+  readonly role: R;
 
   private readonly muxer: BridgeMuxer;
   private readonly keepalive: Keepalive;
-  private readonly onSessionNotify: ((session: Session) => void) | undefined;
+  private readonly onSessionNotify: ((session: InboundSession<R>) => void) | undefined;
   private readonly onCloseNotify: ((cause: Error) => void) | undefined;
-  /** 論理名から Session への対応表。同時に同名は一つである。 */
-  private readonly sessionsById = new Map<string, Session>();
-  /** yamux stream から Session への対応表。論理名表と1対1である。 */
-  private readonly sessionsByStream = new Map<YamuxStream, Session>();
+  /** 論理名から engine への対応表。同時に同名は一つである。 */
+  private readonly sessionsById = new Map<string, SessionEngine>();
+  /** yamux stream から engine への対応表。論理名表と1対1である。 */
+  private readonly sessionsByStream = new Map<YamuxStream, SessionEngine>();
   /** ハンドシェイク待ちの inbound stream とその後片付け。 */
   private readonly pendingHandshakes = new Map<YamuxStream, () => void>();
   /** 終端済みか。終端後は作成を受け付けず、受信も捨てる。 */
@@ -109,7 +146,7 @@ export class Connection {
    * @param options - 輸送・役割・接続識別子・通知先。
    * @throws `Error` — 輸送の向きと役割が対応しない場合。
    */
-  constructor(options: ConnectionOptions) {
+  constructor(options: ConnectionOptions<R>) {
     // ADR: 向きの不一致は全 stream の ID 割当を壊すため、mux 開始前に
     // 拒否する。client は発信側（outbound）、server は受信側（inbound）である。
     const outbound = options.transport.direction === "outbound";
@@ -152,8 +189,11 @@ export class Connection {
    * @param sessionId - 取り出す Session の論理名。
    * @returns 登録中の Session。なければ `undefined`。
    */
-  getSession(sessionId: string): Session | undefined {
-    return this.sessionsById.get(sessionId);
+  getSession(sessionId: string): Session<R> | undefined {
+    const engine = this.sessionsById.get(sessionId);
+    // ADR: 公開型は engine そのものの狭窄型であり、同一 engine には同一物を返す。
+    // ファサードを作らないため同一性・委譲・getter 追従が自明に保たれる。
+    return engine === undefined ? undefined : (engine as unknown as Session<R>);
   }
 
   /**
@@ -163,12 +203,19 @@ export class Connection {
    * 解決はローカル処理の完了（送出受付と登録）を意味し、相手の業務受付
    * 成功ではない。以降の送受信は返した Session で行う。
    *
+   * 要求の組合せごとに戻り型が決まる overload であり、動的な合法要求には
+   * 最後の overload（`OutboundSession` 戻り）を使う。不正な組合せを受ける
+   * 公開 fallback は設けない（実行時検証は内部に残す）。
+   *
    * @param request - 論理名・種別・方向。
    * @returns 登録した Session で解ける約束。
    * @throws `Error` — 終端後・同名 Session の存在・役割と方向の不整合・
    * 輸送失敗の場合。
    */
-  async createSession(request: CreateSessionRequest): Promise<Session> {
+  createSession(request: ReliableCreateSessionRequest): Promise<ReliableSession<R>>;
+  createSession(request: LatestCreateSessionRequest<R>): Promise<LatestSenderSession<R>>;
+  createSession(request: CreateSessionRequest<R>): Promise<OutboundSession<R>>;
+  async createSession(request: CreateSessionRequest<R>): Promise<OutboundSession<R>> {
     if (this.terminated) {
       throw new Error("終端した Connection では Session を開けない。");
     }
@@ -218,9 +265,9 @@ export class Connection {
       );
       throw cause;
     }
-    let session: Session;
+    let session: SessionEngine;
     try {
-      session = new Session({
+      session = new SessionEngine({
         connectionId: this.connectionId,
         sessionId: request.sessionId,
         kind: request.kind,
@@ -236,7 +283,9 @@ export class Connection {
       throw cause;
     }
     this.registerSession(session, stream);
-    return session;
+    // ADR: `getSession` と同じく engine そのものを狭窄型で返す。overload の
+    // 戻り型は呼出し側の要求の組合せで決まり、実行時の物は同一である。
+    return session as unknown as OutboundSession<R>;
   }
 
   /**
@@ -310,8 +359,8 @@ export class Connection {
     }
   }
 
-  /** 論理名で Session を取り出す。なければ拒否する。 */
-  private requireSession(sessionId: string): Session {
+  /** 論理名で engine を取り出す。なければ拒否する。 */
+  private requireSession(sessionId: string): SessionEngine {
     if (this.terminated) {
       throw new Error("終端した Connection では Session を操作できない。");
     }
@@ -436,9 +485,9 @@ export class Connection {
       fail("役割が受信側でない方向の `create_session` である。");
       return;
     }
-    let session: Session;
+    let session: SessionEngine;
     try {
-      session = new Session({
+      session = new SessionEngine({
         connectionId: this.connectionId,
         sessionId: parsed.sessionId,
         kind: parsed.kind,
@@ -453,15 +502,16 @@ export class Connection {
     this.registerSession(session, stream);
     if (this.onSessionNotify !== undefined) {
       try {
-        this.onSessionNotify(session);
+        // ADR: 実行時検証済みの engine を `InboundSession` の狭窄型で通知する。
+        this.onSessionNotify(session as unknown as InboundSession<R>);
       } catch {
         // 購読者の例外は隔離し、Session と Connection を壊さない。
       }
     }
   }
 
-  /** Session を対応表に載せ、終端時の登録解除を仕掛ける。 */
-  private registerSession(session: Session, stream: YamuxStream): void {
+  /** engine を対応表に載せ、終端時の登録解除を仕掛ける。 */
+  private registerSession(session: SessionEngine, stream: YamuxStream): void {
     this.sessionsById.set(session.sessionId, session);
     this.sessionsByStream.set(stream, session);
     session.onEnd(() => {
