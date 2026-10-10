@@ -4,7 +4,7 @@ PC上で動作するワールドとローカルをつなぐ中継アプリ（CLI
 
 サーバーコアは `../../packages/bridge-server` にあり、このアプリはその管理境界 API を利用して起動と対話命令を担う。
 
-形状の正本は `../../packages/bridge-protocol/src/messages.ts` の型、境界検証は `../../packages/bridge-protocol/src/validate.ts`、動的契約はテストとする。上位の設計判断は `../../design/bridge.md`・`../../design/protocol.md`、検証計画は `../../docs/verification/bridge.md` を見る。制限値の正本は `bridge-server` の `src/config.ts` の `DEFAULT_LIMITS` とする。
+形状の正本は `../../packages/bridge-protocol/src/messages.ts` の型、境界検証は `../../packages/bridge-protocol/src/validate.ts`、動的契約はテストとする。上位の設計判断は `../../design/bridge-connection.md`・`../../design/protocol.md`、検証計画は `../../docs/verification/bridge-connection.md` を見る。制限値の正本は `bridge-server` の `src/config.ts` の `DEFAULT_LIMITS` とする。
 
 ## 起動
 
@@ -29,7 +29,7 @@ node dist/index.mjs --dev --origin http://localhost:5173
 有限・設定可能な値であり、合意値・性能保証ではない。値の正本は
 `bridge-server` の `src/config.ts` の `DEFAULT_LIMITS` とし、ここでは値を再掲しない。
 `BridgeOptions.limits` で上書きでき、計測時の実効設定は証拠に記録する。
-検証計画は `../../docs/verification/bridge.md` を見る。
+検証計画は `../../docs/verification/bridge-connection.md` を見る。
 
 固定値: 比較コードの形式・期限・上限・レートの正本は `bridge-server` の `src/config.ts` の
 `DEFAULT_LIMITS` と `bridge-protocol` の定義・検証（`PAIRING_CODE_LENGTH`・`isPairingCode`・`formatPairingCode`）を見る。比較コードは暗号学的乱数による数字6桁であり、OTP 認証ではない。承認は接続単位であり、切断で失効する。

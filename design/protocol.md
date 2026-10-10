@@ -21,7 +21,7 @@ Session capability（`kind`・`direction` 別の公開型）の形状の正本�
 
 本節で Connection／Session／yamux stream の呼び分けを自己完結して定義する。
 
-- **Connection**＝WebSocket 接続1つ。認可は Connection 単位のみに属し、切断で失効する（[ブリッジ接続](bridge.md)の接続認可の判断を維持する）。
+- **Connection**＝WebSocket 接続1つ。認可は Connection 単位のみに属し、切断で失効する（[ブリッジ接続](bridge-connection.md)の接続認可の判断を維持する）。
 - **Session**＝一連のやりとりの単位。既定は双方向 yamux stream 1本である。
 - **yamux stream**＝多重化の輸送単位。論理名と yamux stream ID の対応はアプリが保持する。`latestMailbox`（接続をまたぐサーバ全体記録、キーは論理名）は変更しない。
 - 複数の stream を束ねる終了プロトコルは導入しない。
@@ -92,7 +92,7 @@ Session capability（`kind`・`direction` 別の公開型）の形状の正本�
 ### WebSocket close code の使い分け
 
 - 1000＝正常終了、1001＝サーバ停止、1008＝ポリシー（`disconnectConnection` の即時切断を含む）、1009＝WSメッセージ超過、1011＝内部障害とする。1006 は観測値であり送信しない。
-- `disconnectConnection` は排出待ちをせず、1008＋固定 reason で閉じ、1000ms で強制終了する（[ブリッジ接続](bridge.md)の判断を参照）。
+- `disconnectConnection` は排出待ちをせず、1008＋固定 reason で閉じ、1000ms で強制終了する（[ブリッジ接続](bridge-connection.md)の判断を参照）。
 
 ### 監視
 
@@ -149,14 +149,14 @@ flowchart LR
 
 ## 合意待ち・検証待ち
 
-検証待ち・合意待ちの項目一覧は [docs/verification/bridge.md](../docs/verification/bridge.md) を正本とする。
+検証待ち・合意待ちの項目一覧は [docs/verification/bridge-connection.md](../docs/verification/bridge-connection.md) を正本とする。
 
 ## 正本へのリンク
 
-- 上位の設計判断: この文書（[design/protocol.md](protocol.md)）、全体構成は [design/bridge.md](bridge.md)
+- 上位の設計判断: この文書（[design/protocol.md](protocol.md)）、全体構成は [design/bridge-connection.md](bridge-connection.md)
 - 形状（フィールド名・型・必須/任意）: [packages/bridge-protocol/src/messages.ts](../packages/bridge-protocol/src/messages.ts)
 - 外部入力の境界検証: [packages/bridge-protocol/src/validate.ts](../packages/bridge-protocol/src/validate.ts)
 - 輸送の採用値: [framing.ts](../packages/bridge-protocol/src/transport/framing.ts)（`FRAME_MAX_BYTES`）・[muxer.ts](../packages/bridge-protocol/src/transport/muxer.ts)（`MUX_STREAM_WINDOW_BYTES`・`MAX_INBOUND_STREAMS`・`MAX_OUTBOUND_STREAMS`・`enableKeepAlive: false`）・[keepalive.ts](../packages/bridge-protocol/src/transport/keepalive.ts)（`KEEPALIVE_*`）
 - ワールド側の公開操作: [packages/world-client/src/client.ts](../packages/world-client/src/client.ts)（`createConnectionRequest`）・[packages/world-client/src/session.ts](../packages/world-client/src/session.ts)（`SessionProvider`・`Session`）
 - Session capability の公開型: [session-types.ts](../packages/bridge-protocol/src/transport/session-types.ts)（`Session`・`InboundSession`・`OutboundSession`）、生成口の overload は [connection.ts](../packages/bridge-protocol/src/transport/connection.ts)（`Connection` の `createSession`・`getSession`・`onSession`）
-- 検証計画: [docs/verification/bridge.md](../docs/verification/bridge.md)
+- 検証計画: [docs/verification/bridge-connection.md](../docs/verification/bridge-connection.md)

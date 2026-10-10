@@ -20,7 +20,7 @@
 - 対象は XRift が動くパソコン版であり、必須は Google Chrome のみである。他は最善努力とする。
 - Safari を含む全ブラウザでの接続は約束しない。
 - WebKit の課題 171934 は現在も未解決であり、localhost 経路が接続不可の可能性がある。
-- ブラウザごとの対応表は観測結果で作る。観測手順は[検証計画](../docs/verification/bridge.md)を正本とする。
+- ブラウザごとの対応表は観測結果で作る。観測手順は[検証計画](../docs/verification/bridge-connection.md)を正本とする。
 
 ## 構成
 
@@ -41,7 +41,7 @@ flowchart LR
 - ポートは明示的に設定できる。競合時は探索せずエラーを表示するだけである。
 - `localhost` や `[::1]` は診断時の比較対象である。ブラウザ固有の失敗時は、ループバック限定で診断用の接続先・待ち受けを追加してよい（LAN 側へは露出しない）。いつ追加するかは検証計画を参照する。
 - 数値IPを正規経路にする理由は、名前解決への依存を排除するためである。XRift の宣言も実際の宛先に合わせる必要があり、`localhost` の宣言で数値IPのループバックまで許可されるとは扱わない。
-- 互換性の扱いは検証待ちである。観測手順と対応表の作り方は[検証計画](../docs/verification/bridge.md)を正本とする。
+- 互換性の扱いは検証待ちである。観測手順と対応表の作り方は[検証計画](../docs/verification/bridge-connection.md)を正本とする。
 
 ### 多重化に yamux を採用する
 
@@ -56,10 +56,10 @@ flowchart LR
 ## XRift 側で必要な宣言
 
 - `xrift.json` の `permissions.allowedDomains` に実際の宛先を宣言する。宣言は実際の宛先に合わせ、別接続先を追加した場合も同様である。
-- `allowedCodeRules` に必要な規則を宣言する。`@xrift/code-security` は構文木解析で fetch、XHR、WebSocket、sendBeacon の未許可領域への通信を検出する。WebTransport は検出規則に記載がなく、審査がどう扱うかは未確認である（観測手順は[検証計画](../docs/verification/bridge.md)を参照）。
+- `allowedCodeRules` に必要な規則を宣言する。`@xrift/code-security` は構文木解析で fetch、XHR、WebSocket、sendBeacon の未許可領域への通信を検出する。WebTransport は検出規則に記載がなく、審査がどう扱うかは未確認である（観測手順は[検証計画](../docs/verification/bridge-connection.md)を参照）。
 - 実行方式として、ワールドは Module Federation のリモートとしてホスト `app.xrift.net` と同一文書に読み込まれる。
 - 開発時は `vp run diagnostic-world#dev` でワールドを `http://localhost:5173` の最上位で実行する（ルートの `dev` は website を起動するため使わない）。
-- 設計前提として、ローカルからループバックへの接続はローカル網アクセスの対象外であり、混合コンテンツの問題もない。実測の CSP・ローカル網アクセスの挙動の記録は[検証計画](../docs/verification/bridge.md)を正本とする。
+- 設計前提として、ローカルからループバックへの接続はローカル網アクセスの対象外であり、混合コンテンツの問題もない。実測の CSP・ローカル網アクセスの挙動の記録は[検証計画](../docs/verification/bridge-connection.md)を正本とする。
 
 ## 接続の認可
 
@@ -128,7 +128,7 @@ flowchart LR
   | ------------------------------------------ | --------------------------------------------------------------------------------------------- |
   | client/server を対称な共通ファサードにする | 方向別の認可責務が異なり、既存の transport 抽象（RawSocket/Connection/Session）と重複するため |
 
-- **再相談条件**: ワールド単位の真正性が必要になった場合、同一実行基盤のリスクを許容できない場合、権限がローカル操作へ拡大する場合、常時通知と有限制限を両立できない場合、再接続への認可継承を求める場合、悪意ある接続下でも正規要求の受付保証が必要になった場合。これらは合意待ちではなく、将来の再相談の条件である。反映先は[プロトコル](protocol.md)と[検証計画](../docs/verification/bridge.md)とする。
+- **再相談条件**: ワールド単位の真正性が必要になった場合、同一実行基盤のリスクを許容できない場合、権限がローカル操作へ拡大する場合、常時通知と有限制限を両立できない場合、再接続への認可継承を求める場合、悪意ある接続下でも正規要求の受付保証が必要になった場合。これらは合意待ちではなく、将来の再相談の条件である。反映先は[プロトコル](protocol.md)と[検証計画](../docs/verification/bridge-connection.md)とする。
 
 ## 採用しない選択肢と再検討条件
 
@@ -149,9 +149,9 @@ flowchart LR
 
 ## 未確定・検証待ち
 
-- 検証待ち・合意待ちの項目、観測手順、対応表の作り方は[検証計画](../docs/verification/bridge.md)を正本とする。
+- 検証待ち・合意待ちの項目、観測手順、対応表の作り方は[検証計画](../docs/verification/bridge-connection.md)を正本とする。
 
 ## 関連
 
 - 通信形式・配送・流れ制御の設計判断は[プロトコル](protocol.md)を正本とする。
-- 観測手順・試作条件・計測項目・判定後の分岐は[検証計画](../docs/verification/bridge.md)を正本とする。
+- 観測手順・試作条件・計測項目・判定後の分岐は[検証計画](../docs/verification/bridge-connection.md)を正本とする。

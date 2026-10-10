@@ -3,11 +3,11 @@
  *
  * 値の正本は下の `DEFAULT_LIMITS` とする。計測用暫定値であり、
  * 合意値・性能保証ではない。計測時の実効設定は証拠に記録する。
- * 検証計画は `docs/verification/bridge.md` を見る。すべての値は
+ * 検証計画は `docs/verification/bridge-connection.md` を見る。すべての値は
  * `BridgeOptions.limits` で上書きできる。
  *
  * 比較コード方式の期限・上限・レートの設計既定値は
- * `design/bridge.md` の候補節を参照し、形状の正本は
+ * `design/bridge-connection.md` の候補節を参照し、形状の正本は
  * `bridge-protocol`（`PAIRING_CODE_LENGTH` 等）に置く。
  *
  * 件数クレジット・応答キュー・ストリーム上限をブリッジ層に持たない。
