@@ -39,6 +39,9 @@ dist-ssr
 # APM dependencies
 apm_modules/
 
+# XRift CLI local metadata
+.xrift/
+
 # Python
 __pycache__/
 *.pyc

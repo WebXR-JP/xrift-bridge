@@ -32,3 +32,5 @@ TypeScriptメインで作る
 
 - [XRiftのSDKドキュメント](https://docs.xrift.net/sdk/overview)
   - 特にワールド上でのスクリプト関係エラーはxrift.jsonのpermissionsで解決することがある
+- [XRift CLI](https://github.com/WebXR-JP/xrift-cli)
+  - アップロードなどの操作ができる
