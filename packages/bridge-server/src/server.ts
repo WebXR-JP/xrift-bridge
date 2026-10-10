@@ -25,9 +25,14 @@ import {
   type BridgeToClientMessage,
   type SessionId,
 } from "bridge-protocol";
-import type { TimerScheduler } from "bridge-protocol/transport";
+import type { SessionEnd, TimerScheduler } from "bridge-protocol/transport";
 import { resolveLimits, type BridgeLimits } from "./config.ts";
-import { AuthorizedConnection } from "./authorized-connection.ts";
+import {
+  AuthorizedConnection,
+  type BridgeSessionInfo,
+  type LocalSessionId,
+  type ServerSession,
+} from "./authorized-connection.ts";
 import { NodeWsSocket } from "./node-socket.ts";
 import { defaultLogger, logEvent, type BridgeLogger } from "./log.ts";
 import { systemClock, type Clock } from "./clock.ts";
@@ -180,7 +185,7 @@ export type ApprovalResult =
 /** 拒否結果。 */
 export type RejectionResult = { readonly status: "REJECTED" } | { readonly status: "NOT_PENDING" };
 
-/** 管理境界の通知。保留の増減と受付の開閉を知らせる。 */
+/** 管理境界の通知。保留・受付・接続・生存セッションの増減を知らせる。 */
 export type ManagementEvent =
   | {
       readonly kind: "pending-created";
@@ -189,7 +194,21 @@ export type ManagementEvent =
       readonly origin: string;
     }
   | { readonly kind: "pending-ended"; readonly requestId: string; readonly reason: string }
-  | { readonly kind: "acceptance-changed"; readonly state: "open" | "closed" };
+  | { readonly kind: "acceptance-changed"; readonly state: "open" | "closed" }
+  | { readonly kind: "session-started"; readonly session: BridgeSessionInfo }
+  | {
+      readonly kind: "session-ended";
+      readonly session: BridgeSessionInfo;
+      readonly end: SessionEnd;
+    }
+  | { readonly kind: "connection-changed"; readonly connection: ConnectionInfo };
+
+/** 生存セッションのローカル識別子。プロセス内で単調に払い出し再利用しない。 */
+export type { LocalSessionId };
+/** サーバ側が公開する生存セッション。 */
+export type { ServerSession };
+/** 生存セッションの公開情報。 */
+export type { BridgeSessionInfo };
 
 /** 管理境界の購読者。例外を投げないこと。 */
 export type ManagementListener = (event: ManagementEvent) => void;
@@ -238,7 +257,7 @@ export interface BridgeServer {
   /**
    * 管理境界の通知を受け取る。
    *
-   * @param listener - 保留の増減・受付の開閉時に呼ぶ処理。例外を投げないこと。
+   * @param listener - 保留・受付・接続・生存セッションの増減時に呼ぶ処理。例外を投げないこと。
    * @returns 登録解除関数。
    */
   onManagementEvent(listener: ManagementListener): Unsubscribe;
@@ -258,6 +277,19 @@ export interface BridgeServer {
    * @throws `RangeError` — 不明な接続IDの場合。全接続切断へは fallback しない。
    */
   disconnectConnection(connectionId: string): void;
+  /**
+   * 生存セッションの一覧。全認可済み Connection の生存中の写し。
+   *
+   * 切替中・未認可の Session は含まない。購読開始後の初期同期に使う。
+   */
+  listSessions(): readonly BridgeSessionInfo[];
+  /**
+   * 生存セッションをローカル識別子で取り出す。
+   *
+   * @param localSessionId - 公開情報のローカル識別子。
+   * @returns 生存中のみ Session を返す。終了後は `undefined`。
+   */
+  getSession(localSessionId: LocalSessionId): ServerSession | undefined;
   /** 直近に受信した latest 値。未受信なら `undefined`。 */
   getLatest(sessionId: SessionId): unknown;
   /** 動作カウンタの写し。 */
@@ -331,6 +363,10 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
   const latestMailbox = new Map<SessionId, unknown>();
   const connections = new Set<ConnectionState>();
   const managementListeners = new Set<ManagementListener>();
+  const managementQueue: ManagementEvent[] = [];
+  let managementDraining = false;
+  // サーバ停止中か。停止の `1001` を認可接続の `1008` が潰さないための標識である。
+  let shuttingDown = false;
   // ADR: 接続IDはプロセス内で単調に払い出し再利用しない。認証前にも付与し、
   // 比較コードやワールドIDとは無関係の管理用識別子であり、認可後は wire の
   // `connectionId` としても使う（Connection 単位認可）。
@@ -399,12 +435,27 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
   }
 
   function emitManagement(event: ManagementEvent): void {
-    for (const listener of [...managementListeners]) {
-      try {
-        listener(event);
-      } catch {
-        // 購読者の例外でサーバを壊さない。
+    // ADR: 管理通知は同期 FIFO キューで配送する。購読者が通知中に切断すると、
+    // 直接配送では後続購読者に「終了→開始」の順で届き得るため、再入の通知は
+    // 待避列へ積み、現在の通知の全購読者への配送後に順序どおり出す。
+    // 非同期化はしない。購読者の例外隔離は維持する。
+    managementQueue.push(event);
+    if (managementDraining) return;
+    managementDraining = true;
+    try {
+      let next = managementQueue.shift();
+      while (next !== undefined) {
+        for (const listener of [...managementListeners]) {
+          try {
+            listener(next);
+          } catch {
+            // 購読者の例外でサーバを壊さない。
+          }
+        }
+        next = managementQueue.shift();
       }
+    } finally {
+      managementDraining = false;
     }
   }
 
@@ -556,6 +607,7 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
     connections.add(state);
     stats.connectionsAccepted += 1;
     logger(logEvent("connection_accepted", { connectionId: state.id, origin }));
+    emitManagement({ kind: "connection-changed", connection: toConnectionInfo(state) });
 
     // awaiting_start の期限。
     state.startTimer = setTimeout(() => {
@@ -685,6 +737,7 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
     state.closingWasAuthorized = wasAuthorized;
     const hadPending = state.phase === "pending" ? state.pendingRequestId : null;
     state.phase = "closing";
+    emitManagement({ kind: "connection-changed", connection: toConnectionInfo(state) });
     if (state.startTimer !== null) {
       clearTimeout(state.startTimer);
       state.startTimer = null;
@@ -731,6 +784,7 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
     if (state.phase === "closing" || state.phase === "closed") return;
     state.closingWasAuthorized = state.phase === "authorized" || state.phase === "switching";
     state.phase = "closing";
+    emitManagement({ kind: "connection-changed", connection: toConnectionInfo(state) });
     if (state.startTimer !== null) {
       clearTimeout(state.startTimer);
       state.startTimer = null;
@@ -783,6 +837,8 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
     state.rawSocket = null;
     state.phase = "closed";
     connections.delete(state);
+    // ADR: `closed` は一覧除外後の最終スナップショットとして出す。
+    emitManagement({ kind: "connection-changed", connection: toConnectionInfo(state) });
   }
 
   /**
@@ -798,6 +854,7 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
     state.closingWasAuthorized = state.phase === "authorized" || state.phase === "switching";
     const hadPending = state.phase === "pending" ? state.pendingRequestId : null;
     state.phase = "closing";
+    emitManagement({ kind: "connection-changed", connection: toConnectionInfo(state) });
     if (state.startTimer !== null) {
       clearTimeout(state.startTimer);
       state.startTimer = null;
@@ -988,6 +1045,7 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
         connectionId: state.id,
         origin: state.origin,
       });
+      emitManagement({ kind: "connection-changed", connection: toConnectionInfo(state) });
       return;
     }
     if (result.status === "ALREADY_PENDING") {
@@ -1017,6 +1075,7 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
   function beginSwitch(state: ConnectionState, requestId: string): void {
     state.phase = "switching";
     state.pendingBinary.length = 0;
+    emitManagement({ kind: "connection-changed", connection: toConnectionInfo(state) });
     const text = stringifyBridgeMessage({
       v: PROTOCOL_VERSION,
       type: "auth_ok",
@@ -1073,16 +1132,35 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
           recordDiagnosticPing: () => {
             stats.diagnosticPing += 1;
           },
+          onSessionStarted: (_connection, info) => {
+            emitManagement({ kind: "session-started", session: info });
+          },
+          onSessionEnded: (_connection, info, end) => {
+            emitManagement({ kind: "session-ended", session: info, end });
+          },
+          onClosing: (connection, _cause) => {
+            // ADR: 終端開始で認可を失効させる。物理切断待ちまで利用可能にしない。
+            // 一覧・取得からの除外は `AuthorizedConnection` 側で済んでいる。
+            if (state.authorizedConnection !== connection) return;
+            if (state.phase === "authorized" || state.phase === "switching") {
+              state.phase = "closing";
+              state.closingWasAuthorized = true;
+              emitManagement({ kind: "connection-changed", connection: toConnectionInfo(state) });
+            }
+          },
           onClosed: (connection, cause) => {
             // 管理一覧からの除外。切断で認可は失効する。
             if (state.authorizedConnection === connection) {
               state.authorizedConnection = null;
               state.rawSocket = null;
             }
-            if (state.phase === "authorized") {
+            // 終端開始で既に `closing` へ移っていれば再通知しない。
+            if (state.phase === "authorized" || state.phase === "switching") {
               state.phase = "closing";
               state.closingWasAuthorized = true;
-              if (state.socket.readyState === WebSocket.OPEN) {
+              emitManagement({ kind: "connection-changed", connection: toConnectionInfo(state) });
+              // ADR: サーバ停止中は `1001` を先に送っており、`1008` で潰さない。
+              if (!shuttingDown && state.socket.readyState === WebSocket.OPEN) {
                 try {
                   state.socket.close(1008, cause.message.slice(0, 123));
                 } catch {
@@ -1103,6 +1181,7 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
     state.authorizedConnection = conn;
     state.phase = "authorized";
     logger(logEvent("pairing_approved", { connectionId: state.id }));
+    emitManagement({ kind: "connection-changed", connection: toConnectionInfo(state) });
     // 切替中の保持を順序どおり戻す。
     const held = state.pendingBinary.splice(0, state.pendingBinary.length);
     for (const bytes of held) {
@@ -1128,6 +1207,18 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
   function toAcceptanceInfo(): AcceptanceInfo {
     const status = acceptance.get();
     return { state: status.state, endsAt: status.endsAt, remainingMs: status.remainingMs };
+  }
+
+  /** 接続単位の公開情報の写し。比較コードは含めない。 */
+  function toConnectionInfo(state: ConnectionState): ConnectionInfo {
+    return {
+      connectionId: state.id,
+      origin: state.origin,
+      authorized:
+        (state.phase === "authorized" || state.phase === "switching") &&
+        !state.operatorDisconnected,
+      phase: state.phase === "closed" ? "closed" : state.phase,
+    };
   }
 
   await new Promise<void>((resolve, reject) => {
@@ -1202,6 +1293,12 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
         }
         stats.pairingSuccess += 1;
         emitManagement({ kind: "pending-ended", requestId, reason: "approved" });
+        // ADR: 通知中の切断で phase が動いたら切替へ進まない。通知は同期
+        // FIFO のため、購読者の切断はここで観測できる。`switching` への
+        // 上書きで終了開始を無かったことにしない。
+        if (state.phase !== "pending") {
+          return { status: "CONNECTION_GONE" };
+        }
         // ADR: `auth_ok` は text で送り、完了で mux を開始する。`window` は載せない。
         // 受信形式の推測判別は行わない。
         beginSwitch(state, requestId);
@@ -1253,15 +1350,7 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
       };
     },
     getConnectionCount: () => connections.size,
-    listConnections: (): readonly ConnectionInfo[] =>
-      [...connections].map((state) => ({
-        connectionId: state.id,
-        origin: state.origin,
-        authorized:
-          (state.phase === "authorized" || state.phase === "switching") &&
-          !state.operatorDisconnected,
-        phase: state.phase === "closed" ? "closed" : state.phase,
-      })),
+    listConnections: (): readonly ConnectionInfo[] => [...connections].map(toConnectionInfo),
     disconnectConnection: (connectionId: string): void => {
       for (const state of connections) {
         if (state.id === connectionId) {
@@ -1273,6 +1362,25 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
       throw new RangeError(`不明な接続IDである: ${connectionId}`);
     },
     getLatest: (sessionId: SessionId): unknown => latestMailbox.get(sessionId),
+    listSessions: (): readonly BridgeSessionInfo[] => {
+      // ADR: サーバ全体に別の Session 登録表は持たず、認可済み Connection の
+      // 取得口を集約する。
+      const sessions: BridgeSessionInfo[] = [];
+      for (const state of connections) {
+        const authorized = state.authorizedConnection;
+        if (authorized !== null) {
+          sessions.push(...authorized.listSessions());
+        }
+      }
+      return sessions;
+    },
+    getSession: (localSessionId: LocalSessionId): ServerSession | undefined => {
+      for (const state of connections) {
+        const found = state.authorizedConnection?.getSession(localSessionId);
+        if (found !== undefined) return found;
+      }
+      return undefined;
+    },
     getStats: (): BridgeStats => ({
       connectionsAccepted: stats.connectionsAccepted,
       upgradeRejected: stats.upgradeRejected,
@@ -1285,6 +1393,7 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
       rejectionsByReason: { ...stats.rejectionsByReason },
     }),
     close: (): Promise<void> => {
+      shuttingDown = true;
       for (const timer of pendingUpgradeTimers) {
         clearTimeout(timer);
       }
@@ -1292,17 +1401,19 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
       pendingUpgrades = 0;
       for (const state of connections) {
         clearTimers(state);
+        // ADR: 停止の `1001` を先に送り、認可接続の `1008` で潰さない。
+        // 終端はその後に行い、終了通知の二重送出は各終端の冪等性に委ねる。
+        try {
+          state.socket.close(1001, "bridge shutdown");
+        } catch {
+          // 閉塞時の例外は無視する。
+        }
         if (state.authorizedConnection !== null) {
           try {
             state.authorizedConnection.terminate(new Error("bridge shutdown"));
           } catch {
             // 終端の失敗は無視する。
           }
-        }
-        try {
-          state.socket.close(1001, "bridge shutdown");
-        } catch {
-          // 閉塞時の例外は無視する。
         }
       }
       logger(logEvent("shutdown", {}));

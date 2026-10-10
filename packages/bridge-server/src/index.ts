@@ -11,15 +11,18 @@ export { createBridgeServer, OPERATOR_DISCONNECT_REASON } from "./server.ts";
 export type {
   BridgeOptions,
   BridgeServer,
+  BridgeSessionInfo,
   BridgeStats,
   ConnectionPhase,
   ConnectionInfo,
   AcceptanceInfo,
+  LocalSessionId,
   PendingPairingInfo,
   ApprovalResult,
   RejectionResult,
   ManagementEvent,
   ManagementListener,
+  ServerSession,
   Unsubscribe,
 } from "./server.ts";
 export { DEFAULT_LIMITS, resolveLimits } from "./config.ts";
