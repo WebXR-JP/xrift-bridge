@@ -121,8 +121,8 @@ flowchart LR
   | コード一致だけで自動認可                 | 利用者の承認がなく、表示要求との対応確認にならない |
   | ワールド発行コードを唯一の承認キーにする | 選択値・重複・取り違えの問題がある                 |
 
-- **GUI への道筋**: ブリッジ内部に「保留一覧・状態通知・承認・拒否」の管理境界を作り、CLI と将来の GUI をその利用者にする。承認 API をワールド用 WebSocket に公開しない。通知クリックだけで自動承認しない。
-- **パッケージ分割**: サーバーコアを Node 向けライブラリ `packages/bridge-server` として切り出し、`apps/bridge-cli` と将来の GUI は管理境界 API（`BridgeServer` の openAcceptance/listPending/approvePairing/rejectPairing/onManagementEvent/listConnections/disconnectConnection/getStats 等）の利用者にする。GUI は同一 Node プロセスで直接 import する想定である。`packages/*` から `apps/*` を参照しない。
+- **GUI への道筋**: ブリッジ内部に「保留一覧・状態通知・承認・拒否」の管理境界を作り、CLI と将来の GUI をその利用者にする。承認 API をワールド用 WebSocket に公開しない。通知クリックだけで自動承認しない。アプリ層の責務・割当て・GUI 境界は[ブリッジアプリ](bridge-app.md)を正本とする。
+- **パッケージ分割**: サーバーコアを Node 向けライブラリ `packages/bridge-server` として切り出し、`apps/bridge-cli` と将来の GUI は管理境界 API（`BridgeServer` の openAcceptance/listPending/approvePairing/rejectPairing/onManagementEvent/listConnections/disconnectConnection/getStats 等）の利用者にする。サーバー管理境界は生存セッションの公開（一覧・取得・イベント）を含む。詳細は[ブリッジアプリ](bridge-app.md)を正本とし、ここでは複製しない。GUI は同一プロセスで直接 import する想定である（実行基盤は[ブリッジアプリ](bridge-app.md)を正本とする）。`packages/*` から `apps/*` を参照しない。
 
   | 選択肢                                     | 今採用しない理由                                                                              |
   | ------------------------------------------ | --------------------------------------------------------------------------------------------- |
