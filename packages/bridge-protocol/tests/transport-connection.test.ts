@@ -11,7 +11,7 @@ import type {
   LatestCreateSessionRequest,
   ReliableCreateSessionRequest,
 } from "../src/transport/connection.ts";
-import { type SessionEnd, type SessionEngine } from "../src/transport/session.ts";
+import { SessionError, type SessionEnd, type SessionEngine } from "../src/transport/session.ts";
 import type { ReliableSession, Session } from "../src/transport/session-types.ts";
 import type { TimerScheduler } from "../src/transport/timers.ts";
 import { PROTOCOL_VERSION, type SessionDirection, type SessionKind } from "../src/messages.ts";
@@ -774,5 +774,292 @@ test("Session単位の終了・中断をConnection経由で行える", async () 
   } finally {
     client.conn.terminate(new Error("片付け"));
     server.conn.terminate(new Error("片付け"));
+  }
+});
+
+/** 終端開始・終端の順序を記録する観測束。 */
+interface OrderedEndpoint {
+  readonly conn: Connection;
+  readonly sessions: Session[];
+  readonly closings: Error[];
+  readonly closes: Error[];
+  readonly order: string[];
+  readonly scheduler: FakeScheduler;
+}
+
+/**
+ * `onClosing`・`onClose` の順序を記録する対向 Connection 対を作る。
+ *
+ * 終端開始と終端の前後・回数を確かめるための観測用であり、送受信の手順は
+ * `createConnectionPair` と同じである。
+ */
+function createOrderedPair(connectionId = "conn-1"): {
+  duplex: Duplex;
+  client: OrderedEndpoint;
+  server: OrderedEndpoint;
+} {
+  const duplex = createDuplex();
+  const build = (role: "client" | "server"): OrderedEndpoint => {
+    const sessions: Session[] = [];
+    const closings: Error[] = [];
+    const closes: Error[] = [];
+    const order: string[] = [];
+    const scheduler = new FakeScheduler();
+    const conn = new Connection({
+      transport: role === "client" ? duplex.outboundPipe : duplex.inboundPipe,
+      role,
+      connectionId,
+      scheduler,
+      onSession: (session) => {
+        sessions.push(session);
+      },
+      onClosing: (cause) => {
+        closings.push(cause);
+        order.push("closing");
+      },
+      onClose: (cause) => {
+        closes.push(cause);
+        order.push("close");
+      },
+    });
+    return { conn, sessions, closes, closings, order, scheduler };
+  };
+  return { duplex, client: build("client"), server: build("server") };
+}
+
+test("Connection終端の開始時に最初のSessionのonEndから兄弟へ送ると拒否される", async () => {
+  const { client, server } = createConnectionPair();
+  try {
+    const first = await client.conn.createSession({
+      sessionId: "sib-1",
+      kind: "reliable",
+      direction: "bidirectional",
+    });
+    const second = await client.conn.createSession({
+      sessionId: "sib-2",
+      kind: "reliable",
+      direction: "bidirectional",
+    });
+    const third = await client.conn.createSession({
+      sessionId: "sib-3",
+      kind: "latest",
+      direction: "to_server",
+    });
+    await waitInboundSession(server, 0);
+    await waitInboundSession(server, 1);
+    await waitInboundSession(server, 2);
+    // ADR: 最初の Session の `onEnd` 処理中はまだ兄弟の `terminate` 前である。
+    // 所有 Connection の終端開始後なのですべて終了扱いになり、送信は拒否される。
+    let siblingAliveInHandler: boolean | undefined;
+    let siblingRejection: unknown;
+    let latestThrew = false;
+    const firstEnded = new Promise<void>((resolve) => {
+      first.onEnd(() => {
+        siblingAliveInHandler = second.isAlive;
+        second.sendReliable({ n: 1 }).then(
+          () => undefined,
+          (error: unknown) => {
+            siblingRejection = error;
+          },
+        );
+        try {
+          third.sendLatest({ v: 1 });
+        } catch {
+          latestThrew = true;
+        }
+        resolve();
+      });
+    });
+    const secondEnd = waitSessionEnd(second);
+    const thirdEnd = waitSessionEnd(third);
+    client.conn.terminate(new Error("兄弟送信の隙間検証"));
+    await firstEnded;
+    await tick();
+    expect(siblingAliveInHandler).toBe(false);
+    expect(siblingRejection).toBeInstanceOf(SessionError);
+    expect((siblingRejection as SessionError).code).toBe("session-closed");
+    expect(latestThrew).toBe(true);
+    expect((await secondEnd).kind).toBe("connection-closed");
+    expect((await thirdEnd).kind).toBe("connection-closed");
+  } finally {
+    client.conn.terminate(new Error("片付け"));
+    server.conn.terminate(new Error("片付け"));
+  }
+});
+
+test("自発terminateでonClosingが一度だけonCloseより前に呼ばれる", async () => {
+  const { client, server } = createOrderedPair();
+  try {
+    await client.conn.createSession({
+      sessionId: "closing-1",
+      kind: "reliable",
+      direction: "bidirectional",
+    });
+    const reason = new Error("自発終了");
+    client.conn.terminate(reason);
+    // 終端開始→全 Session 終端→終端通知の順序であり、二重通知はない。
+    expect(client.order).toEqual(["closing", "close"]);
+    expect(client.closings).toHaveLength(1);
+    expect(client.closes).toHaveLength(1);
+    expect(client.closings[0]).toBe(reason);
+    expect(client.closes[0]).toBe(reason);
+    client.conn.terminate(new Error("二重終了"));
+    await tick();
+    expect(client.order).toEqual(["closing", "close"]);
+    expect(client.closings).toHaveLength(1);
+    expect(client.closes).toHaveLength(1);
+  } finally {
+    client.conn.terminate(new Error("片付け"));
+    server.conn.terminate(new Error("片付け"));
+  }
+});
+
+test("相手GoAwayでonClosingが一度だけonCloseより前に呼ばれる", async () => {
+  const { client, server } = createOrderedPair();
+  try {
+    const clientSession = await client.conn.createSession({
+      sessionId: "goaway-1",
+      kind: "reliable",
+      direction: "bidirectional",
+    });
+    const serverSession = await waitInboundSession(server, 0);
+    const clientEnd = waitSessionEnd(clientSession);
+    const serverEnd = waitSessionEnd(serverSession);
+    // 自発側の GoAway が相手の mux 終了観測を通って終端へ進む。
+    client.conn.terminate(new Error("相手GoAwayの検証"));
+    await waitFor(
+      () => server.closings.length === 1 && server.closes.length === 1,
+      5000,
+      "相手側の終端開始・終端通知",
+    );
+    expect(server.order).toEqual(["closing", "close"]);
+    expect((await serverEnd).kind).toBe("connection-closed");
+    expect((await clientEnd).kind).toBe("connection-closed");
+    server.conn.terminate(new Error("二重終了"));
+    await tick();
+    expect(server.order).toEqual(["closing", "close"]);
+    expect(server.closings).toHaveLength(1);
+    expect(server.closes).toHaveLength(1);
+  } finally {
+    client.conn.terminate(new Error("片付け"));
+    server.conn.terminate(new Error("片付け"));
+  }
+});
+
+test("輸送喪失でonClosingが一度だけonCloseより前に呼ばれる", async () => {
+  const { duplex, client, server } = createOrderedPair();
+  try {
+    const clientSession = await client.conn.createSession({
+      sessionId: "lost-1",
+      kind: "reliable",
+      direction: "bidirectional",
+    });
+    await waitInboundSession(server, 0);
+    const clientEnd = waitSessionEnd(clientSession);
+    // ADR: GoAway を送らず輸送だけを閉じる。mux の輸送終了観測を通って
+    // 終端へ進む。死んだ輸送では GoAway が届かないため、相手側は終端しない。
+    duplex.outboundPipe.onTransportClosed();
+    await waitFor(
+      () => client.closings.length === 1 && client.closes.length === 1,
+      5000,
+      "喪失側の終端開始・終端通知",
+    );
+    expect(client.order).toEqual(["closing", "close"]);
+    expect((await clientEnd).kind).toBe("connection-closed");
+    client.conn.terminate(new Error("二重終了"));
+    await tick();
+    expect(client.order).toEqual(["closing", "close"]);
+    expect(client.closings).toHaveLength(1);
+    expect(client.closes).toHaveLength(1);
+    // 相手側への波及通知はない。
+    await tick();
+    expect(server.order).toEqual([]);
+  } finally {
+    client.conn.terminate(new Error("片付け"));
+    server.conn.terminate(new Error("片付け"));
+  }
+});
+
+test("keepalive失敗でonClosingが一度だけonCloseより前に呼ばれる", async () => {
+  const duplex = createDuplex();
+  // ADR: 応答側に muxer を作らず、Ping が返らない状態にする。実タイマーは
+  // 使わず、応答期限の超過で失敗させる。
+  const order: string[] = [];
+  const closings: Error[] = [];
+  const closes: Error[] = [];
+  const scheduler = new FakeScheduler();
+  const conn = new Connection({
+    transport: duplex.outboundPipe,
+    role: "client",
+    connectionId: "conn-1",
+    scheduler,
+    onClosing: (cause) => {
+      closings.push(cause);
+      order.push("closing");
+    },
+    onClose: (cause) => {
+      closes.push(cause);
+      order.push("close");
+    },
+  });
+  try {
+    expect(scheduler.pendingCount).toBe(1);
+    scheduler.advance(30_000);
+    await tick();
+    // Ping 発行のみでは終端しない。
+    expect(order).toEqual([]);
+    scheduler.advance(60_000);
+    await tick();
+    expect(order).toEqual(["closing", "close"]);
+    expect(closings).toHaveLength(1);
+    expect(closes).toHaveLength(1);
+    expect(closes[0]).toBe(closings[0]);
+    conn.terminate(new Error("二重終了"));
+    await tick();
+    expect(order).toEqual(["closing", "close"]);
+  } finally {
+    conn.terminate(new Error("片付け"));
+  }
+});
+
+test("onClosing購読者の例外はonCloseとSession終端へ波及しない", async () => {
+  const duplex = createDuplex();
+  const order: string[] = [];
+  const closes: Error[] = [];
+  const scheduler = new FakeScheduler();
+  const conn = new Connection({
+    transport: duplex.outboundPipe,
+    role: "client",
+    connectionId: "conn-1",
+    scheduler,
+    onClosing: () => {
+      order.push("closing");
+      throw new Error("購読者の失敗");
+    },
+    onClose: (cause) => {
+      closes.push(cause);
+      order.push("close");
+    },
+  });
+  const peer = new Connection({
+    transport: duplex.inboundPipe,
+    role: "server",
+    connectionId: "conn-1",
+    scheduler: new FakeScheduler(),
+  });
+  try {
+    const session = await conn.createSession({
+      sessionId: "iso-1",
+      kind: "reliable",
+      direction: "bidirectional",
+    });
+    const end = waitSessionEnd(session);
+    conn.terminate(new Error("隔離検証"));
+    expect((await end).kind).toBe("connection-closed");
+    expect(order).toEqual(["closing", "close"]);
+    expect(closes).toHaveLength(1);
+  } finally {
+    conn.terminate(new Error("片付け"));
+    peer.terminate(new Error("片付け"));
   }
 });

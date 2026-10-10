@@ -82,6 +82,7 @@ Session capability（`kind`・`direction` 別の公開型）の形状の正本�
 - **RST**＝対象 Session の即時中断（待機送信・未完成フレーム破棄、他 Session は維持する）。
 - **GoAway**＝mux 全体の終了通知（Session 終了ではない）。GoAway は相手の mux 終了通知であり、排出保証でも全データ到達保証でもない。受信後は Connection 終了へ進む。
 - **WS close／輸送障害**＝Connection 全体終端、全 Session 終了、認可失効。再接続は再承認である。
+- Connection 終端は開始通知（`onClosing`）→全 Session 終端→終端通知（`onClose`）の順序で一度だけ行い、開始後は全 Session を終了扱いにする（送信受付・受信配送を止める）。
 - 正常終了も業務成功の証明ではない。ブリッジは EOF／中断／Connection 終了を通知し、待機中の送信 Promise を拒否する（二重決着しない）。完了確認できない業務は正常終了時も「結果不明」とする。RST は「未実行」を意味しない。自動再送しない。
 
 ### 配送順の保証を持たない

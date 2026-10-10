@@ -58,6 +58,12 @@ export interface ConnectionOptions<R extends ConnectionRole = ConnectionRole> {
   readonly onSession?: (session: InboundSession<NoInfer<R>>) => void;
   /** Connection 終端の通知。一度だけ呼ぶ。例外は隔離する。 */
   readonly onClose?: (cause: Error) => void;
+  /**
+   * Connection 終端開始の通知。終端確定後・各 Session の終端前に一度だけ呼ぶ。
+   *
+   * `onClose`（全 Session 終端後）とは別に管理する。例外は隔離する。
+   */
+  readonly onClosing?: (cause: Error) => void;
 }
 
 /** `createSession` に渡す reliable Session の生成条件（双方向のみ）。 */
@@ -128,6 +134,7 @@ export class Connection<R extends ConnectionRole = ConnectionRole> {
   private readonly muxer: BridgeMuxer;
   private readonly keepalive: Keepalive;
   private readonly onSessionNotify: ((session: InboundSession<R>) => void) | undefined;
+  private readonly onClosingNotify: ((cause: Error) => void) | undefined;
   private readonly onCloseNotify: ((cause: Error) => void) | undefined;
   /** 論理名から engine への対応表。同時に同名は一つである。 */
   private readonly sessionsById = new Map<string, SessionEngine>();
@@ -141,6 +148,8 @@ export class Connection<R extends ConnectionRole = ConnectionRole> {
   private closeCause: Error | undefined;
   /** `onClose` の通知済みか。一度だけ通知する。 */
   private closeNotified = false;
+  /** `onClosing` の通知済みか。`onClose` とは別に管理する。 */
+  private closingNotified = false;
 
   /**
    * @param options - 輸送・役割・接続識別子・通知先。
@@ -156,6 +165,7 @@ export class Connection<R extends ConnectionRole = ConnectionRole> {
     this.connectionId = options.connectionId;
     this.role = options.role;
     this.onSessionNotify = options.onSession;
+    this.onClosingNotify = options.onClosing;
     this.onCloseNotify = options.onClose;
     this.muxer = bridgeMuxer()().createStreamMuxer(options.transport);
     this.observeMuxerTermination();
@@ -274,6 +284,7 @@ export class Connection<R extends ConnectionRole = ConnectionRole> {
         direction: request.direction,
         side: this.role,
         stream,
+        isConnectionTerminated: () => this.terminated,
       });
     } catch (cause) {
       this.abortStream(
@@ -326,6 +337,10 @@ export class Connection<R extends ConnectionRole = ConnectionRole> {
     this.terminated = true;
     this.closeCause = reason;
     this.keepalive.stop();
+    // ADR: 終端開始を各 Session の終端より先に通知する。`onEnd` 処理中に
+    // 兄弟 Session へ送る隙間を塞ぐため、Session は所有 Connection の終端を
+    // 参照して即時に終了扱いになる。`onClose` とは別フラグで一度だけ呼ぶ。
+    this.notifyClosing();
     const sessions = [...this.sessionsById.values()];
     this.sessionsById.clear();
     this.sessionsByStream.clear();
@@ -494,6 +509,7 @@ export class Connection<R extends ConnectionRole = ConnectionRole> {
         direction: parsed.direction,
         side: this.role,
         stream,
+        isConnectionTerminated: () => this.terminated,
       });
     } catch {
       fail("Session の生成条件が不正である。");
@@ -532,6 +548,19 @@ export class Connection<R extends ConnectionRole = ConnectionRole> {
       stream.abort(cause);
     } catch {
       // RST 送出の失敗は呼び出し側の処理を止めない。
+    }
+  }
+
+  /** `onClosing` を一度だけ通知する。購読者の例外は隔離する。 */
+  private notifyClosing(): void {
+    if (this.closingNotified) return;
+    this.closingNotified = true;
+    const cause = this.closeCause ?? new Error("Connection が終了した。");
+    if (this.onClosingNotify === undefined) return;
+    try {
+      this.onClosingNotify(cause);
+    } catch {
+      // 購読者の例外は隔離する。
     }
   }
 

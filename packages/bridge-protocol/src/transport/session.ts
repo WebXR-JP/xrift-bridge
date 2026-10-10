@@ -41,6 +41,13 @@ export interface SessionOptions {
   readonly side: SessionSide;
   /** この Session が使う yamux stream。 */
   readonly stream: YamuxStream;
+  /**
+   * 所有 Connection の終端状態の参照口。省略時は終端していないものとして扱う。
+   *
+   * `Connection.terminate()` は終端確定後に各 Session を終端するため、
+   * 参照できれば兄弟 Session も即時に終了扱いになる。
+   */
+  readonly isConnectionTerminated?: () => boolean;
 }
 
 /** Session 全体の終端理由の種別。 */
@@ -131,6 +138,7 @@ export class SessionEngine {
 
   private readonly stream: YamuxStream;
   private readonly decoder = new FrameDecoder();
+  private readonly isConnectionTerminated: () => boolean;
   private readonly sendable: boolean;
   private readonly receivable: boolean;
 
@@ -207,6 +215,7 @@ export class SessionEngine {
     this.direction = options.direction;
     this.side = options.side;
     this.stream = options.stream;
+    this.isConnectionTerminated = options.isConnectionTerminated ?? (() => false);
     this.sendable =
       options.direction === "bidirectional" ||
       (options.direction === "to_client" && options.side === "server") ||
@@ -246,11 +255,12 @@ export class SessionEngine {
   /**
    * 全体終端していなければ真（`closed` の読み替え）。
    *
-   * 公開 capability 型が参照する名前であり、`closed` と同値である。
+   * 公開 capability 型が参照する名前であり、所有 Connection の終端開始後も
+   * 偽になる（自 Session の `terminate` 前でも終了扱いである）。
    * engine を狭窄型でそのまま返すため、実行時に欠けないようここに置く。
    */
   get isAlive(): boolean {
-    return !this.terminated;
+    return !this.isEnded();
   }
 
   /** 自側の送信終了（`closeWrite` 受付）済みか。 */
@@ -481,9 +491,17 @@ export class SessionEngine {
     );
   }
 
+  /** 自 Session の終端または所有 Connection の終端開始後か。 */
+  private isEnded(): boolean {
+    return this.terminated || this.isConnectionTerminated();
+  }
+
   /** 送信受付の可否を確かめる。受付不可の理由を返す。 */
   private checkSendable(kind: SessionKind): SessionError | undefined {
-    if (this.terminated) {
+    // ADR: 所有 Connection の終端開始後は自 Session の `terminate` 前でも
+    // 受け付けない。`Connection.terminate()` は確定後に各 Session を終端する
+    // ため、`onEnd` 処理中の兄弟への送信をここで塞ぐ。
+    if (this.isEnded()) {
       return new SessionError("session-closed", "終端した Session には送信できない。");
     }
     if (this.writeClosed) {
@@ -708,7 +726,7 @@ export class SessionEngine {
 
   /** stream の `message` 断片を framing 復元し、`data` として処理する。 */
   private readonly onStreamMessage = (event: StreamMessageEvent): void => {
-    if (this.terminated) return;
+    if (this.isEnded()) return;
     const data = event.data;
     const chunk = data instanceof Uint8Array ? data : new Uint8Array(data.subarray());
     let values: unknown[];
@@ -720,7 +738,7 @@ export class SessionEngine {
     }
     for (const value of values) {
       this.handleFrameValue(value);
-      if (this.terminated) return;
+      if (this.isEnded()) return;
     }
   };
 
