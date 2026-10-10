@@ -112,6 +112,21 @@ vp run diagnostic-world#dev
 | 期限切れ     | 要求の失効                   |      |      |                              |
 | 状態集計     | 集計値の転記                 |      |      | `status` 出力                |
 
+### 2026-10-10 実ホスト観測（version 2・自動承認）
+
+2026-10-10 に実施した実ホスト観測の記録である。比較コード本文・業務 payload は残さない。上表の空欄は正式手順用の記録用紙として残し、本項は実施済み範囲の観測のみを記す。
+
+- 日付: 2026-10-10。環境: 通常の Google Chrome（利用者自身の端末）、XRift 本番 `https://app.xrift.net`、ログインユーザー HALBY。
+- 対象: 診断ワールド World ID `15cd8424-ac75-48d6-8b97-e7a0777dae2a` の version 2（0.3 実装）。`app.xrift.net` と同一文書に Module Federation で読み込まれた。
+- プロトコル版: 0.3。
+- 接続: ワールド（Origin `https://app.xrift.net`）から `ws://127.0.0.1:3100`（loopback）へ WebSocket 接続成功。CSP `connect-src`・LNA ともに許容された（ブロックなし）。
+- 認証・認可: `pairing_start`→比較コード発行→承認→`auth_ok`→同一 WebSocket 上で yamux 開始（認可）。ブリッジ側で `connection_accepted`（origin https://app.xrift.net）→`pairing_pending`→`pairing_approved` を確認。
+- 到達性: 盤の echo 往復が「一致」、ping が「pong」（利用者の目視）。ブリッジ側でも `diagnosticEcho=1`・`diagnosticPing=1` を観測（Session 上の `data` 往復が成立）。
+- 承認方法の区別: この確認の承認は検証用ハーネスによる自動承認であり、人間が比較コードを目視照合して CLI で `approve` する正式手順は、この実行では行っていない。接続・認可・到達性の経路確認としては成立している。
+- 実施した範囲: 接続開始・承認（自動）・echo・ping。目視照合・誤コード・reject・取消・受付クローズ・認可前拒否・再接続・受付閉で開始・期限切れ・状態集計の正式手順は未実施。
+- 実ホストで観測した不具合: ワールド読み込み時に、`assets.xrift.net` の外部 CSS（`style-c5847ad2a83f...css`）がホストの CSP `style-src 'self' https://fonts.googleapis.com 'unsafe-inline'` によりブロックされた。盤は 3D 描画のため実害は小さい見込みだが、実ホスト観測として残す。
+- 未了: runbook の正式な目視承認フロー、`auth_ok` 送信失敗／mux 初期化失敗／切替中 text の 3 分岐テスト、負荷試行。
+
 ### 異常系の理由別集計
 
 CLI の `status` に出る理由別カウンタを転記する。符号の正本は `apps/bridge/src/pairing.ts`・`apps/bridge/src/server.ts` とする。
