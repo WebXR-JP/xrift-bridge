@@ -9,7 +9,7 @@
 - 本番 XRift からの昇格、認証、双方向の応答確認の成功を記録する。
 - 実際の宛先に対応する `allowedDomains` とコード規則の宣言、審査結果を記録する。宣言要件の正本は[ブリッジ接続](../../design/bridge.md)である。
 - ローカル事前チェック結果（2026-10-10 実施済み）を記録する。`apps/diagnostic-world` を `vp run diagnostic-world#build` でビルド後、同ディレクトリから `npx` 経由の `@xrift/cli` 0.25.0 で `xrift check world` を実行し、`distDir=./dist` の 23 JS ファイルが APPROVE: 23（REVIEW・REJECT なし、exit 0）であった。宣言は `apps/diagnostic-world/xrift.json` の `allowedDomains: ["127.0.0.1"]`・`allowedCodeRules: ["no-network-without-permission"]` である。含まれる通信は `world-client` の `ws://127.0.0.1:<port>/v1` と開発専用の yamux 確認口の `ws://127.0.0.1:5180/spike` であり、dev バンドル（診断パネル・yamux 確認口）同梱でも REJECT にならなかった。これはローカル事前チェックであり、アップロード時のサーバ側審査そのものではない。サーバ側審査は次項に記録する。実ホスト実行時（`app.xrift.net` と同一文書での読み込み・LNA・混合コンテンツ）の確認は未了である。
-- 実アップロードとサーバ側審査の観測（2026-10-10 実施済み）を記録する。前項のローカル事前チェックとは区別する。`apps/diagnostic-world` で `xrift upload world`（`@xrift/cli` 0.25.0、ログインユーザー HALBY）を実行し、`buildCommand`（`npm run build`）→ セキュリティチェック（APPROVE）→ アップロードの順で `version: 1` が受理された。World ID は `15cd8424-ac75-48d6-8b97-e7a0777dae2a`（`apps/diagnostic-world/.xrift/world.json` に保存。`.xrift/` は .gitignore 済み）である。記録時点で `status: ACTIVE`・`currentVersionNumber: 1`・`isPublic: false`（非公開のまま）、`worldType: CODE`、`sceneUrl: https://assets.xrift.net/users/9dd894c6-ea1b-42cf-af0b-7574558fcc17/worlds/15cd8424-ac75-48d6-8b97-e7a0777dae2a/25186149a2b8/remoteEntry.js`、`fileSize: 4383116` である。宣言は `allowedDomains: ["127.0.0.1"]`・`allowedCodeRules: ["no-network-without-permission"]` である。サーバ側審査はアップロード後に自動実行され、version 1 が受理され `status ACTIVE` になっている。審査通過と公開（`isPublic`）の関係は観測範囲では「非公開継続」であり断定しない（`isPublic` の意味・切替手段は未確認）。実ホスト実行時の確認（`app.xrift.net` と同一文書での Module Federation 読み込み・LNA・混合コンテンツ・in-world での WebSocket 接続）は[実機手順](pairing-approval-runbook.md)に従い人間が行う。この記録時点では未了である。
+- 実アップロードとサーバ側審査の観測（2026-10-10 実施済み）を記録する。前項のローカル事前チェックとは区別する。`apps/diagnostic-world` で `xrift upload world`（`@xrift/cli` 0.25.0、ログインユーザー HALBY）を実行し、`buildCommand`（`npm run build`）→ セキュリティチェック（APPROVE）→ アップロードの順で `version: 1` が受理された。World ID は `15cd8424-ac75-48d6-8b97-e7a0777dae2a`（`apps/diagnostic-world/.xrift/world.json` に保存。`.xrift/` は .gitignore 済み）である。記録時点で `status: ACTIVE`・`currentVersionNumber: 1`・`isPublic: false`（非公開のまま）、`worldType: CODE`、`sceneUrl: https://assets.xrift.net/users/9dd894c6-ea1b-42cf-af0b-7574558fcc17/worlds/15cd8424-ac75-48d6-8b97-e7a0777dae2a/25186149a2b8/remoteEntry.js`、`fileSize: 4383116` である。宣言は `allowedDomains: ["127.0.0.1"]`・`allowedCodeRules: ["no-network-without-permission"]` である。サーバ側審査はアップロード後に自動実行され、version 1 が受理され `status ACTIVE` になっている。審査通過と公開（`isPublic`）の関係は観測範囲では「非公開継続」であり断定しない（`isPublic` の意味・切替手段は未確認）。この記録は 0.2 系の実装時点のものであり履歴として残す。0.3 の実装を再アップロードしてのサーバ側審査・実ホスト実行時の確認は未了であり、[実機手順](pairing-approval-runbook.md)に従い人間が行う。
 - 実測のコンテンツセキュリティポリシー（`connect-src` など）を記録する。これまでの実測値は `connect-src * blob: data:` である。
 - ローカル網アクセスの初回許可、拒否、権限取消後の挙動を記録する。
 - 不許可 `Origin`、欠落 `Origin`、期限切れ・再利用のペアリング要求の拒否を記録する。要件の正本は[プロトコル](../../design/protocol.md)である。
@@ -23,11 +23,11 @@
 
 - 受付開閉: 起動時は閉じていること、閉じている間の新規要求は upgrade 時に拒否され保留・通知しないこと、`accept open` で開き120秒で自動クローズすること、開いている間の再操作は期限を更新しないこと、手動／自動クローズで開始待ち・承認待ちをすべて終了し認可済みは維持することを記録する。
 - 比較コードの照合: ワールド画面とブリッジの `pending` 表示が同じコードを示すこと、先頭ゼロを保持する6文字の文字列として扱い数値化しないこと（例: `000123`）、表示は `123 456` のように3桁区切りであること、承認時に要求 ID とコードの両方を照合することを記録する。
-- 承認／拒否: 正しい要求 ID とコードの組だけが承認され `auth_ok{requestId,sessionId,window}` で接続単位に認可されること、コード不一致・書式不正は保留を残して拒否すること、`reject` で保留を取り下げ対象の接続を終了することを記録する（`window` は 0.2 の形状であり、0.3 ではクレジット層ごと削除方向のため実装時に手順を更新する）。
+- 承認／拒否: 正しい要求 ID とコードの組だけが承認され `auth_ok{requestId,connectionId}` で接続単位に認可されること、コード不一致・書式不正は保留を残して拒否すること、`reject` で保留を取り下げ対象の接続を終了することを記録する。
 - 期限: 接続から開始メッセージまで10秒、コード発行から承認まで120秒、保留の絶対期限は「コード発行＋120秒」と「受付終了時刻」の早い方であること、開始メッセージは接続につき1回で重複は終了することを記録する。
 - 競合: 同一接続の二重開始は延長せず終了すること、二重承認は一度だけ成功すること、承認と受付クローズ・承認と切断が交差した場合は保留を残さず終了することを記録する。
 - 上限: 全8・未認可2・保留2の枠組み（未認可は全接続の内数、保留は未認可の内数、認可済みを追い出さない）であること、`Origin` 別5回・全体10回（直近60秒）の受付レート超過は保留せず拒否すること、拒否ごとの通知は出さず `status` に集計することを記録する。
-- 認可前データ拒否: 認可前の業務メッセージ（`echo`・`command_request`・`data`）は終端エラーで終了すること、逆方向メッセージも受け付けないことを記録する（0.2 現行の形状であり、0.3 では `data` に一本化方向のため実装時に手順を更新する）。認証前に送受信してよいのはペアリングに限定した制御メッセージ（`pairing_start`・`pairing_pending`・認証前エラー）のみである。
+- 認可前データ拒否: 認可前の業務メッセージ（`create_session`・`data`）は終端エラーで終了すること、逆方向メッセージも受け付けないことを記録する。認証前に送受信してよいのはペアリングに限定した制御メッセージ（`pairing_start`・`pairing_pending`・認証前エラー）のみである。
 - 再接続で再承認: 切断で認可が失効すること、切断・ワールド切替・ブリッジ再起動後に認可を継承せず再承認が必要であることを記録する。
 - 比較コードは画面表示と照合にだけ使い、ログ・URL・永続保存・証拠に含めないことを記録する。
 
@@ -43,45 +43,46 @@
 確定事項である。試作は本番経路の成立後に行う。結果は検証待ちであり、全組み合わせは不要で代表点から段階的に負荷を上げる。
 
 - センサー周期: 60Hz、120Hz、240Hz、負荷探索として 1000Hz。
-- 送達物の大きさ: 64バイト、512バイト、4KiB。いずれも UTF-8 にシリアライズした JSON 全体のバイト数とし、`maxMessageBytes` と同じ尺で測る。
+- 送達物の大きさ: 64バイト、512バイト、4KiB。いずれも UTF-8 にシリアライズした JSON 全体のバイト数とし、framing 本体上限（`FRAME_MAX_BYTES`）と同じ尺で測る。
 - ストリーム数: 1本、8本、32本。
 - センサー、小コマンド、模擬 AI 逐次出力の混在。
 - 受信消費の停止、主スレッド停滞、切断、ブリッジ再起動、バックグラウンドタブを含める。
 - 周期・ストリーム数の発生方法は未定義である（診断ワールドに生成処理はなく、誰がその周期・本数を出すかは未確定）。大きさ以外の単位も未確認である。これらは UNRESOLVED とし、推測で埋めない。
-- 待ち行列容量等の初期暫定値は下表のとおりである。0.2 由来の行と 0.3 の採用値の置き場が混在する。0.3 の行はコード未実装のため採用値をここに置き、コード実装後に正本をコードへ移す。ペアリングの120秒・数字6桁・接続単位・切断失効は確定要件であり、下表の暫定値とは区別する。正本は[プロトコル](../../design/protocol.md)である。
+- 待ち行列容量等の値は下表のとおりである。0.3 の採用値はコードを正本とし、この表は参照用に置く（値は複製せず、正本への参照に留める）。0.2 由来の行は撤去済みとして扱い、履歴の意味でのみ残す。ペアリングの120秒・数字6桁・接続単位・切断失効は確定要件であり、下表の値とは区別する。正本は[プロトコル](../../design/protocol.md)である。
 - 0.3 で合意済みの方向として、framing 長ガード残置、監視切断→再承認の許容、Session＝既定 stream 1本を試作条件の前提とする（判断の正本は[プロトコル](../../design/protocol.md)）。
 
-| 項目                                    |                                 暫定値・扱い |
-| --------------------------------------- | -------------------------------------------: |
-| framing 本体上限（0.3 採用値、UTF-8）   |                                 65,536 bytes |
-| yamux inbound／outbound（0.3 採用値）   |                                 各32本／接続 |
-| yamux window（0.3 採用値）              |                                       256KiB |
-| yamux maxStreamWindowSize（0.3 採用値） |   256KiB（初期 window と同値・自動拡大抑止） |
-| keepalive 間隔（0.3 採用値）            |                                    30,000 ms |
-| keepalive 応答期限（0.3 採用値）        |                                    60,000 ms |
-| 同時 Ping 数（0.3 採用値）              |                                          1件 |
-| `maxMessageBytes`（0.2 現行）           |                                 65,536 bytes |
-| `maxReliableQueueMessages`              |                           0.3 で廃止（方向） |
-| `maxReliableQueueBytes`                 |                           0.3 で廃止（方向） |
-| `maxStreamsPerConnection`               |            0.3 の yamux 値に置き換え（方向） |
-| `initialCreditWindow`                   |                           0.3 で廃止（方向） |
-| `maxConnections`                        |                                            8 |
-| `pairingStartTimeoutMs`                 |                                    10,000 ms |
-| `pairingApprovalTimeoutMs`              |                                   120,000 ms |
-| `acceptanceDurationMs`                  |                                   120,000 ms |
-| `maxUnauthorizedConnections`            |                                 2／全8の内数 |
-| `maxPendingPairings`                    |                             2／未認可2の内数 |
-| `pairingRateWindowMs`                   |                                    60,000 ms |
-| `maxPairingRequestsPerOrigin`           |                                5回／直近60秒 |
-| `maxPairingRequestsTotal`               |                               10回／直近60秒 |
-| `maxPairingCodeGenerationAttempts`      |                                         16回 |
-| `connectionCloseGraceMs`                |                                     1,000 ms |
-| world-client `requestTimeoutMs`         | 0.2 現行（0.3 では上位層の責務へ見直し対象） |
-| world-client `maxPendingReliable`       |                           0.3 で廃止（方向） |
-| world-client `maxMessageBytes`          |                                 65,536 bytes |
+| 項目                                     | 扱い                                                                                                                          |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| framing 本体上限                         | 実装済み。正本は `packages/bridge-protocol/src/transport/framing.ts` の `FRAME_MAX_BYTES`                                     |
+| yamux inbound／outbound                  | 実装済み。正本は `packages/bridge-protocol/src/transport/muxer.ts` の `MAX_INBOUND_STREAMS`・`MAX_OUTBOUND_STREAMS`（各接続） |
+| yamux window                             | 実装済み。正本は `packages/bridge-protocol/src/transport/muxer.ts` の `MUX_STREAM_WINDOW_BYTES`                               |
+| yamux maxStreamWindowSize                | 実装済み。初期 window と同値・自動拡大抑止。正本は `bridgeMuxer` の固定設定                                                   |
+| keepalive 間隔                           | 実装済み。正本は `packages/bridge-protocol/src/transport/keepalive.ts` の `KEEPALIVE_*`                                       |
+| keepalive 応答期限                       | 実装済み。正本は `packages/bridge-protocol/src/transport/keepalive.ts` の `KEEPALIVE_PING_TIMEOUT_MS`                         |
+| 同時 Ping 数                             | 1件（実装済み。正本は `keepalive.ts` とテスト）                                                                               |
+| `maxWebSocketMessageBytes`               | WS メッセージ1件の上限（`ws` の `maxPayload`）。framing 上限とは別。正本は `apps/bridge/src/config.ts` の `DEFAULT_LIMITS`    |
+| `maxMessageBytes`（0.2）                 | 0.3 で撤去済み                                                                                                                |
+| `maxReliableQueueMessages`               | 0.3 で廃止済み                                                                                                                |
+| `maxReliableQueueBytes`                  | 0.3 で廃止済み                                                                                                                |
+| `maxStreamsPerConnection`                | 0.3 の yamux 値に置き換え済み                                                                                                 |
+| `initialCreditWindow`                    | 0.3 で廃止済み                                                                                                                |
+| `maxConnections`                         | 8                                                                                                                             |
+| `pairingStartTimeoutMs`                  | 10,000 ms                                                                                                                     |
+| `pairingApprovalTimeoutMs`               | 120,000 ms                                                                                                                    |
+| `acceptanceDurationMs`                   | 120,000 ms                                                                                                                    |
+| `maxUnauthorizedConnections`             | 2／全8の内数                                                                                                                  |
+| `maxPendingPairings`                     | 2／未認可2の内数                                                                                                              |
+| `pairingRateWindowMs`                    | 60,000 ms                                                                                                                     |
+| `maxPairingRequestsPerOrigin`            | 5回／直近60秒                                                                                                                 |
+| `maxPairingRequestsTotal`                | 10回／直近60秒                                                                                                                |
+| `maxPairingCodeGenerationAttempts`       | 16回                                                                                                                          |
+| `connectionCloseGraceMs`                 | 1,000 ms                                                                                                                      |
+| world-client `requestTimeoutMs`（0.2）   | 0.3 で撤去済み（業務相関・要求待機は上位層の責務）                                                                            |
+| world-client `maxPendingReliable`（0.2） | 0.3 で撤去済み                                                                                                                |
+| world-client `maxMessageBytes`（0.2）    | 0.3 で撤去済み                                                                                                                |
 
-- 値の正本はコードである。サーバ側の 0.2 現行値は `apps/bridge/src/config.ts` の `DEFAULT_LIMITS` に置き、`BridgeOptions.limits` で上書きする。world-client の 0.2 現行値（`requestTimeoutMs`・`maxPendingReliable`・`maxMessageBytes`）は `packages/world-client/src/client.ts` の既定値に置く。0.3 の採用値（framing・yamux・keepalive）はコード未実装のため暫定的にこの表に置き、実装後に正本をコードへ移す。件数容量 `C`・初期付与の意味論は 0.2 の方式であり、0.3 ではクレジット層ごと削除方向である（[プロトコル](../../design/protocol.md)を参照）。
-- yamux 試作で確定した採用版の既定値は次のとおりである。0.3 の採用値（上表）と異なる行は、コード実装時に明示設定が必要である。採用版は `@chainsafe/libp2p-yamux` 8.0.1（tag commit `7dca09b`）である。inbound／outbound 上限の既定は各1000であり、設計の各32へ明示設定する。`maxMessageSize` の既定は 64KiB である。受信 window は RTT 既知で最大 16MiB まで自動拡大するため、上表の `maxStreamWindowSize`（初期 window と同値）の明示設定で抑止する。`send()` は同期の真偽値であり、false は破棄ではなく writeBuffer への滞留を表す。`close()` は FIN 送出前に write queue の idle と drain を待つ。GoAway は mux を閉じるがトランスポートは閉じない。
+- 値の正本はコードである。サーバ側の制限値は `apps/bridge/src/config.ts` の `DEFAULT_LIMITS` に置き、`BridgeOptions.limits` で上書きする。0.3 の輸送採用値（framing・yamux・keepalive）は `packages/bridge-protocol/src/transport/` の各定数（`framing.ts`・`muxer.ts`・`keepalive.ts`）を正本とする。ワールド側の公開操作は `packages/world-client/src/client.ts`・`packages/world-client/src/session.ts` を正本とし、0.2 の要求相関・会計 API は撤去済みである。件数容量 `C`・初期付与の意味論は 0.2 の方式の履歴であり、0.3 ではクレジット層ごと廃止済みである（[プロトコル](../../design/protocol.md)を参照）。
+- yamux 試作で確定した採用版の既定値は次のとおりである。上表の 0.3 採用値と異なる行は、製品実装で明示設定する（`bridgeMuxer` が固定設定として適用済み）。採用版は `@chainsafe/libp2p-yamux` 8.0.1（tag commit `7dca09b`）である。inbound／outbound 上限の既定は各1000であり、設計の各32へ明示設定する。`maxMessageSize` の既定は 64KiB である。受信 window は RTT 既知で最大 16MiB まで自動拡大するため、上表の `maxStreamWindowSize`（初期 window と同値）の明示設定で抑止する。`send()` は同期の真偽値であり、false は破棄ではなく writeBuffer への滞留を表す。`close()` は FIN 送出前に write queue の idle と drain を待つ。GoAway は mux を閉じるがトランスポートは閉じない。
 
 ## 計測項目
 
@@ -91,7 +92,7 @@
 - 最新値の鮮度、置換数、欠番数。
 - コマンド完了時間。
 - AI 出力の到着間隔。
-- 両端の待ち行列のバイト数と件数、`bufferedAmount`、クレジット待ち（クレジット待ちは 0.2 の項目であり、0.3 では yamux window・backpressure 時の Promise 完了点に置き換える）。
+- 両端の待ち行列のバイト数と件数、`bufferedAmount`、yamux window・backpressure 時の `reliable` 送信 Promise の完了点（ローカル送信完了であり相手受信・業務完了ではないこと）。
 - CPU とメモリの推移、長時間タスク、XRift 描画への影響。
 - 停滞解消後に古い値が流れ続けないこと。
 - 片道時間と鮮度は時計差の推定方法と誤差を併記する。異なるプロセスの `performance.now()` を直接引かない。
@@ -108,7 +109,9 @@
 - bundle 差分・審査・負荷: yamux 採用版の bundle 差分、XRift 審査の通過、センサー・小コマンド・模擬 AI 逐次出力の混在負荷（[配送と負荷の試作条件](#配送と負荷の試作条件)の周期・大きさ・本数で行う）。
 - `latest` 置換: 投入前置換の動作、投入中1件＋未投入最新1件の範囲、値ごとの配送 Promise を作らないことの確認。
 - 制御分離なし: 制御専用 stream を作らないこと（Session 間の優先度・分離を設けないこと）の確認。
-- 試作の置き場と観測要点: 試作は `tools/yamux-spike/`（experimental、製品コードと分離）に置く。多重化（4本同時 echo の対応保持）、WS 分割（7B 刻みでも復元・送出数で発動を確認）・集約（25ms 窓の5連打が順序保持・送出数で発動を確認）、FIN（片方向終了と逆方向継続、双方 FIN 後も mux 維持）、RST（対象のみ中断・他 stream 継続）、GoAway（相手 mux の終了観測）、window backpressure（初期 window ちょうどで詰まり・pause 中 `onDrain` 不解・resume で解ける・全量到着）、認可プリリュード切替（同じ WS 上での mux 開始・混交なし）を観測する。未確認はブラウザ実機、inactivity timeout 発火、受信 window 自動拡大抑止の実機確認である。詳細は試作の `README.md` を参照する。
+- 試作の置き場と観測要点: 試作は `tools/yamux-spike/`（experimental、製品コードと分離）に置く。多重化（4本同時 echo の対応保持）、WS 分割（7B 刻みでも復元・送出数で発動を確認）・集約（25ms 窓の5連打が順序保持・送出数で発動を確認）、FIN（片方向終了と逆方向継続、双方 FIN 後も mux 維持）、RST（対象のみ中断・他 stream 継続）、GoAway（相手 mux の終了観測）、window backpressure（初期 window ちょうどで詰まり・pause 中 `onDrain` 不解・resume で解ける・全量到着）、認可プリリュード切替（同じ WS 上での mux 開始・混交なし）を観測する。試作時点で未確認のうち、受信 window 自動拡大抑止は製品の単体テスト（`transport-muxer.test.ts`）で確認済みである。inactivity timeout は現行固定版（`@libp2p/utils` 7.4.1・`@chainsafe/libp2p-yamux` 8.0.1）の読解では発火経路がなく（製品は指定せず、基底への受け渡しのみで未使用）、上流更新時に再確認する。ブラウザ実機は未確認のままである。詳細は試作の `README.md` を参照する。
+- 診断の往復: 認可後の `data` 上で診断 payload が往復すること（echo は `{op: "echo", id, value}`→同形の返送、ping は `{op: "ping", id}`→`{op: "pong", id}`。`op`・`id` は payload 内であり、wire に業務 requestId は載せない）。形状の正本は `apps/bridge/src/diagnostic-handler.ts` とする。
+- 製品の未検証分岐: `auth_ok` 送信失敗・mux 初期化失敗・切替中 text 受信の3分岐は製品テスト未実施である。実ブラウザ・実ホスト・負荷試行も未了である。
 
 ## 証拠の残し方
 
@@ -138,8 +141,9 @@
 | 区分     | 内容                                                                                                                                                                                                | 参照先                                                                                                 |
 | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
 | 確定     | 実行手順、試作条件、計測項目、証拠の残し方、判定後の分岐、yamux 試作の検証項目                                                                                                                      | 本文                                                                                                   |
-| 合意済み | 0.3 の方向（yamux on WebSocket・認可後 mux 開始・件数クレジット層削除・`seq` 削除・配送順保証撤去・終了契約・送信 API 契約）、framing 長ガード残置、監視切断→再承認の許容、Session＝既定 stream 1本 | [ブリッジ接続](../../design/bridge.md)と[プロトコル](../../design/protocol.md)に反映済み               |
-| 検証待ち | 条件ごとの観測結果、対応表、時計差の誤差評価、yamux 試作の結果                                                                                                                                      | 本文の項目に記録する                                                                                   |
-| 合意待ち | 必須対応範囲の将来拡大、ストリームごとの欠落許容、必要鮮度・遅延・負荷範囲、開発モードの許可Originの列挙場所、0.3 採用値のコード正本化                                                              | 観測後に合意し[ブリッジ接続](../../design/bridge.md)と[プロトコル](../../design/protocol.md)に反映する |
+| 合意済み | 0.3 の契約（yamux on WebSocket・認可後 mux 開始・件数クレジット層廃止・`seq` 廃止・配送順保証なし・終了契約・送信 API 契約）、framing 長ガード残置、監視切断→再承認の許容、Session＝既定 stream 1本 | [ブリッジ接続](../../design/bridge.md)と[プロトコル](../../design/protocol.md)に反映済み               |
+| 検証済み | 0.3 の製品実装・ローカル検証（単体・結合テスト、`vp check`、ビルド）                                                                                                                                | 各パッケージのテスト                                                                                   |
+| 検証待ち | 条件ごとの観測結果、対応表、時計差の誤差評価、yamux 試作の結果、0.3 のサーバ側審査・実ホスト検証・再アップロード                                                                                    | 本文の項目に記録する                                                                                   |
+| 合意待ち | 必須対応範囲の将来拡大、ストリームごとの欠落許容、必要鮮度・遅延・負荷範囲、開発モードの許可Originの列挙場所                                                                                        | 観測後に合意し[ブリッジ接続](../../design/bridge.md)と[プロトコル](../../design/protocol.md)に反映する |
 
 - 対象ブラウザの必須範囲（必須は Google Chrome のみ）の判断自体は[ブリッジ接続](../../design/bridge.md)の確定事項であり、この表の「確定」は手順の確定を指す。

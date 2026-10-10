@@ -1,4 +1,6 @@
-# yamux-spike（experimental）
+# yamux-spike（experimental・参照用）
+
+> 製品輸送は `packages/bridge-protocol/src/transport/` に引き継がれた。以下は採用判断時の試作記録として残し、製品の正本にはしない。
 
 libp2p なしの **yamux（muxer のみ）on 自前 WebSocket** の採用可否を判断するための限定試作。
 製品実装ではなく、採用判断の証拠集めだけが目的。`apps/bridge`・`packages/*` の `src/` は変更しない。

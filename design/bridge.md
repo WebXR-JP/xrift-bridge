@@ -44,13 +44,13 @@ flowchart LR
 
 ### 多重化に yamux を採用する（protocol 0.3）
 
-- 本節は採用済みの方向と理由の記録である。形状・数値の正本は従来どおりコードだが、コードは現状 0.2 のままであり実装は未着手である。採用値の置き場は[検証計画](../docs/verification/bridge.md)の暫定値表とし、コード実装後に正本をコードへ移す。
+- 本節は採用済みの方向と理由の記録である。形状・数値の正本はコードであり、protocol 0.3 として実装済みである。採用値は `packages/bridge-protocol/src/transport/` の各定数を正本とする。
 - Session 多重化の手段は **yamux（muxer）のみを自前 WebSocket 上で動かす**方式とする。libp2p スタック（PeerId・Noise・identify・multistream-select）は使わない。採用理由は、必要十分な多重化・流れ制御・終了通知を小さな導入面積で得るためである。WebSocket 維持の判断（前節）と多重化手段の判断（本節）は別の判断として扱う。
-- 境界は **既存 JSON でペアリング完了 → 認可（`auth_ok` 相当）→ 同じ WebSocket 上で yamux muxer 開始**とする。別 WebSocket での mux 開始・認可の継承はしない。
+- 境界は **既存 JSON でペアリング完了 → 認可（`auth_ok`）→ 同じ WebSocket 上で yamux muxer 開始**とする。別 WebSocket での mux 開始・認可の継承はしない。
 - 認可は **Connection（WebSocket 接続）単位のみ**とし、Session 単位の権限は持たせない。切断で失効し、再接続は再承認である（前述の接続認可の判断を維持する）。PeerId に認可を結び付けない理由は、比較コード方式が「生存中の WebSocket 接続そのもの」を承認対象とし、接続単位認可・切断失効と一体で設計されているためである。PeerId を導入すると識別子と接続の対応管理・継承可否の別判断が必要になり、この一体性を崩す。
 - `disconnectConnection` は即時切断とする（排出待ちをしない）。対象接続だけを WebSocket code 1008・固定 reason（`apps/bridge/src/server.ts` の `OPERATOR_DISCONNECT_REASON` を正本とする）で閉じ、1000ms（`connectionCloseGraceMs`。正本はコード）で強制終了する。他接続・待ち受けは維持する。
 - 終了開始後の監視の扱い・code の使い分けは[プロトコル](protocol.md)の終了契約・監視の判断を正本とする。code の意味づけ（1000正常／1001サーバ停止／1008ポリシー／1009 WSメッセージ超過／1011内部障害。1006 は観測値であり送信しない）の詳細も[プロトコル](protocol.md)に置き、ここでは複製しない。
-- keepalive は yamux の公開 `ping()` を使う自前の監視ループとし、内蔵 keepalive に障害検知を委ねない（`enableKeepAlive: false`）。間隔・期限・同時 Ping 数の採用値は[検証計画](../docs/verification/bridge.md)の暫定値表に置く。バックグラウンド停止・スリープで監視切断され再承認が必要になる運用は許容済みである。Ping 成功の意味の限定（往復経路と相手 yamux 処理の動作のみを示す）は[プロトコル](protocol.md)に置く。
+- keepalive は yamux の公開 `ping()` を使う自前の監視ループとし、内蔵 keepalive に障害検知を委ねない（`enableKeepAlive: false`）。間隔・期限・同時 Ping 数の正本は `packages/bridge-protocol/src/transport/keepalive.ts` の定数とする。バックグラウンド停止・スリープで監視切断され再承認が必要になる運用は許容済みである。Ping 成功の意味の限定（往復経路と相手 yamux 処理の動作のみを示す）は[プロトコル](protocol.md)に置く。
 
 ## XRift 側で必要な宣言
 
@@ -80,8 +80,8 @@ flowchart LR
 - 認可は接続に属し、切断で失効する。再接続には再承認が必要である。
 - ペアリングは接続ごとに行う。ワールド側から `pairing_start` で開始し、ブリッジが比較コードを発行して両画面に表示し、人間がブリッジ側で承認したその接続だけを認可する。接続前のループバック・接続先一致・`Origin` 完全一致の検証は維持する。具体的な検証内容は `apps/bridge/src/verify.ts` と[プロトコル](protocol.md)を正本とする。
 - 承認対象は、許可 `Origin` から届いた生存中の WebSocket 接続にブリッジの定めた通信権限を与えることである。ワールド ID・作者・アイテムの真正性を承認するものではない。
-- 認可済み接続が行えるのは `echo`、既知の `command_request`（現在は `ping`）、`data` である（0.2 現行。0.3 では `data` に一本化する方向である）。任意の将来コマンドやローカル操作の包括承認ではなく、権限拡張は別途判断する。
-- 実装の状態名と遷移の詳細は型（`packages/world-client/src/client.ts` の `ConnectionState`）と各テストを正本とする。
+- 認可済み接続が行えるのは `data` の送受信である。診断の意味づけ（echo／ping 相当）は `data` の payload 内の `op` で行い、wire に業務 requestId は載せない。形状の正本は `apps/bridge/src/diagnostic-handler.ts` とする。任意の将来コマンドやローカル操作の包括承認ではなく、権限拡張は別途判断する。
+- 実装の状態と遷移の詳細は公開 API（`packages/world-client/src/client.ts` の `createConnectionRequest` が返す `ConnectionRequest`・`packages/world-client/src/session.ts` の `SessionProvider`・`Session`）と `packages/world-client/src/client.ts` の内部 phase（`requesting_pairing`・`awaiting_approval`・`authorized`・`closed`）・各テストを正本とする。
 - ワールドの退出や切替時の切断は運用上の管理であり、同一実行基盤内の悪意あるコードへの防御ではない。
 
 ## 信頼境界
@@ -102,7 +102,7 @@ flowchart LR
 - **承認対象の定義**: 許可 `Origin` から届いた生存中の WebSocket 接続に、ブリッジの定めた通信権限を与えることである。ワールド ID・作者・アイテムの真正性を承認するものではない。
 
 - **採用時の決定**: 下記の値は実装済みの設計既定値であり、意味・単位・設計既定値と正本への参照が分かる形に留める。
-  - **権限範囲**: 認可済み接続が行えるのは `echo`、既知の `command_request`（現在は `ping`）、`data` である（0.2 現行。0.3 では `data` に一本化する方向である）。認可はその接続だけに属し、切断で失効し、再接続は再承認である。任意の将来コマンドやローカル操作の包括承認ではなく、権限拡張は別途判断する。
+  - **権限範囲**: 認可済み接続が行えるのは `data` の送受信である。診断の意味づけ（echo／ping 相当）は `data` の payload 内の `op` で行い、wire に業務 requestId は載せない。認可はその接続だけに属し、切断で失効し、再接続は再承認である。任意の将来コマンドやローカル操作の包括承認ではなく、権限拡張は別途判断する。
   - **比較コード**: 数字6桁（`000000`〜`999999`）である。内部は6文字の文字列として先頭ゼロを保持し、表示は `123 456` のように区切る。ブリッジが暗号学的乱数で生成する。生存中の保留要求との重複を全 `Origin` を通じて検出して再生成し、最大16回で生成できなければその要求を失敗終了する。同じ要求のコードは変更せず、再発行操作は設けない。コードとは別に、再利用しない要求 ID を設ける。
   - **期限（二段階）**: 接続から開始メッセージまで10秒、比較コード発行から承認まで120秒である。保留の実際の絶対期限は「コード発行＋120秒」と「受付終了時刻」の早い方である。通信・一覧表示・重複開始メッセージで延長せず、開始メッセージは接続につき1回である。開始待ちと承認待ちの制限値は `apps/bridge/src/config.ts` の `pairingStartTimeoutMs`・`pairingApprovalTimeoutMs` を正本とする。
   - **上限・受付レート**: 全接続数は8である。未認可接続数（開始待ち＋承認待ち）は2（全8の内数であり、認可済みを追い出さない）、同時保留数（承認待ち）は2である。`Origin` 別受付レートは直近60秒に5回、全 `Origin` 合計は直近60秒に10回である。レートは受付の開閉でリセットしない。超過は保留せず拒否し、拒否ごとの通知は出さず `status` に集計を表示する。
