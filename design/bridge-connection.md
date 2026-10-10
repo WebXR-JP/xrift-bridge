@@ -81,7 +81,7 @@ flowchart LR
 - 認可は接続に属し、切断で失効する。再接続には再承認が必要である。
 - ペアリングは接続ごとに行う。ワールド側から `pairing_start` で開始し、ブリッジが比較コードを発行して両画面に表示し、人間がブリッジ側で承認したその接続だけを認可する。接続前のループバック・接続先一致・`Origin` 完全一致の検証は維持する。具体的な検証内容は `packages/bridge-server/src/verify.ts` と[プロトコル](protocol.md)を正本とする。
 - 承認対象は、許可 `Origin` から届いた生存中の WebSocket 接続にブリッジの定めた通信権限を与えることである。ワールド ID・作者・アイテムの真正性を承認するものではない。
-- 認可済み接続が行えるのは `data` の送受信である。診断の意味づけ（echo／ping 相当）は `data` の payload 内の `op` で行い、wire に業務 requestId は載せない。形状の正本は `packages/bridge-server/src/diagnostic-handler.ts` とする。任意の将来コマンドやローカル操作の包括承認ではなく、権限拡張は別途判断する。
+- 認可済み接続が行えるのは `data` の送受信である。診断の意味づけ（echo／ping 相当）は `data` の payload 内の `op` で行い、wire に業務 requestId は載せない。形状の正本は `packages/bridge-app-core/src/plugins/diagnostic.ts` とする。任意の将来コマンドやローカル操作の包括承認ではなく、権限拡張は別途判断する。
 - 実装の状態と遷移の詳細は公開 API（`packages/world-client/src/client.ts` の `createConnectionRequest` が返す `ConnectionRequest`・`packages/world-client/src/session.ts` の `SessionProvider`・`Session`）と `packages/world-client/src/client.ts` の内部 phase（`requesting_pairing`・`awaiting_approval`・`authorized`・`closed`）・各テストを正本とする。
 - ワールドの退出や切替時の切断は運用上の管理であり、同一実行基盤内の悪意あるコードへの防御ではない。
 

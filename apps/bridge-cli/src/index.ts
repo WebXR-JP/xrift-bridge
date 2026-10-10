@@ -13,7 +13,9 @@
  */
 import { createInterface } from "node:readline";
 import { formatPairingCode, isPairingCode } from "bridge-protocol";
+import type { DiagnosticStats } from "bridge-app-core";
 import { createBridgeServer, PRODUCTION_ORIGIN, type BridgeServer } from "bridge-server";
+import { startDiagnostics, type BridgeDiagnostics } from "./diagnostics.ts";
 
 const DEFAULT_PORT = 3100;
 
@@ -90,12 +92,14 @@ const stdoutOutput: CommandOutput = {
  * @param line - 入力行。
  * @param server - 起動中のブリッジ。
  * @param out - 表示の出力先。省略時は標準出力。
+ * @param diagnostics - 診断統計の取得口。省略時は診断の項目を出さない。
  * @returns 終了する場合に真。
  */
 export function handleCommand(
   line: string,
   server: BridgeServer,
   out: CommandOutput = stdoutOutput,
+  diagnostics?: { getStats(): DiagnosticStats },
 ): boolean {
   const [command, ...rest] = line.trim().split(/\s+/);
   if (command === "accept") {
@@ -184,6 +188,14 @@ export function handleCommand(
     const rejections = Object.entries(stats.rejectionsByReason)
       .map(([reason, count]) => `${reason}=${count}`)
       .join(" ");
+    // 診断の統計はサーバーの輸送統計ではなく、CLI の診断実行状態から取る。
+    let diagnosticText = "";
+    if (diagnostics !== undefined) {
+      const diagnostic = diagnostics.getStats();
+      diagnosticText =
+        ` diagnosticEcho=${diagnostic.diagnosticEcho}` +
+        ` diagnosticPing=${diagnostic.diagnosticPing}`;
+    }
     out.write(
       `endpoint=${server.endpoint} connections=${server.getConnectionCount()} ` +
         `authorized=${authorized} unauthorized=${unauthorized} pending=${pending.length} closing=${closing} ` +
@@ -192,7 +204,7 @@ export function handleCommand(
           ? ""
           : ` acceptanceEndsAt=${new Date(acceptance.endsAt).toISOString()}`) +
         ` pairingSuccess=${stats.pairingSuccess} pairingFailure=${stats.pairingFailure} ` +
-        `latestStored=${stats.latestStored} diagnosticEcho=${stats.diagnosticEcho} diagnosticPing=${stats.diagnosticPing}` +
+        `latestStored=${stats.latestStored}${diagnosticText}` +
         (rejections === "" ? "" : ` rejections:${rejections}`) +
         `\n`,
     );
@@ -253,14 +265,16 @@ async function main(): Promise<void> {
     port: options.port,
     allowedOrigins: [PRODUCTION_ORIGIN, ...(options.dev ? options.origins : [])],
   });
+  const diagnostics: BridgeDiagnostics = startDiagnostics(server);
   process.stdout.write(`listening ${server.endpoint}\n`);
   process.stdout.write(
     "命令: accept open / accept close / pending / approve <requestId> <code> / reject <requestId> / status / connections / disconnect <connectionId> / quit\n",
   );
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   rl.on("line", (line: string) => {
-    if (handleCommand(line, server)) {
+    if (handleCommand(line, server, stdoutOutput, diagnostics)) {
       rl.close();
+      diagnostics.close();
       void server.close().then(() => {
         process.exit(0);
       });
@@ -268,6 +282,7 @@ async function main(): Promise<void> {
   });
   const shutdown = (): void => {
     rl.close();
+    diagnostics.close();
     void server.close().then(() => {
       process.exit(0);
     });

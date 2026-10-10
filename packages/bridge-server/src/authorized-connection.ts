@@ -2,9 +2,10 @@
  * 認可済み1接続の mux 管理（B3 `Connection` のサーバ側包み）。
  *
  * 同一 WS 上の yamux Connection（role `"server"`）を所有し、inbound の
- * `create_session` を Session 登録して受信 `data` を業務へ渡す。
+ * `create_session` を Session 登録する。
  * - `kind:"latest"`（client→server）の受信値を `latestMailbox` へ格納する。
- * - `kind:"reliable"`（client→server）の受信値をサーバ側の診断ハンドラへ渡す。
+ * - `kind:"reliable"` の受信には既定の処理を置かず、公開 Session API を通じて
+ *   アプリ側が行う。
  *
  * 認可後の生存セッションはローカル識別子で公開する（一覧・取得・開始終了通知）。
  * 切替中・未認可の Session は公開しない。終了開始（`onClosing`）で一覧・取得から
@@ -28,7 +29,6 @@ import {
   type TimerScheduler,
   type WsMessageStreamOptions,
 } from "bridge-protocol/transport";
-import { handleDiagnosticPayload } from "./diagnostic-handler.ts";
 import type { NodeWsSocket } from "./node-socket.ts";
 
 /** 生存セッションのローカル識別子。プロセス内で単調に払い出し再利用しない。 */
@@ -93,10 +93,6 @@ export interface AuthorizedConnectionHost {
   storeLatest(sessionId: string, payload: unknown): void;
   /** 捨てた古い latest を件数で数える。 */
   recordLatestDropped(delta: number): void;
-  /** 診断 echo を1件数える。 */
-  recordDiagnosticEcho(): void;
-  /** 診断 ping を1件数える。 */
-  recordDiagnosticPing(): void;
   /** 生存セッションの開始を通知する。登録確定後に呼ぶ。 */
   onSessionStarted(connection: AuthorizedConnection, info: BridgeSessionInfo): void;
   /** 生存セッションの終了を通知する。一度だけ呼ぶ。 */
@@ -269,6 +265,8 @@ export class AuthorizedConnection {
     // ② 終端の解除処理・latest 記録を設置する。
     // `kind` で絞る：`"latest"` は受信側（`LatestReceiverSession<"server">`、
     // 方向 `to_server`）、それ以外は `ReliableSession<"server">` である。
+    // ADR: reliable Session には既定の受信処理を置かない。受信は
+    // `getSession` で取り出した公開 Session を通じてアプリ側が行う。
     if (session.kind === "latest") {
       session.onMessage((payload) => {
         // ADR: stale は Session が黙って捨てるため、配送時に差分で補正する。
@@ -276,13 +274,6 @@ export class AuthorizedConnection {
         this.reconcileStale(record);
         this.host.storeLatest(session.sessionId, payload);
         this.reconcileStale(record);
-      });
-    } else {
-      session.onMessage((payload) => {
-        handleDiagnosticPayload(session, payload, {
-          recordEcho: () => this.host.recordDiagnosticEcho(),
-          recordPing: () => this.host.recordDiagnosticPing(),
-        });
       });
     }
     // FIN（`onRemoteEnd`）では終了通知を出さず、全体終了（`onEnd`）で出す。

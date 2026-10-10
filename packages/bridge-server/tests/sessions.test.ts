@@ -16,6 +16,7 @@ import {
   type ManagementEvent,
 } from "../src/server.ts";
 import { NodeWsSocket } from "../src/node-socket.ts";
+import { attachEchoResponder } from "./echo-responder.ts";
 
 const PROD_ORIGIN = "https://app.xrift.net";
 const DEV_ORIGIN = "http://localhost:5173";
@@ -483,16 +484,18 @@ test("承認だけでは公開されず作成で開始通知と一覧が整合�
   expect(fetched).not.toBeUndefined();
   expect(fetched?.sessionId).toBe("diag-1");
 
-  // 公開後も診断 echo は通り、既存の振る舞いを壊さない。
+  // 公開後も応答器の往復は通り、既存の振る舞いを壊さない。
+  const stopResponding = attachEchoResponder(server);
   const collected = collectSession(session);
-  await session.sendReliable({ op: "ping", id: "公開後も診断継続-1" });
-  const pong = await collected.waitForPayload(
+  await session.sendReliable({ 往復: "公開後も継続-1" });
+  const echoed = await collected.waitForPayload(
     (payload) =>
       typeof payload === "object" &&
       payload !== null &&
-      (payload as Record<string, unknown>)["op"] === "pong",
+      (payload as Record<string, unknown>)["往復"] === "公開後も継続-1",
   );
-  expect(pong).toEqual({ op: "pong", id: "公開後も診断継続-1" });
+  expect(echoed).toEqual({ 往復: "公開後も継続-1" });
+  stopResponding();
   management.unsubscribe();
 });
 

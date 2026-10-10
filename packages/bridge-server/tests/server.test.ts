@@ -11,6 +11,7 @@ import {
 import type { WsMessageStreamOptions } from "bridge-protocol/transport";
 import { createBridgeServer, type BridgeOptions, type BridgeServer } from "../src/server.ts";
 import { NodeWsSocket } from "../src/node-socket.ts";
+import { attachEchoResponder } from "./echo-responder.ts";
 import type { BridgeLogEvent } from "../src/log.ts";
 
 const PROD_ORIGIN = "https://app.xrift.net";
@@ -642,7 +643,8 @@ test("全接続数・未認可数・保留数の上限を同時に踏める（�
   await waitForCondition(() => server.getConnectionCount() === 7);
   const retry = await openCollected(server.endpoint, DEV_ORIGIN);
   expect(server.getConnectionCount()).toBe(8);
-  // 認可済みは診断 echo で業務を続けられる。
+  // 認可済みは一般 payload の往復で業務を続けられる。
+  const stopResponding = attachEchoResponder(server);
   const target = authorized[0];
   if (target === undefined) throw new Error("認可済みがない。");
   const session = await target.mux.conn.createSession({
@@ -651,14 +653,15 @@ test("全接続数・未認可数・保留数の上限を同時に踏める（�
     direction: "bidirectional",
   });
   const collected = collectSession(session);
-  await session.sendReliable({ op: "echo", id: "cap-ok-1", value: { n: 1 } });
+  await session.sendReliable({ 往復: "cap-ok-1", 値: { n: 1 } });
   const echoed = await collected.waitForPayload(
     (payload) =>
       typeof payload === "object" &&
       payload !== null &&
-      (payload as Record<string, unknown>)["op"] === "echo",
+      (payload as Record<string, unknown>)["往復"] === "cap-ok-1",
   );
-  expect(echoed).toEqual({ op: "echo", id: "cap-ok-1", value: { n: 1 } });
+  expect(echoed).toEqual({ 往復: "cap-ok-1", 値: { n: 1 } });
+  stopResponding();
   second.socket.terminate();
   retry.socket.terminate();
   await waitForCondition(() => server.getConnectionCount() === 6);
@@ -783,20 +786,22 @@ test("拒否・取消で保留が失効し認可済みに影響しない", async
   expect(server.listPending()).toHaveLength(0);
   expect(server.rejectPairing(pending.message.requestId)).toEqual({ status: "NOT_PENDING" });
 
-  // 認可済みは影響なく診断 echo を続けられる。
+  // 認可済みは影響なく一般 payload の往復を続けられる。
+  const stopResponding = attachEchoResponder(server);
   const session = await keeperAuth.mux.conn.createSession({
     sessionId: "keep-ok",
     kind: "reliable",
     direction: "bidirectional",
   });
   const collected = collectSession(session);
-  await session.sendReliable({ op: "echo", id: "keep-ok-1", value: "ok" });
+  await session.sendReliable({ 往復: "keep-ok-1", 値: "ok" });
   await collected.waitForPayload(
     (payload) =>
       typeof payload === "object" &&
       payload !== null &&
-      (payload as Record<string, unknown>)["op"] === "echo",
+      (payload as Record<string, unknown>)["往復"] === "keep-ok-1",
   );
+  stopResponding();
 });
 
 test("切断で保留が失効し承認は未保留になる", async () => {
@@ -921,19 +926,20 @@ test("受付クローズで開始待ち・承認待ちが終了し認可済み�
     status: "NOT_PENDING",
   });
 
-  // 認可済みは維持され診断 echo を続けられる。
+  // 認可済みは維持され一般 payload の往復を続けられる。
+  const stopResponding = attachEchoResponder(server);
   const session = await keeperAuth.mux.conn.createSession({
     sessionId: "drain-keep",
     kind: "reliable",
     direction: "bidirectional",
   });
   const collected = collectSession(session);
-  await session.sendReliable({ op: "echo", id: "drain-keep-1", value: 1 });
+  await session.sendReliable({ 往復: "drain-keep-1", 値: 1 });
   await collected.waitForPayload(
     (payload) =>
       typeof payload === "object" &&
       payload !== null &&
-      (payload as Record<string, unknown>)["op"] === "echo",
+      (payload as Record<string, unknown>)["往復"] === "drain-keep-1",
   );
 
   // 閉の冪等性。二度目の close でも認可済みは残る。
@@ -944,13 +950,14 @@ test("受付クローズで開始待ち・承認待ちが終了し認可済み�
     direction: "bidirectional",
   });
   const collected2 = collectSession(second);
-  await second.sendReliable({ op: "echo", id: "drain-keep-2", value: 2 });
+  await second.sendReliable({ 往復: "drain-keep-2", 値: 2 });
   await collected2.waitForPayload(
     (payload) =>
       typeof payload === "object" &&
       payload !== null &&
-      (payload as Record<string, unknown>)["op"] === "echo",
+      (payload as Record<string, unknown>)["往復"] === "drain-keep-2",
   );
+  stopResponding();
 });
 
 test("受付の自動クローズでも開始待ちは失効する", async () => {
@@ -1198,87 +1205,103 @@ test("運用切断は 1008・固定 reason で未認証接続も切れる", asyn
 
 // ---------- 0.3 の mux 経路 ----------
 
-test("同一WSでmux→Session往復しlatest反映と診断echo・pongが返る", async () => {
+test("同一WSでmux→Session往復しlatest反映と応答器の往復が通る", async () => {
   const server = await startServer();
   server.openAcceptance();
-  const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
-  const auth = await authorizeAndMux(server, socket, collector);
+  const stopResponding = attachEchoResponder(server);
+  try {
+    const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
+    const auth = await authorizeAndMux(server, socket, collector);
 
-  // latest（client→server）は受信箱へ反映される。
-  const latest = await auth.mux.conn.createSession({
-    sessionId: "pose",
-    kind: "latest",
-    direction: "to_server",
-  });
-  latest.sendLatest({ x: 1 });
-  latest.sendLatest({ x: 2 });
-  await waitForCondition(() => {
-    const value = server.getLatest("pose") as Record<string, unknown> | undefined;
-    return value !== undefined && value["x"] === 2;
-  });
-  expect(server.getLatest("pose")).toEqual({ x: 2 });
-  expect(server.getStats().latestStored).toBe(2);
+    // latest（client→server）は受信箱へ反映される。
+    const latest = await auth.mux.conn.createSession({
+      sessionId: "pose",
+      kind: "latest",
+      direction: "to_server",
+    });
+    latest.sendLatest({ x: 1 });
+    latest.sendLatest({ x: 2 });
+    await waitForCondition(() => {
+      const value = server.getLatest("pose") as Record<string, unknown> | undefined;
+      return value !== undefined && value["x"] === 2;
+    });
+    expect(server.getLatest("pose")).toEqual({ x: 2 });
+    expect(server.getStats().latestStored).toBe(2);
 
-  // reliable の診断 echo・ping に応答する。
-  const diag = await auth.mux.conn.createSession({
-    sessionId: "diag-1",
-    kind: "reliable",
-    direction: "bidirectional",
-  });
-  const collected = collectSession(diag);
-  await diag.sendReliable({ op: "echo", id: "diag-1", value: { hello: "world" } });
-  const echoed = await collected.waitForPayload(
-    (payload) =>
-      typeof payload === "object" &&
-      payload !== null &&
-      (payload as Record<string, unknown>)["op"] === "echo",
-  );
-  expect(echoed).toEqual({ op: "echo", id: "diag-1", value: { hello: "world" } });
-  await diag.sendReliable({ op: "ping", id: "diag-p1" });
-  const pong = await collected.waitForPayload(
-    (payload) =>
-      typeof payload === "object" &&
-      payload !== null &&
-      (payload as Record<string, unknown>)["op"] === "pong",
-  );
-  expect(pong).toEqual({ op: "pong", id: "diag-p1" });
-  expect(server.getStats().diagnosticEcho).toBe(1);
-  expect(server.getStats().diagnosticPing).toBe(1);
-  // 業務 requestId を wire に追加しない。
-  expect("requestId" in (echoed as Record<string, unknown>)).toBe(false);
+    // reliable は公開 Session API で付けた応答器と往復する。
+    const diag = await auth.mux.conn.createSession({
+      sessionId: "diag-1",
+      kind: "reliable",
+      direction: "bidirectional",
+    });
+    const collected = collectSession(diag);
+    await diag.sendReliable({ 往復: "diag-1", 値: { hello: "world" } });
+    const echoed = await collected.waitForPayload(
+      (payload) =>
+        typeof payload === "object" &&
+        payload !== null &&
+        (payload as Record<string, unknown>)["往復"] === "diag-1",
+    );
+    // 応答は受信値そのままであり、wire に業務 requestId を追加しない。
+    expect(echoed).toEqual({ 往復: "diag-1", 値: { hello: "world" } });
+    await diag.sendReliable({ 往復: "diag-p1" });
+    const second = await collected.waitForPayload(
+      (payload) =>
+        typeof payload === "object" &&
+        payload !== null &&
+        (payload as Record<string, unknown>)["往復"] === "diag-p1",
+    );
+    expect(second).toEqual({ 往復: "diag-p1" });
+  } finally {
+    stopResponding();
+  }
 });
 
-test("診断の旧形状（id無し）は当該Sessionのみ中断する", async () => {
+test("旧診断形状も一般payloadとして往復し他Sessionは継続する", async () => {
   const server = await startServer();
   server.openAcceptance();
-  const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
-  const auth = await authorizeAndMux(server, socket, collector);
-  const old = await auth.mux.conn.createSession({
-    sessionId: "old-shape",
-    kind: "reliable",
-    direction: "bidirectional",
-  });
-  const good = await auth.mux.conn.createSession({
-    sessionId: "new-shape",
-    kind: "reliable",
-    direction: "bidirectional",
-  });
-  const goodCollected = collectSession(good);
-  const oldEnd = waitSessionEnd(old);
-  // `id` の無い旧形状は厳密形状に合わず、当該 Session のみ中断する。
-  await old.sendReliable({ op: "ping" });
-  const end = await oldEnd;
-  expect(end.kind).toBe("aborted");
-  // 他 Session と Connection は継続し、明示 id 付きは応答する。
-  await good.sendReliable({ op: "ping", id: "new-shape-1" });
-  const pong = await goodCollected.waitForPayload(
-    (payload) =>
-      typeof payload === "object" &&
-      payload !== null &&
-      (payload as Record<string, unknown>)["op"] === "pong",
-  );
-  expect(pong).toEqual({ op: "pong", id: "new-shape-1" });
-  expect(auth.mux.conn.closed).toBe(false);
+  // サーバ側に既定の応答はなく payload の解釈はしないため、診断の旧形状
+  // （`id` 無し）でも中断せず、応答器がそのまま返す。形状の厳密さの保証は
+  // app-core の診断プラグイン側に寄せる。
+  const stopResponding = attachEchoResponder(server);
+  try {
+    const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
+    const auth = await authorizeAndMux(server, socket, collector);
+    const old = await auth.mux.conn.createSession({
+      sessionId: "old-shape",
+      kind: "reliable",
+      direction: "bidirectional",
+    });
+    const good = await auth.mux.conn.createSession({
+      sessionId: "new-shape",
+      kind: "reliable",
+      direction: "bidirectional",
+    });
+    const oldCollected = collectSession(old);
+    const goodCollected = collectSession(good);
+    await old.sendReliable({ op: "ping" });
+    await expect(
+      oldCollected.waitForPayload(
+        (payload) =>
+          typeof payload === "object" &&
+          payload !== null &&
+          (payload as Record<string, unknown>)["op"] === "ping",
+      ),
+    ).resolves.toEqual({ op: "ping" });
+    // 他 Session と Connection は継続し、明示 id 付きも往復する。
+    await good.sendReliable({ op: "ping", id: "new-shape-1" });
+    await expect(
+      goodCollected.waitForPayload(
+        (payload) =>
+          typeof payload === "object" &&
+          payload !== null &&
+          (payload as Record<string, unknown>)["id"] === "new-shape-1",
+      ),
+    ).resolves.toEqual({ op: "ping", id: "new-shape-1" });
+    expect(auth.mux.conn.closed).toBe(false);
+  } finally {
+    stopResponding();
+  }
 });
 
 test("auth_ok直後のbinaryを失わず処理する", async () => {
@@ -1296,20 +1319,22 @@ test("auth_ok直後のbinaryを失わず処理する", async () => {
   if (ok.message.type !== "auth_ok") throw new Error("認可応答ではない。");
   // `auth_ok` 受信直後に binary を送る（切替中の保持経路を通りうる）。
   const mux = startClientMux(socket, collector, ok.message.connectionId);
+  const stopResponding = attachEchoResponder(server);
   const diag = await mux.conn.createSession({
     sessionId: "immediate",
     kind: "reliable",
     direction: "bidirectional",
   });
   const collected = collectSession(diag);
-  await diag.sendReliable({ op: "ping", id: "immediate-1" });
-  const pong = await collected.waitForPayload(
+  await diag.sendReliable({ 往復: "immediate-1" });
+  const echoed = await collected.waitForPayload(
     (payload) =>
       typeof payload === "object" &&
       payload !== null &&
-      (payload as Record<string, unknown>)["op"] === "pong",
+      (payload as Record<string, unknown>)["往復"] === "immediate-1",
   );
-  expect(pong).toEqual({ op: "pong", id: "immediate-1" });
+  expect(echoed).toEqual({ 往復: "immediate-1" });
+  stopResponding();
 });
 
 test("mux移行後のtextは境界違反で終了する", async () => {
@@ -1327,37 +1352,42 @@ test("mux移行後のtextは境界違反で終了する", async () => {
   expect(server.listConnections()).toHaveLength(0);
 });
 
-test("Session破損時に他Sessionは継続する", async () => {
+test("Session中断時に他Sessionは継続する", async () => {
   const server = await startServer();
   server.openAcceptance();
-  const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
-  const auth = await authorizeAndMux(server, socket, collector);
-  const bad = await auth.mux.conn.createSession({
-    sessionId: "bad-1",
-    kind: "reliable",
-    direction: "bidirectional",
-  });
-  const good = await auth.mux.conn.createSession({
-    sessionId: "good-1",
-    kind: "reliable",
-    direction: "bidirectional",
-  });
-  const goodCollected = collectSession(good);
-  const badEnd = waitSessionEnd(bad);
-  // 診断用途外の payload は当該 Session のみ中断する。
-  await bad.sendReliable({ op: "unknown-command", value: 1 });
-  const end = await badEnd;
-  expect(end.kind).toBe("aborted");
-  // 他 Session は継続する。
-  await good.sendReliable({ op: "ping", id: "good-1" });
-  const pong = await goodCollected.waitForPayload(
-    (payload) =>
-      typeof payload === "object" &&
-      payload !== null &&
-      (payload as Record<string, unknown>)["op"] === "pong",
-  );
-  expect(pong).toEqual({ op: "pong", id: "good-1" });
-  expect(auth.mux.conn.closed).toBe(false);
+  const stopResponding = attachEchoResponder(server);
+  try {
+    const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
+    const auth = await authorizeAndMux(server, socket, collector);
+    const bad = await auth.mux.conn.createSession({
+      sessionId: "bad-1",
+      kind: "reliable",
+      direction: "bidirectional",
+    });
+    const good = await auth.mux.conn.createSession({
+      sessionId: "good-1",
+      kind: "reliable",
+      direction: "bidirectional",
+    });
+    const goodCollected = collectSession(good);
+    const badEnd = waitSessionEnd(bad);
+    // 片方の Session を中断しても他方と Connection は維持する。
+    bad.abort(new Error("試験中断"));
+    const end = await badEnd;
+    expect(end.kind).toBe("aborted");
+    // 他 Session は継続する。
+    await good.sendReliable({ 往復: "good-1" });
+    const echoed = await goodCollected.waitForPayload(
+      (payload) =>
+        typeof payload === "object" &&
+        payload !== null &&
+        (payload as Record<string, unknown>)["往復"] === "good-1",
+    );
+    expect(echoed).toEqual({ 往復: "good-1" });
+    expect(auth.mux.conn.closed).toBe(false);
+  } finally {
+    stopResponding();
+  }
 });
 
 test("WS closeで全終了し認可は失効する", async () => {
@@ -1393,7 +1423,8 @@ test("運用切断はmux接続を即時1008で閉じ他接続は維持する", a
   const raced = await Promise.race([firstClosed, secondClosed]);
   expect(raced.code).toBe(1008);
   expect(raced.reason).toBe("operator disconnect");
-  // 残存側は診断 echo を続けられる。
+  // 残存側は一般 payload の往復を続けられる。
+  const stopResponding = attachEchoResponder(server);
   const survivor = target.connectionId === firstAuth.connectionId ? secondAuth : firstAuth;
   const session = await survivor.mux.conn.createSession({
     sessionId: "survive",
@@ -1401,13 +1432,14 @@ test("運用切断はmux接続を即時1008で閉じ他接続は維持する", a
     direction: "bidirectional",
   });
   const collected = collectSession(session);
-  await session.sendReliable({ op: "ping", id: "survive-1" });
+  await session.sendReliable({ 往復: "survive-1" });
   await collected.waitForPayload(
     (payload) =>
       typeof payload === "object" &&
       payload !== null &&
-      (payload as Record<string, unknown>)["op"] === "pong",
+      (payload as Record<string, unknown>)["往復"] === "survive-1",
   );
+  stopResponding();
 });
 
 test("再接続再承認で業務再開しlatestMailboxは維持される", async () => {
@@ -1446,19 +1478,21 @@ test("再接続再承認で業務再開しlatestMailboxは維持される", asyn
     return value !== undefined && value["x"] === 2;
   });
   expect(server.getLatest("pose")).toEqual({ x: 2 });
+  const stopResponding = attachEchoResponder(server);
   const diag = await secondAuth.mux.conn.createSession({
     sessionId: "diag-re",
     kind: "reliable",
     direction: "bidirectional",
   });
   const collected = collectSession(diag);
-  await diag.sendReliable({ op: "ping", id: "diag-re-1" });
+  await diag.sendReliable({ 往復: "diag-re-1" });
   await collected.waitForPayload(
     (payload) =>
       typeof payload === "object" &&
       payload !== null &&
-      (payload as Record<string, unknown>)["op"] === "pong",
+      (payload as Record<string, unknown>)["往復"] === "diag-re-1",
   );
+  stopResponding();
 });
 
 test("受信上限の超過はclose 1009で通知する", async () => {
@@ -1515,12 +1549,14 @@ test("同名Sessionの二重作成は拒否し既存は継続する", async () =
   if (survivor === undefined) throw new Error("既存 Session がない。");
   // `dup` は reliable 双方向で開いたため、受信・送信の前に絞る。
   if (survivor.kind !== "reliable") throw new Error("既存 Session が reliable ではない。");
+  const stopResponding = attachEchoResponder(server);
   const collected = collectSession(survivor);
-  await survivor.sendReliable({ op: "ping", id: "dup-1" });
+  await survivor.sendReliable({ 往復: "dup-1" });
   await collected.waitForPayload(
     (payload) =>
       typeof payload === "object" &&
       payload !== null &&
-      (payload as Record<string, unknown>)["op"] === "pong",
+      (payload as Record<string, unknown>)["往復"] === "dup-1",
   );
+  stopResponding();
 });

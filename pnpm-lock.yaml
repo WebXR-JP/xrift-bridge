@@ -224,6 +224,9 @@ importers:
 
   apps/bridge-cli:
     dependencies:
+      bridge-app-core:
+        specifier: workspace:*
+        version: link:../../packages/bridge-app-core
       bridge-protocol:
         specifier: workspace:*
         version: link:../../packages/bridge-protocol

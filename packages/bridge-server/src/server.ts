@@ -102,8 +102,6 @@ export interface BridgeStats {
   readonly pairingFailure: number;
   readonly latestStored: number;
   readonly latestDropped: number;
-  readonly diagnosticEcho: number;
-  readonly diagnosticPing: number;
   /** 拒否・失敗の理由別集計。upgrade 拒否とペアリング失敗の符号を数える。 */
   readonly rejectionsByReason: Readonly<Record<string, number>>;
 }
@@ -415,8 +413,6 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
     pairingFailure: number;
     latestStored: number;
     latestDropped: number;
-    diagnosticEcho: number;
-    diagnosticPing: number;
     rejectionsByReason: Record<string, number>;
   } = {
     connectionsAccepted: 0,
@@ -425,8 +421,6 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
     pairingFailure: 0,
     latestStored: 0,
     latestDropped: 0,
-    diagnosticEcho: 0,
-    diagnosticPing: 0,
     rejectionsByReason: {},
   };
 
@@ -1126,12 +1120,6 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
           recordLatestDropped: (delta) => {
             stats.latestDropped += delta;
           },
-          recordDiagnosticEcho: () => {
-            stats.diagnosticEcho += 1;
-          },
-          recordDiagnosticPing: () => {
-            stats.diagnosticPing += 1;
-          },
           onSessionStarted: (_connection, info) => {
             emitManagement({ kind: "session-started", session: info });
           },
@@ -1388,8 +1376,6 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
       pairingFailure: stats.pairingFailure,
       latestStored: stats.latestStored,
       latestDropped: stats.latestDropped,
-      diagnosticEcho: stats.diagnosticEcho,
-      diagnosticPing: stats.diagnosticPing,
       rejectionsByReason: { ...stats.rejectionsByReason },
     }),
     close: (): Promise<void> => {
