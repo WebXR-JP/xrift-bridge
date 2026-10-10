@@ -43,3 +43,4 @@ export {
   stringifyBridgeMessage,
 } from "./validate.ts";
 export type { ProtocolErrorCode } from "./validate.ts";
+export type * as MessagesExample from "./messages.example.ts";
