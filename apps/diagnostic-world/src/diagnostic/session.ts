@@ -28,10 +28,10 @@ import type { DiagnosticBuildInfo } from "../build-info.ts";
 export const DIAGNOSTIC_CONNECT_TIMEOUT_MS = 120_000;
 
 /** echo 往復に使う Session の論理名。 */
-export const ECHO_STREAM_ID = "diag-echo";
+export const ECHO_SESSION_ID = "diag-echo";
 
 /** ping に使う Session の論理名。 */
-export const PING_STREAM_ID = "diag-ping";
+export const PING_SESSION_ID = "diag-ping";
 
 /**
  * echo・ping の応答待ちの上限（ミリ秒）。
@@ -751,7 +751,7 @@ export class DiagnosticSession {
 
   private async openProbeSessions(provider: SessionProvider): Promise<void> {
     const echo = await provider.tryCreateSession({
-      sessionId: ECHO_STREAM_ID,
+      sessionId: ECHO_SESSION_ID,
       kind: "reliable",
       direction: "bidirectional",
     });
@@ -776,7 +776,7 @@ export class DiagnosticSession {
       }),
     );
     const ping = await provider.tryCreateSession({
-      sessionId: PING_STREAM_ID,
+      sessionId: PING_SESSION_ID,
       kind: "reliable",
       direction: "bidirectional",
     });

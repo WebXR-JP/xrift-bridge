@@ -136,7 +136,7 @@ function readVersion(value: Record<string, unknown>): string {
 }
 
 // ADR: 各種別の許可キーを明示し、許可外・未知のキーを黙って受理しない。
-// `window`・`streamId`・`kind`（data に載せない）など、許可キーにない
+// `window`・`unknownField`・`kind`（data に載せない）など、許可キーにない
 // フィールドはここで拒否する。`auth_ok` は `requestId`・`connectionId` のみを
 // 受け付け、`sessionId` を含めない。`data.seq` の要否（latest 必須・reliable 禁止）は
 // Session が `kind` を保持して判断するため、ここでは形式のみ検証する。

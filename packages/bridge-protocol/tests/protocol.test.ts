@@ -259,7 +259,7 @@ test("data の payload 必須と seq 形式を検証する", () => {
     // 削除フィールド・未知キーは黙って受理しない。
     { ...validReliableData(), kind: "reliable" },
     { ...validLatestData(), kind: "latest" },
-    { ...validReliableData(), streamId: "main" },
+    { ...validReliableData(), unknownField: "extra" },
     { ...validReliableData(), window: 8 },
     // 識別子の不足・書式不正。
     { ...validReliableData(), connectionId: "" },
