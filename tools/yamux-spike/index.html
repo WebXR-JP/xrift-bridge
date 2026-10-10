@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>yamux-spike ブラウザ確認口（experimental）</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        margin: 2rem;
+      }
+      #log {
+        border: 1px solid #999;
+        padding: 1rem;
+        min-height: 12rem;
+        white-space: pre-wrap;
+      }
+      button {
+        margin-right: 0.5rem;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>yamux-spike ブラウザ確認口</h1>
+    <p>
+      Node の spike-server（127.0.0.1:5180）へつなぎ、ブラウザ WebSocket 上で yamux
+      が動くかを確かめる。
+    </p>
+    <p>
+      <label>接続先 <input id="url" size="40" value="ws://127.0.0.1:5180/spike" /></label>
+      <button id="connect" type="button">接続して mux 開始</button>
+      <button id="ping" type="button" disabled>Ping（echo＋ping）</button>
+    </p>
+    <pre id="log"></pre>
+    <script type="module" src="/src/browser-main.ts"></script>
+  </body>
+</html>

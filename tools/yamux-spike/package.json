@@ -1,0 +1,31 @@
+{
+  "name": "yamux-spike",
+  "version": "0.0.0",
+  "private": true,
+  "description": "experimental: yamux(muxer)のみを自前WebSocket上で動かす採用可否の限定試作。製品コードではなく、採用判断の証拠集めだけが目的。",
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "vp dev --port 5190 --strictPort",
+    "build": "vp build",
+    "typecheck": "tsc --noEmit",
+    "test": "vp test",
+    "check": "vp check",
+    "scenario": "node src/scenario-main.ts",
+    "spike-server": "node src/browser-server.ts"
+  },
+  "dependencies": {
+    "@chainsafe/libp2p-yamux": "8.0.1",
+    "@libp2p/interface": "^3.3.0",
+    "@libp2p/utils": "^7.4.1",
+    "uint8arraylist": "^3.0.2",
+    "ws": "catalog:"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "@types/ws": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}

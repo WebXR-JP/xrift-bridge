@@ -49,35 +49,37 @@
 - 待ち行列容量等の初期暫定値は下表のとおりである。0.2 由来の行と 0.3 の採用値の置き場が混在する。0.3 の行はコード未実装のため採用値をここに置き、コード実装後に正本をコードへ移す。ペアリングの120秒・数字6桁・接続単位・切断失効は確定要件であり、下表の暫定値とは区別する。正本は[プロトコル](../../design/protocol.md)である。
 - 0.3 で合意済みの方向として、framing 長ガード残置、監視切断→再承認の許容、Session＝既定 stream 1本を試作条件の前提とする（判断の正本は[プロトコル](../../design/protocol.md)）。
 
-| 項目                                  |                                 暫定値・扱い |
-| ------------------------------------- | -------------------------------------------: |
-| framing 本体上限（0.3 採用値、UTF-8） |                                 65,536 bytes |
-| yamux inbound／outbound（0.3 採用値） |                                 各32本／接続 |
-| yamux window（0.3 採用値）            |                                       256KiB |
-| keepalive 間隔（0.3 採用値）          |                                    30,000 ms |
-| keepalive 応答期限（0.3 採用値）      |                                    60,000 ms |
-| 同時 Ping 数（0.3 採用値）            |                                          1件 |
-| `maxMessageBytes`（0.2 現行）         |                                 65,536 bytes |
-| `maxReliableQueueMessages`            |                           0.3 で廃止（方向） |
-| `maxReliableQueueBytes`               |                           0.3 で廃止（方向） |
-| `maxStreamsPerConnection`             |            0.3 の yamux 値に置き換え（方向） |
-| `initialCreditWindow`                 |                           0.3 で廃止（方向） |
-| `maxConnections`                      |                                            8 |
-| `pairingStartTimeoutMs`               |                                    10,000 ms |
-| `pairingApprovalTimeoutMs`            |                                   120,000 ms |
-| `acceptanceDurationMs`                |                                   120,000 ms |
-| `maxUnauthorizedConnections`          |                                 2／全8の内数 |
-| `maxPendingPairings`                  |                             2／未認可2の内数 |
-| `pairingRateWindowMs`                 |                                    60,000 ms |
-| `maxPairingRequestsPerOrigin`         |                                5回／直近60秒 |
-| `maxPairingRequestsTotal`             |                               10回／直近60秒 |
-| `maxPairingCodeGenerationAttempts`    |                                         16回 |
-| `connectionCloseGraceMs`              |                                     1,000 ms |
-| world-client `requestTimeoutMs`       | 0.2 現行（0.3 では上位層の責務へ見直し対象） |
-| world-client `maxPendingReliable`     |                           0.3 で廃止（方向） |
-| world-client `maxMessageBytes`        |                                 65,536 bytes |
+| 項目                                    |                                 暫定値・扱い |
+| --------------------------------------- | -------------------------------------------: |
+| framing 本体上限（0.3 採用値、UTF-8）   |                                 65,536 bytes |
+| yamux inbound／outbound（0.3 採用値）   |                                 各32本／接続 |
+| yamux window（0.3 採用値）              |                                       256KiB |
+| yamux maxStreamWindowSize（0.3 採用値） |   256KiB（初期 window と同値・自動拡大抑止） |
+| keepalive 間隔（0.3 採用値）            |                                    30,000 ms |
+| keepalive 応答期限（0.3 採用値）        |                                    60,000 ms |
+| 同時 Ping 数（0.3 採用値）              |                                          1件 |
+| `maxMessageBytes`（0.2 現行）           |                                 65,536 bytes |
+| `maxReliableQueueMessages`              |                           0.3 で廃止（方向） |
+| `maxReliableQueueBytes`                 |                           0.3 で廃止（方向） |
+| `maxStreamsPerConnection`               |            0.3 の yamux 値に置き換え（方向） |
+| `initialCreditWindow`                   |                           0.3 で廃止（方向） |
+| `maxConnections`                        |                                            8 |
+| `pairingStartTimeoutMs`                 |                                    10,000 ms |
+| `pairingApprovalTimeoutMs`              |                                   120,000 ms |
+| `acceptanceDurationMs`                  |                                   120,000 ms |
+| `maxUnauthorizedConnections`            |                                 2／全8の内数 |
+| `maxPendingPairings`                    |                             2／未認可2の内数 |
+| `pairingRateWindowMs`                   |                                    60,000 ms |
+| `maxPairingRequestsPerOrigin`           |                                5回／直近60秒 |
+| `maxPairingRequestsTotal`               |                               10回／直近60秒 |
+| `maxPairingCodeGenerationAttempts`      |                                         16回 |
+| `connectionCloseGraceMs`                |                                     1,000 ms |
+| world-client `requestTimeoutMs`         | 0.2 現行（0.3 では上位層の責務へ見直し対象） |
+| world-client `maxPendingReliable`       |                           0.3 で廃止（方向） |
+| world-client `maxMessageBytes`          |                                 65,536 bytes |
 
 - 値の正本はコードである。サーバ側の 0.2 現行値は `apps/bridge/src/config.ts` の `DEFAULT_LIMITS` に置き、`BridgeOptions.limits` で上書きする。world-client の 0.2 現行値（`requestTimeoutMs`・`maxPendingReliable`・`maxMessageBytes`）は `packages/world-client/src/client.ts` の既定値に置く。0.3 の採用値（framing・yamux・keepalive）はコード未実装のため暫定的にこの表に置き、実装後に正本をコードへ移す。件数容量 `C`・初期付与の意味論は 0.2 の方式であり、0.3 ではクレジット層ごと削除方向である（[プロトコル](../../design/protocol.md)を参照）。
+- yamux 試作で確定した採用版の既定値は次のとおりである。0.3 の採用値（上表）と異なる行は、コード実装時に明示設定が必要である。採用版は `@chainsafe/libp2p-yamux` 8.0.1（tag commit `7dca09b`）である。inbound／outbound 上限の既定は各1000であり、設計の各32へ明示設定する。`maxMessageSize` の既定は 64KiB である。受信 window は RTT 既知で最大 16MiB まで自動拡大するため、上表の `maxStreamWindowSize`（初期 window と同値）の明示設定で抑止する。`send()` は同期の真偽値であり、false は破棄ではなく writeBuffer への滞留を表す。`close()` は FIN 送出前に write queue の idle と drain を待つ。GoAway は mux を閉じるがトランスポートは閉じない。
 
 ## 計測項目
 
@@ -98,12 +100,13 @@
 
 - Ping 監視: 間隔・応答期限・同時 Ping 1件での往復確認、不応答での Connection 終端、終了開始での監視停止・強制終了タイマーの単発動作。
 - FIN／RST／GoAway: 方向別 FIN・双方 FIN での Session 終了、RST での即時中断（待機送信・未完成フレーム破棄、他 Session 維持）、GoAway 受信後の Connection 終了。待機中 Promise の拒否（二重決着なし）。
-- window／バッファ: yamux window での流れ制御、backpressure 時の `reliable` 送信 Promise の完了点（ローカル送信完了であり相手受信・業務完了ではないこと）。
-- WS 分割・集約: WebSocket メッセージの分割・集約をまたぐ framing の復元、framing 異常系（超過・破損・途中 FIN）での対象 Session 異常終了、ローカル送信超過の投入前拒否。本体上限は UTF-8 シリアライズのバイト数で測る。
+- window／バッファ: yamux window での流れ制御、backpressure 時の `reliable` 送信 Promise の完了点（ローカル送信完了であり相手受信・業務完了ではないこと）。素物の `send()` は同期の真偽値であり false は writeBuffer 滞留のため、`reliable` の `Promise<void>` は `send()`＋`onDrain()`／`writeBufferLength` を包む実装になること。`close()` は FIN 前に idle＋drain を待つこと。受信 window の自動拡大は `maxStreamWindowSize`（初期 window と同値）の明示設定で抑止し、RTT 確知後の 5MiB 送信で拡大しないこと・抑止なしでは拡大することの対照を試作で観測する。
+- WS 分割・集約: WebSocket メッセージの分割・集約をまたぐ framing の復元、framing 異常系（超過・破損・途中 FIN）での対象 Session 異常終了、ローカル送信超過の投入前拒否。本体上限は UTF-8 シリアライズのバイト数で測る。分割・集約は復元だけでなく発動自体（書き込み数に対する WS メッセージ数の増減）も試作で数える。
 - 認可 JSON→yamux 切替: ペアリング完了→認可→同じ WS 上での mux 開始の境界、別 WS・認可継承の拒否。
 - bundle 差分・審査・負荷: yamux 採用版の bundle 差分、XRift 審査の通過、センサー・小コマンド・模擬 AI 逐次出力の混在負荷（[配送と負荷の試作条件](#配送と負荷の試作条件)の周期・大きさ・本数で行う）。
 - `latest` 置換: 投入前置換の動作、投入中1件＋未投入最新1件の範囲、値ごとの配送 Promise を作らないことの確認。
 - 制御分離なし: 制御専用 stream を作らないこと（Session 間の優先度・分離を設けないこと）の確認。
+- 試作の置き場と観測要点: 試作は `tools/yamux-spike/`（experimental、製品コードと分離）に置く。多重化（4本同時 echo の対応保持）、WS 分割（7B 刻みでも復元・送出数で発動を確認）・集約（25ms 窓の5連打が順序保持・送出数で発動を確認）、FIN（片方向終了と逆方向継続、双方 FIN 後も mux 維持）、RST（対象のみ中断・他 stream 継続）、GoAway（相手 mux の終了観測）、window backpressure（初期 window ちょうどで詰まり・pause 中 `onDrain` 不解・resume で解ける・全量到着）、認可プリリュード切替（同じ WS 上での mux 開始・混交なし）を観測する。未確認はブラウザ実機、inactivity timeout 発火、受信 window 自動拡大抑止の実機確認である。詳細は試作の `README.md` を参照する。
 
 ## 証拠の残し方
 
