@@ -111,6 +111,13 @@ export class GuiBackend {
   private readonly listeners = new Set<(message: StateChangedMessage) => void>();
   /** 生成した診断インスタンスの handle。表示と合わせて保持する。 */
   private readonly diagnosticHandles = new Map<string, PluginInstanceHandle<DiagnosticStats>>();
+  /**
+   * 診断割当ての対応付け（生存セッションのローカル識別子→生成インスタンスの識別子）。
+   *
+   * セッション終了時の生成分回収用である。終了通知の時点では core の
+   * 割当て失効が先に済んでいるため、割当て表からは引けない。
+   */
+  private readonly diagnosticSessions = new Map<string, string>();
   /** 生成したテキストインスタンスの handle。同時に一つのみ持つ。 */
   private textHandle: PluginInstanceHandle<TextPluginState, TextPluginOperations> | null = null;
   /** テキスト割当て対象の生存セッションのローカル識別子。未割当てなら null。 */
@@ -421,6 +428,7 @@ export class GuiBackend {
     }
     // GUI バックエンドが生成した handle を保持し、表示と合わせて提供する。
     this.diagnosticHandles.set(handle.instanceId, handle);
+    this.diagnosticSessions.set(localSessionId, handle.instanceId);
     this.requestNotify();
     return { localSessionId, instanceId: handle.instanceId, portId: DIAGNOSTIC_PORT_ID };
   }
@@ -596,7 +604,8 @@ export class GuiBackend {
 
   /**
    * 管理通知を処理する。テキスト割当て対象の終了では core の失効後に
-   * 生成分を回収し、その後の通知予約は既存経路にまとめる。
+   * 生成分を回収し、診断割当ての終了でも該当の生成分を回収する。
+   * その後の通知予約は既存経路にまとめる。
    *
    * プラグインの操作口は失効時に購読を解除するため、後始末を
    * プラグインの `onEnd` 到達には依存しない（管理通知で駆動する）。
@@ -604,13 +613,37 @@ export class GuiBackend {
    * @param event - サーバーの管理通知。
    */
   private handleManagementEvent(event: ManagementEvent): void {
-    if (
-      event.kind === "session-ended" &&
-      event.session.localSessionId === this.textLocalSessionId
-    ) {
-      this.reclaimText();
+    if (event.kind === "session-ended") {
+      if (event.session.localSessionId === this.textLocalSessionId) {
+        this.reclaimText();
+      }
+      this.reclaimDiagnostics(event.session.localSessionId);
     }
     this.requestNotify();
+  }
+
+  /**
+   * 終了した診断割当ての生成分を回収する。
+   *
+   * core の割当て失効は購読順で先に済んでいるため、生成分の削除だけを
+   * 行う。対象が無ければ何もしない。挙動の他の変更はしない。
+   *
+   * @param localSessionId - 終了した生存セッションのローカル識別子。
+   */
+  private reclaimDiagnostics(localSessionId: string): void {
+    const instanceId = this.diagnosticSessions.get(localSessionId);
+    if (instanceId === undefined) {
+      return;
+    }
+    this.diagnosticSessions.delete(localSessionId);
+    this.diagnosticHandles.delete(instanceId);
+    if (this.core !== null) {
+      try {
+        this.core.removeInstance(instanceId);
+      } catch {
+        // 回収の失敗は通知を止めない。
+      }
+    }
   }
 
   /**
@@ -706,6 +739,7 @@ export class GuiBackend {
     }
     this.listeners.clear();
     this.diagnosticHandles.clear();
+    this.diagnosticSessions.clear();
   }
 
   /** 現在の表示スナップショットを組み立てる。比較コード本文は含めない。 */
