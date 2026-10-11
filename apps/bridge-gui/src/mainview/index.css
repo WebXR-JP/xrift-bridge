@@ -98,3 +98,29 @@ input {
   padding: 4px 8px;
   width: 140px;
 }
+
+.text-form {
+  margin-top: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.text-form label {
+  font-size: 0.9rem;
+  color: #64748b;
+}
+
+.text-form textarea {
+  font-size: 0.9rem;
+  padding: 8px;
+  width: 100%;
+  resize: vertical;
+}
+
+.text-form .error {
+  margin: 0;
+  min-height: 1.2em;
+  font-size: 0.85rem;
+  color: #b91c1c;
+}

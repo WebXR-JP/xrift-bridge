@@ -73,6 +73,44 @@
       </section>
 
       <section class="card">
+        <h2>テキスト送信</h2>
+        <dl>
+          <div>
+            <dt>割当て先</dt>
+            <dd id="text-assignment">未取得</dd>
+          </div>
+          <div>
+            <dt>状態</dt>
+            <dd id="text-status">未取得</dd>
+          </div>
+          <div>
+            <dt>直近結果</dt>
+            <dd id="text-result">未取得</dd>
+          </div>
+          <div>
+            <dt>統計</dt>
+            <dd id="text-stats">未取得</dd>
+          </div>
+        </dl>
+        <div class="row">
+          <button type="button" data-action="assign-text">テキストを割り当てる</button>
+          <button type="button" data-action="unassign-text">テキストの割当てを外す</button>
+        </div>
+        <div class="text-form">
+          <label for="text-input">送信する本文</label>
+          <textarea
+            id="text-input"
+            rows="3"
+            placeholder="送信する本文（改行可・上限 512 文字）"
+          ></textarea>
+          <div class="row">
+            <button type="button" data-action="send-text">送信する</button>
+          </div>
+          <p id="text-error" class="error" aria-live="polite"></p>
+        </div>
+      </section>
+
+      <section class="card">
         <h2>終了</h2>
         <div class="row">
           <button type="button" data-action="quit">アプリを終了する</button>

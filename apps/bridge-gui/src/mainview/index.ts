@@ -1,4 +1,6 @@
 import { Electroview } from "electrobun/view";
+import type { TextSendResult } from "bridge-app-core";
+import { validateTextForSend } from "bridge-app-core/text-contract";
 import type { ManagementRpc, ManagementSnapshot, PairingViewResult } from "../shared/management.ts";
 import { selectNewer } from "../shared/management.ts";
 
@@ -59,6 +61,7 @@ function render(snapshot: ManagementSnapshot): void {
   renderPending(snapshot);
   renderConnections(snapshot);
   renderSessions(snapshot);
+  renderText(snapshot);
 }
 
 /** 保留一覧を描画する。比較コード本文は載せない。 */
@@ -158,6 +161,125 @@ function renderSessions(snapshot: ManagementSnapshot): void {
     list.append(item);
   }
 }
+
+// ---- 固定テキスト送信（この節はテキスト送信カード内に閉じる） ----
+
+/**
+ * 結果不明の理由を人間向けの短い説明にする。
+ *
+ * 識別子そのままでは伝わらないため、応答期限切れ・切断・破棄を書き分ける。
+ * 未知の理由はそのまま載せ、落とさない。
+ *
+ * @param reason - 結果不明の理由。
+ * @returns 表示用の短い説明。
+ */
+function describeUnknownReason(reason: string): string {
+  if (reason === "timeout") {
+    return "応答期限切れ";
+  }
+  if (reason === "disconnected") {
+    return "切断";
+  }
+  if (reason === "disposed") {
+    return "破棄";
+  }
+  return reason;
+}
+
+/**
+ * テキスト送信の失敗表示を出す。本文は載せない。
+ *
+ * @param message - 表示する説明。空なら表示を消す。
+ */
+function setTextError(message: string): void {
+  const slot = document.getElementById("text-error");
+  if (slot !== null) {
+    slot.textContent = message;
+  }
+}
+
+/**
+ * 送信本文の入力欄を読む。入力欄の内容は表示更新で消さない。
+ *
+ * @returns 入力欄の本文。入力欄が無ければ空文字。
+ */
+function readTextInput(): string {
+  const input = document.getElementById("text-input");
+  return input instanceof HTMLTextAreaElement ? input.value : "";
+}
+
+/**
+ * 反映確認で決着した送信の後に限って入力欄を空にする。
+ *
+ * 結果不明・失敗では本文を保持し、再送の手がかりを残す。
+ */
+function clearTextInput(): void {
+  const input = document.getElementById("text-input");
+  if (input instanceof HTMLTextAreaElement) {
+    input.value = "";
+  }
+}
+
+/** 操作失敗の説明を作る。本文は含めない（失敗理由だけである）。 */
+function describeActionError(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+/**
+ * 固定テキスト送信カードを描画する。入力欄の内容には触れない。
+ *
+ * 割当て先・送信可能／実行中・直近結果・統計を示し、未割当て・送信中は
+ * 送信ボタンを無効化する。直近結果の「反映確認」はワールドの表示用状態に
+ * 反映した意味であり、送信完了や描画完了の保証ではない。
+ *
+ * @param snapshot - 採用中の表示状態。
+ */
+function renderText(snapshot: ManagementSnapshot): void {
+  const text = snapshot.text;
+  const assigned = text.localSessionId !== null && text.instanceId !== null;
+  el("text-assignment").textContent = assigned
+    ? `${text.localSessionId}（instanceId ${text.instanceId}）`
+    : "未割当て";
+  if (!assigned) {
+    el("text-status").textContent = "未割当て";
+  } else if (text.pendingId !== null) {
+    el("text-status").textContent = `実行中（応答待ち id=${text.pendingId}）`;
+  } else if (text.canSend) {
+    el("text-status").textContent = "送信可能";
+  } else {
+    el("text-status").textContent = "送信不可";
+  }
+  const last = text.lastResult;
+  if (last === null) {
+    el("text-result").textContent = "まだ送信していない";
+  } else if (last.status === "acknowledged") {
+    el("text-result").textContent =
+      "反映確認（ワールドの表示用状態に反映した・送信完了や描画完了の意味ではない）";
+  } else {
+    el("text-result").textContent =
+      `結果不明（理由: ${describeUnknownReason(last.reason)}・表示用状態への反映を確認できない）`;
+  }
+  el("text-stats").textContent =
+    `送信試行 ${text.stats.attempts}・反映確認 ${text.stats.acknowledged}・結果不明 ${text.stats.unknown}`;
+  const assignButton = document.querySelector<HTMLButtonElement>(
+    'button[data-action="assign-text"]',
+  );
+  if (assignButton !== null) {
+    assignButton.disabled = assigned;
+  }
+  const unassignButton = document.querySelector<HTMLButtonElement>(
+    'button[data-action="unassign-text"]',
+  );
+  if (unassignButton !== null) {
+    unassignButton.disabled = !assigned;
+  }
+  const sendButton = document.querySelector<HTMLButtonElement>('button[data-action="send-text"]');
+  if (sendButton !== null) {
+    sendButton.disabled = !text.canSend;
+  }
+}
+
+// ---- 固定テキスト送信の節ここまで ----
 
 /** 操作ボタンを作る。識別子は data 属性で渡し、選択子には使わない。 */
 function actionButton(action: string, id: string, label: string): HTMLButtonElement {
@@ -327,6 +449,82 @@ async function handleAction(action: string, id: string): Promise<void> {
         await refresh("診断割当て");
         break;
       }
+      case "assign-text": {
+        const result = await rpc.request.assignText({});
+        console.log(
+          `[bridge-gui] テキストを割り当てた: localSessionId=${result.localSessionId} instanceId=${result.instanceId}`,
+        );
+        setTextError("");
+        await refresh("テキスト割当て");
+        break;
+      }
+      case "unassign-text": {
+        await rpc.request.unassignText({});
+        console.log("[bridge-gui] テキストの割当てを外した");
+        setTextError("");
+        await refresh("テキスト割当て解除");
+        break;
+      }
+      case "send-text": {
+        const snapshot = current;
+        const assignedLocal = snapshot?.text.localSessionId ?? null;
+        const assignedInstance = snapshot?.text.instanceId ?? null;
+        if (assignedLocal === null || assignedInstance === null) {
+          setTextError("未割当てのため送信できない。先にテキストを割り当てること。");
+          break;
+        }
+        // 未取得・未割当ては上で弾くため、ここでは応答待ちの有無だけを見る。
+        const pendingId = snapshot?.text.pendingId ?? null;
+        if (pendingId !== null) {
+          setTextError("送信中のため待つこと。応答待ちが終わってから送ること。");
+          break;
+        }
+        const validated = validateTextForSend(readTextInput());
+        if (!validated.ok) {
+          const reason =
+            validated.reason === "empty"
+              ? "本文が空のため送信しない。"
+              : validated.reason === "too-long"
+                ? "本文が長すぎるため送信しない（上限 512 文字・改行可）。"
+                : "本文が文字列でないため送信しない。";
+          console.log(`[bridge-gui] テキスト送信を送信前に拒否した: reason=${validated.reason}`);
+          setTextError(reason);
+          break;
+        }
+        // ADR: 同期的な `RangeError`（未割当て・識別子不一致・入力不正）と
+        // `Promise` の拒否（同時実行等）を区別するため、要求の発行と待機を
+        // 分けて扱う。本文は要求にだけ載せ、記録には残さない。
+        let flight: Promise<TextSendResult>;
+        try {
+          flight = rpc.request.sendText({
+            localSessionId: assignedLocal,
+            instanceId: assignedInstance,
+            text: validated.text,
+          });
+        } catch (error: unknown) {
+          console.log(`[bridge-gui] テキスト送信を拒否した: ${String(error)}`);
+          setTextError(`送信できない: ${describeActionError(error)}`);
+          break;
+        }
+        try {
+          const result = await flight;
+          if (result.status === "acknowledged") {
+            console.log("[bridge-gui] テキスト送信が反映確認で決着した");
+            setTextError("");
+            clearTextInput();
+          } else {
+            console.log(`[bridge-gui] テキスト送信が結果不明で決着した: reason=${result.reason}`);
+            setTextError(
+              `結果不明で決着した（理由: ${describeUnknownReason(result.reason)}）。本文は保持する。`,
+            );
+          }
+        } catch (error: unknown) {
+          console.log(`[bridge-gui] テキスト送信に失敗した: ${String(error)}`);
+          setTextError(`送信に失敗した: ${describeActionError(error)}`);
+        }
+        await refresh("テキスト送信");
+        break;
+      }
       case "quit": {
         await rpc.request.quit({});
         console.log("[bridge-gui] アプリの終了を要求した");
@@ -339,6 +537,10 @@ async function handleAction(action: string, id: string): Promise<void> {
     }
   } catch (error: unknown) {
     console.log(`[bridge-gui] 操作に失敗した: action=${action} ${String(error)}`);
+    // テキスト操作の失敗は状態表示にも残す。本文は含めない（失敗理由だけである）。
+    if (action === "assign-text" || action === "unassign-text" || action === "send-text") {
+      setTextError(`操作に失敗した: ${describeActionError(error)}`);
+    }
   }
 }
 
