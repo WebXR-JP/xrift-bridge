@@ -1,0 +1,12 @@
+<section class="card">
+  <h2>受付</h2>
+  <p>{{ accepting ? "受付中" : "受付停止中" }}</p>
+  <div class="row">
+    <button type="button" [disabled]="!canOperate" (click)="enableRequested.emit()">
+      受付を有効化
+    </button>
+    <button type="button" [disabled]="!canOperate" (click)="disableRequested.emit()">
+      受付を無効化
+    </button>
+  </div>
+</section>

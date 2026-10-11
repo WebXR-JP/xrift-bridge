@@ -41,6 +41,22 @@
             }
           },
           "defaultConfiguration": "production"
+        },
+        "test": {
+          "builder": "@angular/build:unit-test",
+          "options": {
+            // ADR: 公式の Vitest runner で TestBed 試験を行う。
+            // `vp test`（vite-plus）の対象は `tests/` のままとし、ng test は
+            // 既定 include（`src/**/*.spec.ts`）だけを拾う。watch は切って
+            // `vp run -r test` の一部として確実に終了させる。
+            // `zone.js` は試験運用だけの依存である（実行束には入れない）。
+            // 公式 builder が `zone.js/testing` の解決を要求し、pnpm が
+            // `@angular/core` の peer として恒久的に実体を置くため、
+            // 宣言を外すと未連結の残骸だけが残り束ねに失敗する。
+            // 実行時は読み込まない（`main.ts` に import は無い）。
+            "runner": "vitest",
+            "watch": false
+          }
         }
       }
     }

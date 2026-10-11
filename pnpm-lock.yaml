@@ -210,6 +210,9 @@ catalogs:
     vite-plus:
       specifier: 1.0.0
       version: 1.0.0
+    vitest:
+      specifier: 5.0.1
+      version: 5.0.1
     ws:
       specifier: 8.22.0
       version: 8.22.0
@@ -289,6 +292,9 @@ importers:
       '@angular/common':
         specifier: 22.2.2
         version: 22.2.2(@angular/core@22.2.2(@angular/compiler@22.2.2)(rxjs@7.8.2)(zone.js@0.16.3))(rxjs@7.8.2)
+      '@angular/compiler':
+        specifier: 22.2.2
+        version: 22.2.2
       '@angular/core':
         specifier: 22.2.2
         version: 22.2.2(@angular/compiler@22.2.2)(rxjs@7.8.2)(zone.js@0.16.3)
@@ -310,9 +316,6 @@ importers:
       tslib:
         specifier: 2.8.1
         version: 2.8.1
-      zone.js:
-        specifier: 0.16.3
-        version: 0.16.3
     devDependencies:
       '@angular/build':
         specifier: 22.2.2
@@ -326,12 +329,21 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 24.19.1
+      happy-dom:
+        specifier: 'catalog:'
+        version: 20.14.5
       typescript:
         specifier: 6.0.3
         version: 6.0.3
       vite-plus:
         specifier: 'catalog:'
         version: 1.0.0(@types/node@24.19.1)(@vitest/ui@5.0.1)(esbuild@0.28.2)(happy-dom@20.14.5)(jiti@2.7.0)(sass-embedded@1.104.1)(sass@1.104.1)(typescript@6.0.3)(yaml@2.9.1)
+      vitest:
+        specifier: 'catalog:'
+        version: 5.0.1(@types/node@24.19.1)(@vitest/browser-preview@5.0.1)(@vitest/ui@5.0.1)(@voidzero-dev/vite-plus-core@1.0.0(@types/node@24.19.1)(esbuild@0.28.2)(jiti@2.7.0)(sass-embedded@1.104.1)(sass@1.104.1)(typescript@6.0.3)(yaml@2.9.1))(esbuild@0.28.2)(happy-dom@20.14.5)(jiti@2.7.0)(sass-embedded@1.104.1)(sass@1.104.1)(typescript@6.0.3)(yaml@2.9.1)
+      zone.js:
+        specifier: 0.16.3
+        version: 0.16.3
 
   apps/diagnostic-world:
     dependencies:

@@ -1,21 +1,18 @@
 /**
- * 管理画面 RPC の Angular 向け薄い包み。
+ * 管理画面の表示状態・限定操作の Angular 向け保持者。
  *
- * DTO・操作・採用規約の再定義はしない。契約型（`ManagementRpc`・
- * `ManagementSnapshot`・`selectNewer`）は `bridge-gui-contract` の公開
- * subpath から再利用する（循環が無いことを `tsc` で確かめる）。
- * 子画面タグの配置は既存の所有表（`spikeCreate` 発行の DTO）とだけ結び付け、
- * 実プラグインの対応付けには触らない。
+ * RPC 送受信は `ManagementRpcClient` に任せ、ここでは signals による表示状態の
+ * 採用（`selectNewer`）・初期同期・共通操作処理だけを行う。DTO・操作・採用規約の
+ * 再定義はしない。契約型（`ManagementRpc`・`ManagementSnapshot`・`selectNewer`）
+ * は `bridge-gui-contract` の公開 subpath から再利用する（循環が無いことを
+ * `tsc` で確かめる）。子画面タグの配置は既存の所有表（`spikeCreate` 発行の
+ * DTO）とだけ結び付け、実プラグインの対応付けには触らない。
  */
 import { Injectable, isDevMode, signal } from "@angular/core";
-import { Electroview } from "electrobun/view";
-import type {
-  ManagementRpc,
-  ManagementSnapshot,
-  NgDebugProbeResult,
-} from "bridge-gui-contract/management";
+import type { ManagementSnapshot, NgDebugProbeResult } from "bridge-gui-contract/management";
 import { selectNewer } from "bridge-gui-contract/management";
 import { SPIKE_NAVIGATION_RULES_ATTRIBUTE } from "bridge-gui-contract/plugin-spike";
+import { ManagementRpcClient } from "./rpc.ts";
 import { buildNgDebugProbeResult } from "./ng-probe.ts";
 
 /**
@@ -47,27 +44,13 @@ export class ManagementService {
   /** 配置した子画面タグ。更新ごとの作り直しはしない。 */
   private spikeTag: HTMLElement | null = null;
 
-  private readonly rpc = Electroview.defineRPC<ManagementRpc>({
-    handlers: {
-      requests: {
-        ngDebugProbe: () => this.buildProbe(),
-      },
-      messages: {
-        stateChanged: ({ revision, snapshot }) => {
-          // push の到達自体を記録する。採用規約で無視される場合も到達は残る。
-          this.pushRevision.set(revision);
-          this.adopt(snapshot, "stateChanged");
-        },
-      },
-    },
-  });
-
-  /** RPC 接続の保持。購読の破棄はしない（画面の寿命と同じ）。 */
-  private readonly view = new Electroview({ rpc: this.rpc });
-
-  constructor() {
-    // 接続の保持だけが目的であり、以後は `rpc` 経由で使う。
-    void this.view;
+  constructor(private readonly rpc: ManagementRpcClient) {
+    this.rpc.setProbeHandler(() => this.buildProbe());
+    this.rpc.onStateChanged(({ revision, snapshot }) => {
+      // push の到達自体を記録する。採用規約で無視される場合も到達は残る。
+      this.pushRevision.set(revision);
+      this.adopt(snapshot, "stateChanged");
+    });
   }
 
   /** 受信した表示状態を revision 規約で採用し、採用時のみ反映する。 */
@@ -152,7 +135,7 @@ export class ManagementService {
   /** 初回取得し、revision が新しいときだけ採用する。 */
   async fetchInitial(): Promise<void> {
     try {
-      this.adopt(await this.rpc.request.getSnapshot({}), "getSnapshot");
+      this.adopt(await this.rpc.getSnapshot(), "getSnapshot");
     } catch (error: unknown) {
       console.log(`[bridge-gui-ng] 初回取得・表示に失敗した: ${String(error)}`);
     }
@@ -161,7 +144,7 @@ export class ManagementService {
   /** 準備完了を通知する。 */
   notifyReady(): void {
     try {
-      this.rpc.send.viewReady({ title: document.title });
+      this.rpc.notifyViewReady(document.title);
       console.log("[bridge-gui-ng] 準備完了を通知した");
     } catch (error: unknown) {
       console.log(`[bridge-gui-ng] 準備完了の通知に失敗した: ${String(error)}`);
@@ -171,7 +154,7 @@ export class ManagementService {
   /** 所有一覧の残存を掃除する。vanilla 再読込み時と同様である。 */
   async resetSpike(via: string): Promise<void> {
     try {
-      await this.rpc.request.spikeReset({});
+      await this.rpc.resetSpike();
       console.log("[bridge-gui-ng] 子画面の残存を掃除した");
     } catch (error: unknown) {
       console.log(`[bridge-gui-ng] 子画面の掃除に失敗した: ${via} ${String(error)}`);
@@ -181,7 +164,7 @@ export class ManagementService {
   /** 受付を有効化し、採用中の表示状態を返す。 */
   async enableAcceptance(): Promise<void> {
     try {
-      await this.rpc.request.enableAcceptance({});
+      await this.rpc.enableAcceptance();
       console.log("[bridge-gui-ng] 受付を有効化した");
       await this.fetchInitial();
     } catch (error: unknown) {
@@ -192,7 +175,7 @@ export class ManagementService {
   /** 受付を無効化し、採用中の表示状態を返す。 */
   async disableAcceptance(): Promise<void> {
     try {
-      await this.rpc.request.disableAcceptance({});
+      await this.rpc.disableAcceptance();
       console.log("[bridge-gui-ng] 受付を無効化した");
       await this.fetchInitial();
     } catch (error: unknown) {
@@ -207,7 +190,7 @@ export class ManagementService {
    */
   async createSpike(host: HTMLElement): Promise<void> {
     try {
-      const created = await this.rpc.request.spikeCreate({});
+      const created = await this.rpc.createSpike();
       console.log(`[bridge-gui-ng] 子画面を作った: mountId=${created.mountId}`);
       this.placeSpikeTag(created.mountId, created.initialUrl, host);
     } catch (error: unknown) {

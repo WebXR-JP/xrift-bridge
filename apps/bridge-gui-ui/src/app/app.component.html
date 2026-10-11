@@ -1,48 +1,14 @@
 <main class="container">
-  <h1>XRift Bridge 管理画面（Angular スパイク）</h1>
-  <p class="subtitle">最小の実現性確認用。既定の vanilla 画面は残す。</p>
+  <h1>XRift Bridge 管理画面（Angular）</h1>
+  <p class="subtitle">既定の vanilla 画面は残す。</p>
 
-  <section class="card">
-    <h2>状態</h2>
-    @if (snapshot(); as current) {
-      <dl>
-        <div>
-          <dt>改訂番号</dt>
-          <dd>{{ current.revision }}</dd>
-        </div>
-        <div>
-          <dt>起動状態</dt>
-          <dd>{{ current.backend }}</dd>
-        </div>
-        <div>
-          <dt>受付</dt>
-          <dd>{{ current.admission.accepting ? "受付中" : "受付停止中" }}</dd>
-        </div>
-        <div>
-          <dt>保留</dt>
-          <dd>{{ current.pending.length }} 件</dd>
-        </div>
-        <div>
-          <dt>接続</dt>
-          <dd>{{ current.connections.length }} 件</dd>
-        </div>
-        <div>
-          <dt>生存セッション</dt>
-          <dd>{{ current.sessions.length }} 件</dd>
-        </div>
-      </dl>
-    } @else {
-      <p>未取得</p>
-    }
-  </section>
+  <app-status-summary [snapshot]="snapshot()" />
 
-  <section class="card">
-    <h2>受付</h2>
-    <div class="row">
-      <button type="button" (click)="onEnable()">受付を有効化</button>
-      <button type="button" (click)="onDisable()">受付を無効化</button>
-    </div>
-  </section>
+  <app-acceptance-toggle
+    [snapshot]="snapshot()"
+    (enableRequested)="onEnable()"
+    (disableRequested)="onDisable()"
+  />
 
   <section class="card">
     <h2>子画面の配置先</h2>
@@ -50,16 +16,5 @@
       <button type="button" (click)="onCreateSpike()">子画面を作る</button>
     </div>
     <div #spikeHost id="spike-host"></div>
-  </section>
-
-  <section class="card">
-    <h2>自動走行の記録</h2>
-    <ul>
-      @for (entry of gateLog(); track $index) {
-        <li>{{ entry }}</li>
-      } @empty {
-        <li>走行中</li>
-      }
-    </ul>
   </section>
 </main>

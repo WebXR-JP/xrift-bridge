@@ -2,10 +2,10 @@
   "name": "bridge-gui-ui",
   "version": "0.0.0",
   "private": true,
-  "description": "bridge-gui 管理画面の Angular 化に向けた最小の実現性スパイク（mainview のみ・opt-in）。",
+  "description": "bridge-gui 管理画面の Angular 実装（mainview のみ・opt-in）。",
   "scripts": {
     "build": "tsc --noEmit -p tsconfig.json",
-    "test": "vp test",
+    "test": "vp test && ng test --watch=false",
     "test:types": "tsc --noEmit -p tsconfig.json",
     "check": "vp check",
     "ng:build:dev": "ng build --configuration development",
@@ -13,21 +13,24 @@
   },
   "dependencies": {
     "@angular/common": "22.2.2",
+    "@angular/compiler": "22.2.2",
     "@angular/core": "22.2.2",
     "@angular/platform-browser": "22.2.2",
     "bridge-app-core": "workspace:*",
     "bridge-gui-contract": "workspace:*",
     "bridge-server": "workspace:*",
     "rxjs": "7.8.2",
-    "tslib": "2.8.1",
-    "zone.js": "0.16.3"
+    "tslib": "2.8.1"
   },
   "devDependencies": {
     "@angular/build": "22.2.2",
     "@angular/cli": "22.2.2",
     "@angular/compiler-cli": "22.2.2",
     "@types/node": "catalog:",
+    "happy-dom": "catalog:",
     "typescript": "6.0.3",
-    "vite-plus": "catalog:"
+    "vite-plus": "catalog:",
+    "vitest": "catalog:",
+    "zone.js": "0.16.3"
   }
 }

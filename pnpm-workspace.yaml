@@ -27,6 +27,10 @@ catalog:
   typescript: ^7.0.2
   vite: npm:@voidzero-dev/vite-plus-core@1.0.0
   vite-plus: 1.0.0
+  # ADR: 公式 `@angular/build:unit-test`（Vitest runner）が `vitest` と DOM 環境の
+  # 解決を要求するため catalog に載せる。版は lock 済みの解決（5.0.1 系）に固定し、
+  # builder 検証済みの組み合わせから外さない。`bridge-gui-ui` の dev 依存に限る。
+  vitest: 5.0.1
   ws: 8.22.0
 overrides:
   vite@*: "catalog:"

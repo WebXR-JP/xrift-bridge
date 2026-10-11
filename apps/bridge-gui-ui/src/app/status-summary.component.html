@@ -1,0 +1,33 @@
+<section class="card">
+  <h2>状態</h2>
+  @if (snapshot(); as current) {
+    <dl>
+      <div>
+        <dt>改訂番号</dt>
+        <dd>{{ current.revision }}</dd>
+      </div>
+      <div>
+        <dt>起動状態</dt>
+        <dd>{{ current.backend }}</dd>
+      </div>
+      <div>
+        <dt>受付</dt>
+        <dd>{{ current.admission.accepting ? "受付中" : "受付停止中" }}</dd>
+      </div>
+      <div>
+        <dt>保留</dt>
+        <dd>{{ current.pending.length }} 件</dd>
+      </div>
+      <div>
+        <dt>接続</dt>
+        <dd>{{ current.connections.length }} 件</dd>
+      </div>
+      <div>
+        <dt>生存セッション</dt>
+        <dd>{{ current.sessions.length }} 件</dd>
+      </div>
+    </dl>
+  } @else {
+    <p>未取得</p>
+  }
+</section>
