@@ -36,3 +36,32 @@ export {
   diagnosticPlugin,
   type DiagnosticStats,
 } from "./plugins/diagnostic.ts";
+export {
+  TEXT_PLUGIN_ID,
+  TEXT_PORT_ID,
+  createTextPlugin,
+  textPlugin,
+  type TextPluginOperations,
+  type TextPluginOptions,
+  type TextPluginState,
+  type TextSendResult,
+  type TextStats,
+  type TextUnknownReason,
+} from "./plugins/text/plugin.ts";
+export {
+  TEXT_MAX_CODE_POINTS,
+  TEXT_RESPONSE_TIMEOUT_MS,
+  TEXT_SESSION_ID,
+  TEXT_SHOWN_OP,
+  TEXT_SHOW_OP,
+  countCodePoints,
+  isAckForRequest,
+  isCorrelationId,
+  isTextShowRequest,
+  isTextShownAck,
+  validateTextForSend,
+  type TextInputIssue,
+  type TextInputValidation,
+  type TextShowRequest,
+  type TextShownAck,
+} from "./text-contract.ts";

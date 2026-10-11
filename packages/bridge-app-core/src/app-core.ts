@@ -56,7 +56,7 @@ export interface BridgeAppCore {
    * @returns 生成したインスタンスへの参照。
    * @throws `RangeError` — 基盤終了済みの場合。
    */
-  createInstance<S>(definition: PluginDefinition<S>): PluginInstanceHandle<S>;
+  createInstance<S, O = void>(definition: PluginDefinition<S, O>): PluginInstanceHandle<S, O>;
   /**
    * 生存セッションをインスタンスの接続口に割り当てる。
    *
@@ -104,8 +104,8 @@ export type BridgeServerPort = Pick<
 
 /** インスタンスの内部記録。 */
 interface InstanceRecord {
-  readonly definition: PluginDefinition<unknown>;
-  readonly instance: PluginInstance<unknown>;
+  readonly definition: PluginDefinition<unknown, unknown>;
+  readonly instance: PluginInstance<unknown, unknown>;
 }
 
 /** 割当ての内部記録。 */
@@ -224,7 +224,7 @@ export function createBridgeAppCore(server: BridgeServerPort): BridgeAppCore {
   }
 
   return {
-    createInstance<S>(definition: PluginDefinition<S>): PluginInstanceHandle<S> {
+    createInstance<S, O = void>(definition: PluginDefinition<S, O>): PluginInstanceHandle<S, O> {
       if (closed) throw new RangeError("基盤は終了済みである。");
       const instanceId = `instance-${nextInstanceSeq++}`;
       const instance = definition.create();
@@ -233,6 +233,7 @@ export function createBridgeAppCore(server: BridgeServerPort): BridgeAppCore {
         instanceId,
         pluginId: definition.pluginId,
         getState: () => instance.getState(),
+        getOperations: () => instance.getOperations?.(),
       };
     },
 

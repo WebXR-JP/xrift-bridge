@@ -41,8 +41,10 @@ export interface PluginPort {
  * 複数インスタンスを生成でき、UI の有無・形状はここでは表さない。
  *
  * @typeParam S - {@link PluginInstance.getState} が返す UI 非依存の状態の型。
+ * @typeParam O - {@link PluginInstance.getOperations} が返すプラグイン固有の操作口の型。
+ * 汎用の任意 payload 送信口は作らず、用途別の操作だけを提供する。
  */
-export interface PluginDefinition<S> {
+export interface PluginDefinition<S, O = void> {
   /** プラグインの識別子。 */
   readonly pluginId: string;
   /** 宣言する接続口の一覧。 */
@@ -52,7 +54,7 @@ export interface PluginDefinition<S> {
    *
    * @returns 割当て前のインスタンス。
    */
-  create(): PluginInstance<S>;
+  create(): PluginInstance<S, O>;
 }
 
 /**
@@ -62,8 +64,9 @@ export interface PluginDefinition<S> {
  * 失効後の送信は拒否され、購読登録は例外になる。
  *
  * @typeParam S - {@link getState} が返す UI 非依存の状態の型。
+ * @typeParam O - {@link getOperations} が返すプラグイン固有の操作口の型。
  */
-export interface PluginInstance<S> {
+export interface PluginInstance<S, O = void> {
   /**
    * 接続口にセッションを割り当てて利用を開始する。同期で確定する。
    *
@@ -78,6 +81,15 @@ export interface PluginInstance<S> {
    * @returns 表示に使える現在の状態の写し。
    */
   getState(): S;
+  /**
+   * プラグイン固有の操作口を取得する。
+   *
+   * 汎用の任意 payload 送信口は作らず、用途別の操作だけを提供する。
+   * 提供しないプラグインは省略する。
+   *
+   * @returns プラグイン固有の操作口。
+   */
+  getOperations?(): O;
   /** インスタンスを破棄する。以後の `attach` は受け付けない。 */
   dispose(): void;
 }
@@ -86,8 +98,9 @@ export interface PluginInstance<S> {
  * 生成済みインスタンスへの参照。
  *
  * @typeParam S - {@link PluginInstance.getState} が返す状態の型。
+ * @typeParam O - {@link PluginInstance.getOperations} が返すプラグイン固有の操作口の型。
  */
-export interface PluginInstanceHandle<S> {
+export interface PluginInstanceHandle<S, O = void> {
   /** インスタンスの識別子。再利用しない。 */
   readonly instanceId: string;
   /** 由来プラグインの識別子。 */
@@ -98,6 +111,14 @@ export interface PluginInstanceHandle<S> {
    * @returns 表示に使える現在の状態の写し。
    */
   getState(): S;
+  /**
+   * プラグイン固有の操作口を取得する。
+   *
+   * インスタンスが提供しない場合は `undefined` を返す。
+   *
+   * @returns プラグイン固有の操作口。未提供なら `undefined`。
+   */
+  getOperations?(): O | undefined;
 }
 
 /**

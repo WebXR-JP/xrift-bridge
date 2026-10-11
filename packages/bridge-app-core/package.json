@@ -9,6 +9,7 @@
   "type": "module",
   "exports": {
     ".": "./dist/index.mjs",
+    "./text-contract": "./dist/text-contract.mjs",
     "./package.json": "./package.json"
   },
   "scripts": {
