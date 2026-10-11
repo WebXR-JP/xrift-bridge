@@ -15,4 +15,17 @@ import type { ManagementSnapshot } from "bridge-gui-contract/management";
 export class StatusSummaryComponent {
   /** 採用中の表示状態。未取得の間は null である。 */
   readonly snapshot = input<ManagementSnapshot | null>(null);
+
+  /**
+   * 公開先の表示文を作る。URL と受付中／停止中だけを示す。
+   *
+   * @param current - 採用中の表示状態。
+   * @returns 未公開または URL と受付状態の表示文。
+   */
+  endpointText(current: ManagementSnapshot): string {
+    if (current.endpoint === null) {
+      return "未公開";
+    }
+    return `${current.endpoint.url}（${current.endpoint.listening ? "受付中" : "停止中"}）`;
+  }
 }

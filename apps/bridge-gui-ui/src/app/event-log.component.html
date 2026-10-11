@@ -1,0 +1,10 @@
+<section class="card">
+  <h2>受信記録</h2>
+  <ul>
+    @for (entry of entries(); track $index) {
+      <li>{{ entry }}</li>
+    } @empty {
+      <li>記録は無い</li>
+    }
+  </ul>
+</section>

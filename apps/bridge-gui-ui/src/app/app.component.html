@@ -10,6 +10,40 @@
     (disableRequested)="onDisable()"
   />
 
+  <app-pending-list
+    [pending]="snapshot()?.pending ?? []"
+    [views]="pairingViews()"
+    (showRequested)="onShowCode($event)"
+    (approveRequested)="onApprove($event)"
+    (rejectRequested)="onReject($event)"
+  />
+
+  <app-connection-list
+    [connections]="snapshot()?.connections ?? []"
+    (disconnectRequested)="onDisconnect($event)"
+  />
+
+  <app-session-list
+    [sessions]="snapshot()?.sessions ?? []"
+    (assignRequested)="onAssignDiagnostics($event)"
+  />
+
+  <app-text-card
+    [text]="snapshot()?.text ?? null"
+    [error]="textError()"
+    (assignRequested)="onAssignText()"
+    (unassignRequested)="onUnassignText()"
+  />
+
+  <section class="card">
+    <h2>終了</h2>
+    <div class="row">
+      <button type="button" (click)="onQuit()">アプリを終了する</button>
+    </div>
+  </section>
+
+  <app-event-log [entries]="eventLog()" />
+
   <section class="card">
     <h2>子画面の配置先</h2>
     <div class="row">

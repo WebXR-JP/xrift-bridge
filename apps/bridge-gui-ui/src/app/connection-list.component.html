@@ -1,0 +1,23 @@
+<section class="card">
+  <h2>接続</h2>
+  @if (connections().length === 0) {
+    <ul class="entries">
+      <li>接続は無い</li>
+    </ul>
+  } @else {
+    <ul class="entries">
+      @for (connection of connections(); track connection.connectionId) {
+        <li>
+          <span
+            >{{ connection.connectionId }}（{{ connection.origin }}・{{
+              connection.authorized ? "認可済み" : "未認可"
+            }}・{{ connection.phase }}）
+          </span>
+          <button type="button" (click)="disconnectRequested.emit(connection.connectionId)">
+            切断する
+          </button>
+        </li>
+      }
+    </ul>
+  }
+</section>

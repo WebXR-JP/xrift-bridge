@@ -16,8 +16,12 @@ import type {
   ManagementSnapshot,
   NgDebugProbeResult,
   OperationAck,
+  PairingViewResult,
   StateChangedMessage,
 } from "bridge-gui-contract/management";
+import type { AssignmentSummary } from "bridge-gui-contract/management";
+import type { ApprovalResult, RejectionResult } from "bridge-server";
+import type { TextSendResult } from "bridge-app-core";
 import type { PluginMountDto } from "bridge-gui-contract/plugin-spike";
 
 /** `stateChanged` push の受信処理。採用判断は呼び出し側が行う。 */
@@ -104,6 +108,96 @@ export class ManagementRpcClient {
    */
   disableAcceptance(): Promise<AdmissionState> {
     return this.rpc.request.disableAcceptance({});
+  }
+
+  /**
+   * 選択した保留の比較コードを表示用に取得する。承認はしない。
+   *
+   * @param requestId - 照合対象の要求識別子。
+   * @returns 表示用の取得結果（本文の記録には使わない）。
+   */
+  getPairingView(requestId: string): Promise<PairingViewResult> {
+    return this.rpc.request.getPairingView({ requestId });
+  }
+
+  /**
+   * 保留を比較コード照合で承認する。承認可否は server が決める。
+   *
+   * @param requestId - 照合対象の要求識別子。
+   * @param code - 入力欄の比較コード（整形しない）。
+   * @returns 承認結果。
+   */
+  approvePairing(requestId: string, code: string): Promise<ApprovalResult> {
+    return this.rpc.request.approvePairing({ requestId, code });
+  }
+
+  /**
+   * 保留を取り下げ、対象の接続を終了する。
+   *
+   * @param requestId - 照合対象の要求識別子。
+   * @returns 取り下げ結果。
+   */
+  rejectPairing(requestId: string): Promise<RejectionResult> {
+    return this.rpc.request.rejectPairing({ requestId });
+  }
+
+  /**
+   * 指定接続だけを切断する。待ち受けと他接続は維持する。
+   *
+   * @param connectionId - 切断する接続の識別子。
+   * @returns 受付応答。
+   */
+  disconnectConnection(connectionId: string): Promise<OperationAck> {
+    return this.rpc.request.disconnectConnection({ connectionId });
+  }
+
+  /**
+   * 診断インスタンスを割り当てる。対象外セッションの判定は表示側で行う。
+   *
+   * @param localSessionId - 割り当てる生存セッションのローカル識別子。
+   * @returns 割当て結果。
+   */
+  assignDiagnostics(localSessionId: string): Promise<AssignmentSummary> {
+    return this.rpc.request.assignDiagnostics({ localSessionId });
+  }
+
+  /**
+   * 固定テキスト表示を明示割当てする。引数は取らない。
+   *
+   * @returns 割当て結果。
+   */
+  assignText(): Promise<AssignmentSummary> {
+    return this.rpc.request.assignText({});
+  }
+
+  /**
+   * 固定テキストを送信する。本文は送信時のみ扱い、記録に残さない。
+   *
+   * @param localSessionId - 画面が認識している割当て先のローカル識別子。
+   * @param instanceId - 画面が認識している割当て先のインスタンス識別子。
+   * @param text - 送信する本文。
+   * @returns 送信結果。
+   */
+  sendText(localSessionId: string, instanceId: string, text: string): Promise<TextSendResult> {
+    return this.rpc.request.sendText({ localSessionId, instanceId, text });
+  }
+
+  /**
+   * 固定テキストの割当てを外す。
+   *
+   * @returns 受付応答。
+   */
+  unassignText(): Promise<OperationAck> {
+    return this.rpc.request.unassignText({});
+  }
+
+  /**
+   * アプリ終了を要求する。後始末完了後に終了する。
+   *
+   * @returns 受付応答。
+   */
+  quit(): Promise<OperationAck> {
+    return this.rpc.request.quit({});
   }
 
   /**

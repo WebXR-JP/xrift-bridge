@@ -10,15 +10,26 @@ import { makeSnapshot } from "./snapshot-fixture.ts";
 
 // ADR: `as` は実行時の検証にならないため、主張する型が成立する根拠を残す。
 // 代役は入れ物の試験用であり、入れ物が使う項目（表示信号・初回取得・通知・
-// 受付・子画面作成）だけを持つ。主張は、入れ物の呼び出し項目と代役表の
-// 項目が一致することで成り立つ。
+// 受付・保留・接続・セッション・テキスト・終了・子画面作成）だけを持つ。
+// 主張は、入れ物の呼び出し項目と代役表の項目が一致することで成り立つ。
 function prepareServiceStub() {
   return {
     snapshot: signal(makeSnapshot({ revision: 5 })),
+    pairingViews: signal(new Map()),
+    eventLog: signal([] as readonly string[]),
+    textError: signal(""),
     fetchInitial: vi.fn(async () => {}),
     notifyReady: vi.fn(),
     enableAcceptance: vi.fn(async () => {}),
     disableAcceptance: vi.fn(async () => {}),
+    showPairingView: vi.fn(async (_requestId: string) => {}),
+    approvePairing: vi.fn(async (_requestId: string, _code: string) => {}),
+    rejectPairing: vi.fn(async (_requestId: string) => {}),
+    disconnectConnection: vi.fn(async (_connectionId: string) => {}),
+    assignDiagnostics: vi.fn(async (_localSessionId: string) => {}),
+    assignText: vi.fn(async () => {}),
+    unassignText: vi.fn(async () => {}),
+    quit: vi.fn(async () => {}),
     createSpike: vi.fn(async (_host: HTMLElement) => {}),
   };
 }
@@ -52,5 +63,16 @@ describe("入れ物の起動", () => {
     expect(text).toContain("状態");
     expect(text).toContain("受付");
     expect(text).toContain("5");
+  });
+
+  it("管理機能の一覧と終了・受信記録を描画する", async () => {
+    const { fixture } = await prepareRoot();
+    const text: string = fixture.nativeElement.textContent ?? "";
+    expect(text).toContain("保留");
+    expect(text).toContain("接続");
+    expect(text).toContain("生存セッション");
+    expect(text).toContain("テキスト送信");
+    expect(text).toContain("終了");
+    expect(text).toContain("受信記録");
   });
 });

@@ -1,0 +1,27 @@
+<section class="card">
+  <h2>生存セッション</h2>
+  @if (sessions().length === 0) {
+    <ul class="entries">
+      <li>生存セッションは無い</li>
+    </ul>
+  } @else {
+    <ul class="entries">
+      @for (session of sessions(); track session.localSessionId) {
+        <li>
+          <span
+            >{{ session.localSessionId }}（論理名 {{ session.sessionId }}・{{ session.kind }}・{{
+              session.direction
+            }}・接続 {{ session.connectionId }}）
+          </span>
+          @if (isTextSession(session.sessionId)) {
+            <span>診断対象外</span>
+          } @else {
+            <button type="button" (click)="assignRequested.emit(session.localSessionId)">
+              診断を割り当てる
+            </button>
+          }
+        </li>
+      }
+    </ul>
+  }
+</section>

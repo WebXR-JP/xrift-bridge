@@ -1,0 +1,20 @@
+<section class="card">
+  <h2>保留（照合待ち）</h2>
+  @if (pending().length === 0) {
+    <ul class="entries">
+      <li>保留は無い</li>
+    </ul>
+  } @else {
+    <ul class="entries">
+      @for (entry of pending(); track entry.requestId) {
+        <app-pending-row
+          [requestId]="entry.requestId"
+          [view]="viewFor(entry.requestId)"
+          (showRequested)="showRequested.emit($event)"
+          (approveRequested)="approveRequested.emit($event)"
+          (rejectRequested)="rejectRequested.emit($event)"
+        />
+      }
+    </ul>
+  }
+</section>

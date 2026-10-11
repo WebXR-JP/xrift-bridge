@@ -1,0 +1,25 @@
+<li>
+  <span>{{ requestId() }} </span>
+  <button type="button" (click)="onShow()">比較コードを表示する</button>
+  {{ " " }}
+  <input
+    type="text"
+    [attr.id]="'code-input-' + requestId()"
+    [value]="code()"
+    (input)="onCodeInput($any($event.target).value)"
+    maxlength="6"
+    placeholder="比較コード（6桁）"
+    autocomplete="off"
+  />
+  {{ " " }}
+  <button type="button" (click)="onApprove()">承認する</button>
+  {{ " " }}
+  <button type="button" (click)="onReject()">取り下げる</button>
+  @if (view(); as shown) {
+    @if (shown.available) {
+      <div class="code">比較コード: {{ shown.displayCode }}</div>
+    } @else {
+      <div class="code">取得できない: {{ shown.reason }}</div>
+    }
+  }
+</li>

@@ -1,0 +1,33 @@
+<section class="card">
+  <h2>テキスト送信</h2>
+  <dl>
+    <div>
+      <dt>割当て先</dt>
+      <dd>{{ assignmentText() }}</dd>
+    </div>
+    <div>
+      <dt>状態</dt>
+      <dd>{{ statusText() }}</dd>
+    </div>
+    <div>
+      <dt>直近結果</dt>
+      <dd>{{ resultText() }}</dd>
+    </div>
+    <div>
+      <dt>統計</dt>
+      <dd>{{ statsText() }}</dd>
+    </div>
+  </dl>
+  <div class="row">
+    <button type="button" [disabled]="assigned" (click)="assignRequested.emit()">
+      テキストを割り当てる
+    </button>
+    <button type="button" [disabled]="!assigned" (click)="unassignRequested.emit()">
+      テキストの割当てを外す
+    </button>
+  </div>
+  <p class="note">本文の入力と送信は子画面で行う。割当てと解除だけをここで行う。</p>
+  @if (error()) {
+    <p class="error" aria-live="polite">{{ error() }}</p>
+  }
+</section>

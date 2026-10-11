@@ -11,6 +11,10 @@
         <dd>{{ current.backend }}</dd>
       </div>
       <div>
+        <dt>公開先</dt>
+        <dd>{{ endpointText(current) }}</dd>
+      </div>
+      <div>
         <dt>受付</dt>
         <dd>{{ current.admission.accepting ? "受付中" : "受付停止中" }}</dd>
       </div>
@@ -25,6 +29,13 @@
       <div>
         <dt>生存セッション</dt>
         <dd>{{ current.sessions.length }} 件</dd>
+      </div>
+      <div>
+        <dt>割当て</dt>
+        <dd>
+          実体 {{ current.plugins.instances.length }}・割当て
+          {{ current.plugins.assignments.length }}
+        </dd>
       </div>
     </dl>
   } @else {
