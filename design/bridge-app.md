@@ -100,9 +100,9 @@ mainview を Angular に本移行する。本節が設計変更の正本であ�
 - 契約境界：契約（DTO・限定操作・純粋な微少ランタイム＝`selectNewer`、URL 組立て／解析、navigation-rules 属性値等）を `packages/bridge-gui-contract` へ切り出す。依存方向・禁止は「三層の責務」節を正本とする。
 - ビルド：Angular 成果物は UI パッケージ自身の `dist` に生成する。再帰 `build` に Angular production AOT を含める（`tsc --noEmit` だけではテンプレートを検証できない）。GUI から UI への `workspace:*` ビルド依存を明示する。切替え時に URL を `views://mainview/index.html` に統一し、Hutch stub＋成果物コピーへ変える。`BRIDGE_GUI_VIEW`・`mainview-ng`・vanilla の views／copy を削除する。成果物が無ければ失敗させる。コピーは生成された chunks／assets を含める。
 - Angular 構造：RPC アダプター（接続・型付き request／push。表示状態や DOM を持たない）／状態・操作サービス（signals で snapshot 採用、初期同期、共通操作処理、実行中／失敗表示、安全な受信記録）／表示コンポーネント（状態要約＋受付＋終了、保留一覧・行、接続一覧、生存セッション、固定テキストカード）／子画面ホスト（実プラグイン配置・失敗・再試行、段0スパイク操作。タグ同一性保持）／開発専用デバッグアダプター。汎用ストア・ルーターは追加しない。比較コードは保留行の一時状態だけに置き、消滅後の遅延取得は再表示しない。子画面は安定領域へ命令的に追加・削除し、revision 更新で再生成しない。スパイクの起動時自動走行は削除する。
-- AI 観測口：開発ビルド＋明示 opt-in＋隔離実行の三条件で有効化する。経路は AI → loopback 接続口 → Bun main → 限定 Webview RPC → 共通操作サービス → 既存管理 RPC → backend とする。`127.0.0.1`・実行ごとランダム token・Origin／Host 制限・入力検証・サイズ／期限制限を設け、ブラウザ向け CORS は開かない。stable は環境変数を設定しても待受けを開かない。許可操作と DTO だけを通し、任意 JS・関数名・DOM 全文・実体取得口は持たない。`ng.*` は可否・件数等の補助観測だけに使う。操作受付・業務結果・snapshot 採用・Angular の DOM 反映・native 画素観測は別々に返す（RPC 成功や rAF を描画完了と呼ばない）。比較コード取得からの自動承認はしない。汎用ジョブ履歴・再送基盤は作らない。
-- 描画確認：同梱 SDK の `Screen.captureRegion()` と `BrowserWindow.activate()` を使う。capture はデスクトップ矩形であり Webview 単体ではない。DOM 観測は固定要素キー・矩形・表示／disabled・`document.hasFocus()`・activeElement キーだけとし、入力値・本文は返さない。実入力は cliclick／System Events を第一候補とする。画像は対象アプリ領域だけに限り、機微領域は遮蔽または拒否する。
-- 未確認事項：`@angular/build:unit-test`（Vitest runner）と現 Vite+ override の互換、Hutch のディレクトリコピー可否、`Screen.captureRegion()`／`BrowserWindow.activate()`／native 入力送信の実成立。macOS 権限・座標・遮蔽・実画素も未確認である。成立しなければ独自試験基盤を作らず再相談する。画像取得不能なら機能移行と視覚自動化を分けて報告し、後者を完了扱いしない。
+- AI 観測口：開発ビルド＋明示 opt-in＋隔離実行の三条件で有効化する。経路は AI → loopback 接続口 → Bun main → 限定 Webview RPC → 共通操作サービス → 既存管理 RPC → backend とする。`127.0.0.1`・実行ごとランダム token・Origin／Host 制限・入力検証・サイズ／期限制限を設け、ブラウザ向け CORS は開かない。stable は環境変数を設定しても待受けを開かない。許可操作と DTO だけを通し、任意 JS・関数名・DOM 全文・実体取得口は持たない。`ng.*` は可否・件数等の補助観測だけに使う。操作受付・業務結果・snapshot 採用・Angular の DOM 反映は別々に返す（RPC 成功や rAF を描画完了と呼ばない）。native 画素観測は自動化の対象外とし、ここでは扱わない。比較コード取得からの自動承認はしない。汎用ジョブ履歴・再送基盤は作らない。
+- 描画確認：native 画素観測（`Screen.captureRegion()` 等）と実入力送信（cliclick／System Events 等）の自動化は行わない（非目標）。`Screen.captureRegion()` はデスクトップ矩形で Webview 単体捕獲ではないため採用しない。自動観測は開発専用の操作・観測口による DOM 観測までとし、固定要素キー・矩形・表示／disabled・`document.hasFocus()`・activeElement キーだけを返し、入力値・本文は返さない。描画・フォーカス・操作フローの最終確認は人間の GUI セッションで行う。
+- 未確認事項：`@angular/build:unit-test`（Vitest runner）と現 Vite+ override の互換、Hutch のディレクトリコピー可否。native 画素観測・実入力送信の自動化は非目標として確定し、本項目の対象外とする。成立しなければ独自試験基盤を作らず再相談する。
 
 ## 対象プラットフォームと GUI 基盤
 
@@ -128,4 +128,4 @@ mainview を Angular に本移行する。本節が設計変更の正本であ�
 - 実行情報：Electrobun で直接実行できるならこの構成で進める。別プロセスが必要なら IPC・監視・終了処理の増加を示して再相談する。埋込み・配布・実行互換に問題があれば Electron へ切り替える。境界は維持する。
 - 再相談：ローカル操作を行うプラグイン、非信頼コードの実行、分配・合流、通信途中の付替え、認可や割当ての継承が必要になった場合。
 - capability の一致を権限判定として扱わない。既存の接続認可はあらゆるローカル操作の包括承認ではない。
-- 観測能力：TestBed（`@angular/build:unit-test` の Vitest runner）と現 Vite+ override の互換、Hutch のディレクトリコピー可否、`Screen.captureRegion()`／`BrowserWindow.activate()`／native 入力送信の実成立は未確認である。成立しなければ独自試験基盤を作らず再相談する。画像取得不能なら機能移行と視覚自動化を分けて報告し、後者を完了扱いしない。
+- 観測能力：TestBed（`@angular/build:unit-test` の Vitest runner）と現 Vite+ override の互換、Hutch のディレクトリコピー可否は未確認である。成立しなければ独自試験基盤を作らず再相談する。機能移行の完了判断に視覚自動化を含めず、後者を完了扱いしない。native 画素・実入力の自動化が必要になった場合は再検討する。
