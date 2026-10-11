@@ -159,6 +159,8 @@ apps/bridge-gui/
   常に server が決める。コード一致による自動承認はしない。
 - `assignDiagnostics` はスパイク専用の明示操作である（開始通知での自動割当ては
   しない。恒久採用は別判断）。
+- 現状のファイル構成はコードを正本とする。上記は段2時点であり、
+  開発口（`src/main/dev-console.ts`）・プラグイン埋込み等のモジュールが増えている。
 
 ## 終了処理
 
@@ -200,7 +202,7 @@ apps/bridge-gui/
   SIGTERM 経路では取消し→後始末（`shutdown` 記録）→再要求で待受ポートが解放され、
   アプリ固有プロセスの残存が無いことを確認した。
 - 目視確認（画面描画・操作フロー・閉窓経路の終了）は
-  人間の GUI セッションで行うこと（下記の人間確認待ち）。
+  人間の GUI セッションで実施済みである（下記の人間確認の記録）。
   比較コード本文・業務 payload をログに残さない運用は変えないこと。
 - 段5・段6（2026-10-11）: stable 包装を生成し、配布物からの起動で
   `getSnapshot`／`viewReady` の往復（main 側記録）・正常終了（待受解放・残存なし）を
@@ -208,18 +210,22 @@ apps/bridge-gui/
   詳細は検証計画（`docs/verification/bridge-app.md`「Electrobun スパイクの記録（段5〜6）」）を正本とし、
   生ログは `records/seg5-*.log`・`records/seg6-*.log`
   （`*.log` 無視のためリポジトリに含まれないローカル参照）に残す。
+- その後の Angular 移行は完了した（mainview 限定。契約＋設計 `d1179a4`、基盤 `379a632`、
+  管理機能 `8983d68`、子画面 `51e3c81`、AI 観測口 `0ace1f0`、既定切替・vanilla 削除 `5e811ae`）。
+  既定の管理画面は Angular（`views://mainview/index.html`）であり、vanilla は削除済みである。
+  詳細は設計（`design/bridge-app.md`「管理画面の Angular 移行（設計変更）」）と
+  検証計画（`docs/verification/bridge-app.md`「Angular 移行の完了記録」）を正本とする。
 
-## 人間確認待ち
+## 人間確認の記録（2026-10-11 確認済み）
 
-GUI 目視・GUI 操作が要るため、この環境では未確認である。人間の GUI セッションで
-以下を確認すること。判定材料の確定値は検証計画
-（`docs/verification/bridge-app.md`「人間の判断に必要な材料」）にまとめてある。
+人間の GUI セッションで以下を確認済みである。判定材料の確定値は検証計画
+（`docs/verification/bridge-app.md`「人間の判断に必要な材料」・「Angular 移行の完了記録」）にまとめてある。
 
-- 管理画面の描画（状態・受付・保留・接続・セッション・割当て・受信記録）。
-- 受付の有効化・無効化、保留の比較コード表示、目視照合後の承認・取り下げ、
-  接続の切断、セッションへの診断割当て、アプリ終了ボタン。
+- 管理画面の描画（状態・受付・保留・接続・セッション・割当て・受信記録。カード等の見た目・CSS を含む）。
+- 保留の比較コード表示と目視照合→承認・取り下げ、接続の切断、
+  生存セッションへの診断割当て（テキスト表示用は対象外表示）、固定テキストカード、子画面埋込み、終了。
 - 操作後の `stateChanged` push による表示更新（改訂番号の進行）。
-- ローカル開発ワールドとの往復（開発実行で確認する場合）:
+- ローカル開発ワールドとの往復の再現手順:
   1. `BRIDGE_GUI_DEV_ORIGINS=http://localhost:5173 pnpm --filter bridge-gui gui:run`
      で GUI を起動する。
   2. 別ターミナルで `vp run diagnostic-world#dev` を起動し、ブラウザで
@@ -227,14 +233,14 @@ GUI 目視・GUI 操作が要るため、この環境では未確認である。
   3. ワールドの操作盤から接続を開始し、表示された比較コードを GUI の保留表示と
      目視照合して承認する。
   4. 認可後、GUI でセッションへ診断を割り当て、ワールド側の echo/ping を確認する。
-  5. 固定テキスト送信の入力欄と表示板の往復は、次の段（mainview のUI）で確認する。
-- 配布物（`build/stable-macos-arm64/XRift Bridge.app`。dmg は `artifacts/`）からの起動手順:
+  5. 固定テキスト送信の入力欄と表示板の往復は、検証計画の人間確認手順で行う。
+
+残る未確認は以下である。
+
+- 配布物（`build/stable-macos-arm64/XRift Bridge.app`。dmg は `artifacts/`）からの導線:
   1. `open "apps/bridge-gui/build/stable-macos-arm64/XRift Bridge.app"` で起動する。
      初回は自己展開（`Application Support/net.xrift.bridge-gui` への書込み）が入る。
   2. 管理画面で保留の比較コードを目視照合して承認し、診断割当て後の echo/ping 往復を確認する。
   3. 終了後に `nc -z 127.0.0.1 3100` が失敗することと、Activity Monitor 等で
      `XRift Bridge` が残っていないことを見る。
-- 閉窓・通常終了で待受ポート（`3100`）が解放され、プロセスが残らないこと。
-  手順: 終了後に `nc -z 127.0.0.1 3100` が失敗することと、Activity Monitor 等で
-  `XRift Bridge` が残っていないことを見る。
 - 可視 Webview 条件下でのメモリ・起動時間の再測定（採用判断の材料。窓なし条件の値は計測済み）。
