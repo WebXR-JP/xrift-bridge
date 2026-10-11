@@ -75,6 +75,16 @@ flowchart LR
 - 輸送の keepalive Ping はサーバー側に残す。診断 ping とは別機能である。
 - `latest` の記録（内容を解釈しない既存機能）と関連統計は今回維持する。ただし接続をまたぎ切断後も残る記録であり、生存セッションや割当ての判定には使わない。
 
+## 固定テキスト表示
+
+- 固定テキスト表示は `packages/bridge-app-core` の同梱プラグインが行う。接続口は一つで、輸送上の適合は「接続口と capability」節の組合せのうち一つのみ受け付ける。相関・検証・応答期限はプラグイン側の責務とし、サーバー・輸送・基盤本体に追加しない。
+- ワールドは認可後に専用セッションを開き、PC からワールドへは相関識別子付きのプレーンテキスト表示要求、ワールドから PC へは同じ識別子の反映確認（本文返送なし）を返す。HTML・Markdown・コマンド解釈はしない。直近一件の置換表示とし、履歴・保存・他利用者への同期はしない。
+- 反映確認は「表示用状態に反映した」ことであり、送信 API の成功や描画完了とは区別する。同時実行は一件とし、期限切れ・切断は結果不明として自動再送しない。不正な応答は対象セッションのみ中断し、不正入力は送信前に拒否する。
+- 形状・論理名・上限・応答期限・検証規則は契約モジュール（[`packages/bridge-app-core/src/text-contract.ts`](../packages/bridge-app-core/src/text-contract.ts)の公開 subpath）を正本とし、ここでは複製しない。契約モジュールはブラウザ安全な構成とし、ワールドは root import でサーバー依存を引き込まない。公開範囲は[`packages/bridge-app-core/package.json`](../packages/bridge-app-core/package.json)の exports を正本とする。プラグイン本体の振る舞いは[`packages/bridge-app-core/src/plugins/text/plugin.ts`](../packages/bridge-app-core/src/plugins/text/plugin.ts)、ワールド側の受信・表示は[`apps/diagnostic-world/src/text/`](../apps/diagnostic-world/src/text/)を正本とする。
+- 割当ては固定プラグイン一種類・同時に一インスタンスとし、開始通知での自動割当てはしない。明示操作でのみ行い、論理名と capability が一致する唯一の候補が全接続を通じて一件だけの場合に割り当て、候補ゼロ・複数は理由付きで拒否する（先着順・一件目・Origin 推測をしない）。解除・インスタンス削除は対象セッションを中断する。再接続後は再承認・新規セッション・新規の明示割当てを要求し、同名でも旧操作口・未完了要求・本文を引き継がない。論理名の一致は内容互換性や真正性の証明ではない。
+- 画面は当面、管理 Webview 内の暫定 UI（割当て先・状態・直近結果・統計、割当て／解除、本文入力、送信）とし、専用の埋込み Webview（プラグイン UI 埋込み）は独立したゲートとして本節では未実装とする。移行時は同じ表示データ・限定操作の境界を再利用する。Webview へ生のサーバー・セッションを渡さない方針を維持し、本文は snapshot・ログ・永続保存に残さない。表示データと限定操作は[`apps/bridge-gui/src/shared/management.ts`](../apps/bridge-gui/src/shared/management.ts)、組立ては[`apps/bridge-gui/src/main/backend.ts`](../apps/bridge-gui/src/main/backend.ts)を正本とする。
+- 診断割当てはテキスト表示用セッションを対象外とし、テキスト割当てと排他にする。
+
 ## 対象プラットフォームと GUI 基盤
 
 - 対象は macOS（Apple Silicon）を最優先とする。Electrobun は macOS x64 を提供しないため、Intel Mac は対象外とする。
@@ -87,6 +97,7 @@ flowchart LR
 - [ブリッジ接続](bridge-connection.md)：Connection 認可・切断失効、サーバー管理境界としてのセッション公開。
 - [プロトコル](protocol.md)：輸送・配送・方向・終了の契約。
 - コード：公開型・フィールド・操作名・データ形状。
+- テキスト契約 subpath（`packages/bridge-app-core` の公開するテキスト契約）：固定テキスト表示の形状・論理名・上限・応答期限・検証規則。
 - [接続の検証計画](../docs/verification/bridge-connection.md)：接続の検証計画。[アプリの検証計画](../docs/verification/bridge-app.md)：アプリ固有の観測。
 
 ## 見直し条件
