@@ -11,7 +11,8 @@
     "check": "vp check",
     "gui:prepare": "hutch electrobun prepare",
     "gui:dev": "hutch run dev",
-    "gui:run": "hutch run run",
+    "gui:build:dev": "hutch electrobun build --env=dev",
+    "gui:run": "hutch electrobun build --env=dev && hutch electrobun run",
     "gui:build": "hutch run build"
   },
   "dependencies": {

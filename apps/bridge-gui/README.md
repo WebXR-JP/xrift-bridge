@@ -40,13 +40,18 @@ pnpm --filter bridge-gui gui:prepare
 `hutch.config.ts` の ADR コメントを参照。GUI の起動・包装は opt-in の入口を使う。
 
 ```sh
-pnpm --filter bridge-gui gui:run    # 開発実行（単発）
-pnpm --filter bridge-gui gui:dev    # 開発実行（監視付き再起動）
+pnpm --filter bridge-gui gui:run    # 開発実行（単発。起動前に dev ビルドする）
+pnpm --filter bridge-gui gui:dev    # 開発実行（監視付き再起動・再ビルド）
 pnpm --filter bridge-gui gui:build  # 配布用に包装（stable）
 
 # ローカル開発ワールド（http://localhost:5173）から接続して確認する場合
 BRIDGE_GUI_DEV_ORIGINS=http://localhost:5173 pnpm --filter bridge-gui gui:run
 ```
+
+`gui:run` は起動前に `hutch electrobun build --env=dev` で dev バンドルを作り直す。
+`hutch electrobun run` 単体は既存バンドルを使い回すため、**ソース変更後に
+`hutch electrobun run` だけを実行すると古い画面が動く**（実測で踏んだ罠である）。
+上流（`bridge-server` 等）を変えた場合は先に `vp run -r build` すること。
 
 許可 `Origin` は既定で `PRODUCTION_ORIGIN` のみである。追加は環境変数
 `BRIDGE_GUI_DEV_ORIGINS`（カンマ区切り）の明示設定に限る。管理操作として
