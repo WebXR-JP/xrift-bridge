@@ -43,6 +43,7 @@ import type {
   StateChangedMessage,
   TextDisplayState,
 } from "../shared/management.ts";
+import type { DiagnosticInstanceView, TextInstanceView } from "../shared/plugin-instance.ts";
 
 /** 既定の待ち受けポート。 */
 export const DEFAULT_BRIDGE_PORT = 3100;
@@ -93,6 +94,52 @@ function assertId(value: unknown, name: string): string {
  */
 function toAdmission(info: AcceptanceInfo): AdmissionState {
   return { accepting: info.state === "open", remainingMs: info.remainingMs };
+}
+
+/**
+ * テキスト個体の限定表示を作る。管理 snapshot 全体・他個体の情報・
+ * 候補一覧・保留情報は載せず、本文も含めない。
+ *
+ * @param handle - 束縛テキスト個体の参照。
+ * @param localSessionId - 現割当ての生存セッションのローカル識別子。
+ * @returns 子画面へ渡せる限定表示。
+ */
+export function projectTextInstanceView(
+  handle: PluginInstanceHandle<TextPluginState, TextPluginOperations>,
+  localSessionId: string,
+): TextInstanceView {
+  const state = handle.getState();
+  return {
+    instanceId: handle.instanceId,
+    pluginId: handle.pluginId,
+    portId: TEXT_PORT_ID,
+    localSessionId,
+    canSend: state.canSend,
+    pendingId: state.pendingId,
+    lastResult: state.lastResult,
+    stats: state.stats,
+  };
+}
+
+/**
+ * 診断個体の限定表示を作る。echo／ping 統計だけを持ち、管理 snapshot 全体・
+ * 他個体の情報・候補一覧・保留情報は載せない。
+ *
+ * @param handle - 束縛診断個体の参照。
+ * @param localSessionId - 現割当ての生存セッションのローカル識別子。
+ * @returns 子画面へ渡せる限定表示。
+ */
+export function projectDiagnosticInstanceView(
+  handle: PluginInstanceHandle<DiagnosticStats>,
+  localSessionId: string,
+): DiagnosticInstanceView {
+  return {
+    instanceId: handle.instanceId,
+    pluginId: handle.pluginId,
+    portId: DIAGNOSTIC_PORT_ID,
+    localSessionId,
+    stats: handle.getState(),
+  };
 }
 
 /**
@@ -600,6 +647,112 @@ export class GuiBackend {
     }
     this.requestNotify();
     return { ok: true };
+  }
+
+  /**
+   * 束縛テキスト個体の限定表示を返す。子画面用の射影であり、管理 snapshot
+   * 全体・他個体の情報・候補一覧・保留情報は含めない。
+   *
+   * 現割当てが失効していれば拒否する。識別子は main の対応付けが決め、
+   * 子からの指定は受け付けない。
+   *
+   * @param params - 束縛個体の識別子。
+   * @returns 子画面へ渡せる限定表示。本文は含めない。
+   * @throws `RangeError` — 識別子が不正・束縛外・現割当て失効の場合。
+   * @throws `Error` — 終了中・起動失敗の場合。
+   */
+  getTextInstanceView(params: { instanceId: unknown }): TextInstanceView {
+    const { handle, localSessionId } = this.requireTextBinding(params.instanceId);
+    return projectTextInstanceView(handle, localSessionId);
+  }
+
+  /**
+   * 束縛テキスト個体の現割当てへ本文を送る。子は本文だけを渡し、
+   * `instanceId`／`localSessionId` の指定は受け付けない。main が束縛した
+   * 個体の現割当てに委譲する。本文は送信時のみ扱い、ログ・snapshot に残さない。
+   *
+   * @param instanceId - 束縛個体の識別子。main の対応付けが決める。
+   * @param params - 送信する本文。
+   * @returns 反映確認または結果不明。送信処理の失敗は `Promise` の拒否で表す。
+   * @throws `RangeError` — 識別子・本文の型が不正、束縛外・現割当て失効の場合（同期的）。
+   * @throws `Error` — 終了中・起動失敗の場合（同期的）。
+   */
+  sendTextForInstance(instanceId: unknown, params: { text: unknown }): Promise<TextSendResult> {
+    const { handle, localSessionId } = this.requireTextBinding(instanceId);
+    if (typeof params.text !== "string") {
+      throw new RangeError("text は文字列であること。");
+    }
+    const operations = handle.getOperations?.();
+    if (operations === undefined) {
+      throw new RangeError("テキストの操作口が無い。");
+    }
+    return operations.sendText(params.text, localSessionId);
+  }
+
+  /**
+   * 束縛診断個体の限定表示を返す。echo／ping 統計だけを持ち、管理 snapshot
+   * 全体・他個体の情報・候補一覧・保留情報は含めない。
+   *
+   * 診断には状態購読が無いため、統計は読み取り時点の取得であり、通知は
+   * 既存の状態通知（`onStateChanged`）の周期で送る。汎用基盤の再設計はしない。
+   *
+   * @param params - 束縛個体の識別子。
+   * @returns 子画面へ渡せる限定表示。
+   * @throws `RangeError` — 識別子が不正・束縛外・現割当て失効の場合。
+   * @throws `Error` — 終了中・起動失敗の場合。
+   */
+  getDiagnosticInstanceView(params: { instanceId: unknown }): DiagnosticInstanceView {
+    const { handle, localSessionId } = this.requireDiagnosticBinding(params.instanceId);
+    return projectDiagnosticInstanceView(handle, localSessionId);
+  }
+
+  /**
+   * 束縛テキスト個体を取り出す。handle と現割当ての両方が現在のもので
+   * なければ拒否し、古い割当てへの転送はしない。
+   *
+   * @param instanceId - 照合する束縛個体の識別子。
+   * @throws `RangeError` — 識別子が不正・束縛外・現割当て失効の場合。
+   * @throws `Error` — 終了中・起動失敗の場合。
+   */
+  private requireTextBinding(instanceId: unknown): {
+    handle: PluginInstanceHandle<TextPluginState, TextPluginOperations>;
+    localSessionId: string;
+  } {
+    this.operable();
+    const id = assertId(instanceId, "instanceId");
+    const handle = this.textHandle;
+    const localSessionId = this.textLocalSessionId;
+    if (handle === null || localSessionId === null || handle.instanceId !== id) {
+      throw new RangeError("束縛したテキスト個体ではない。");
+    }
+    return { handle, localSessionId };
+  }
+
+  /**
+   * 束縛診断個体を取り出す。生成分の保持と基盤の現割当ての両方を照合し、
+   * 失効していれば拒否する。
+   *
+   * @param instanceId - 照合する束縛個体の識別子。
+   * @throws `RangeError` — 識別子が不正・束縛外・現割当て失効の場合。
+   * @throws `Error` — 終了中・起動失敗の場合。
+   */
+  private requireDiagnosticBinding(instanceId: unknown): {
+    handle: PluginInstanceHandle<DiagnosticStats>;
+    localSessionId: string;
+  } {
+    const { core } = this.operable();
+    const id = assertId(instanceId, "instanceId");
+    const handle = this.diagnosticHandles.get(id);
+    if (handle === undefined) {
+      throw new RangeError("束縛した診断個体ではない。");
+    }
+    const assignment = core
+      .listAssignments()
+      .find((candidate) => candidate.instanceId === id && candidate.portId === DIAGNOSTIC_PORT_ID);
+    if (assignment === undefined) {
+      throw new RangeError("診断の現割当てが無い。");
+    }
+    return { handle, localSessionId: assignment.localSessionId };
   }
 
   /**
