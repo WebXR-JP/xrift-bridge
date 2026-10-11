@@ -43,7 +43,14 @@ pnpm --filter bridge-gui gui:prepare
 pnpm --filter bridge-gui gui:run    # 開発実行（単発）
 pnpm --filter bridge-gui gui:dev    # 開発実行（監視付き再起動）
 pnpm --filter bridge-gui gui:build  # 配布用に包装（stable）
+
+# ローカル開発ワールド（http://localhost:5173）から接続して確認する場合
+BRIDGE_GUI_DEV_ORIGINS=http://localhost:5173 pnpm --filter bridge-gui gui:run
 ```
+
+許可 `Origin` は既定で `PRODUCTION_ORIGIN` のみである。追加は環境変数
+`BRIDGE_GUI_DEV_ORIGINS`（カンマ区切り）の明示設定に限る。管理操作として
+`Origin` を編集する口は公開しない。
 
 ## 構成（段2時点の最小実結線）
 
@@ -132,6 +139,15 @@ GUI 目視・GUI 操作が要るため、この環境では未確認である。
 - 受付の開閉、保留の比較コード表示、目視照合後の承認・取り下げ、
   接続の切断、セッションへの診断割当て、アプリ終了ボタン。
 - 操作後の `stateChanged` push による表示更新（改訂番号の進行）。
+- ローカル開発ワールドとの往復（開発実行で確認する場合）:
+  1. `BRIDGE_GUI_DEV_ORIGINS=http://localhost:5173 pnpm --filter bridge-gui gui:run`
+     で GUI を起動する。
+  2. 別ターミナルで `vp run diagnostic-world#dev` を起動し、ブラウザで
+     `http://localhost:5173` を開く。
+  3. ワールドの操作盤から接続を開始し、表示された比較コードを GUI の保留表示と
+     目視照合して承認する。
+  4. 認可後、GUI でセッションへ診断を割り当て、ワールド側の echo/ping を確認する。
+  5. 固定テキスト送信の入力欄と表示板の往復は、次の段（mainview のUI）で確認する。
 - 配布物（`build/stable-macos-arm64/XRift Bridge.app`。dmg は `artifacts/`）からの起動手順:
   1. `open "apps/bridge-gui/build/stable-macos-arm64/XRift Bridge.app"` で起動する。
      初回は自己展開（`Application Support/net.xrift.bridge-gui` への書込み）が入る。

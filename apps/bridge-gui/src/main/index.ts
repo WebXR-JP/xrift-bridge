@@ -1,4 +1,5 @@
 import Electrobun, { BrowserWindow, type ElectrobunEvent } from "electrobun/main";
+import { PRODUCTION_ORIGIN } from "bridge-server";
 import { GuiBackend } from "./backend.ts";
 import { createManagementRpc } from "./rpc.ts";
 
@@ -8,8 +9,24 @@ import { createManagementRpc } from "./rpc.ts";
  */
 const NAVIGATION_RULES = JSON.stringify(["^*", "views://mainview/*"]);
 
+/**
+ * 明示的な開発設定として追加する許可 `Origin`（カンマ区切り）。
+ *
+ * 開発ワールドを `http://localhost:5173` で動かす場合は
+ * `BRIDGE_GUI_DEV_ORIGINS=http://localhost:5173` を設定する。既定は空であり、
+ * 本番の許可 `Origin` は `PRODUCTION_ORIGIN` のみである。管理操作として
+ * `Origin` を編集する口は公開しない。
+ */
+const devOrigins = (process.env.BRIDGE_GUI_DEV_ORIGINS ?? "")
+  .split(",")
+  .map((value) => value.trim())
+  .filter((value) => value.length > 0);
+
+const backendOptions =
+  devOrigins.length === 0 ? undefined : { allowedOrigins: [PRODUCTION_ORIGIN, ...devOrigins] };
+
 // GUI バックエンドの生成は非同期であるため、到達前から共有する。
-const backendPromise: Promise<GuiBackend> = GuiBackend.create();
+const backendPromise: Promise<GuiBackend> = GuiBackend.create(backendOptions);
 // 終了手順の共有。二度目以降は同じ終了を待つ（冪等）。
 let shutdownTask: Promise<void> | null = null;
 // 後始末が終わり、終了・閉鎖の再要求を許可できるか。
