@@ -13,6 +13,7 @@ import {
   createBridgeAppCore,
   DIAGNOSTIC_PORT_ID,
   diagnosticPlugin,
+  TEXT_SESSION_ID,
   type BridgeAppCore,
   type DiagnosticStats,
   type PluginInstanceHandle,
@@ -34,6 +35,8 @@ export interface BridgeDiagnostics {
  * 開始通知（reliable）でインスタンスを生成・割当てし、終了通知で統計を
  * 累積値へ回収してから削除する。既存セッションは初期走査で割り当てる。
  * 再接続の同名セッションへ割当ては継承しない。
+ * テキスト表示用セッション（論理名 `text`）は診断割当ての対象外とし、
+ * テキスト割当てと排他にする。
  *
  * @param server - 起動中のブリッジ。
  * @returns 診断統計の取得口と終了口。
@@ -48,6 +51,8 @@ export function startDiagnostics(server: BridgeServer): BridgeDiagnostics {
   const attach = (info: BridgeSessionInfo): void => {
     if (closed) return;
     if (info.kind !== "reliable") return;
+    // テキスト表示用セッションは診断割当ての対象外とし、テキスト割当てと排他にする。
+    if (info.sessionId === TEXT_SESSION_ID) return;
     if (live.has(info.localSessionId)) return;
     const handle = core.createInstance(diagnosticPlugin);
     try {

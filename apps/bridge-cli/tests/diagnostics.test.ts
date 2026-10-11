@@ -19,6 +19,7 @@ import type {
 } from "bridge-server";
 import type { SessionEnd } from "bridge-protocol/transport";
 import { createBridgeServer, type BridgeServer as RealBridgeServer } from "bridge-server";
+import { TEXT_SESSION_ID } from "bridge-app-core";
 import { handleCommand } from "../src/index.ts";
 import { startDiagnostics, type BridgeDiagnostics } from "../src/diagnostics.ts";
 
@@ -282,6 +283,20 @@ test("latestセッションは診断対象にしない", () => {
   const started = fake.startLatest("pose");
 
   fake.deliver(started.info.localSessionId, { x: 7 });
+  expect(started.session.sent).toEqual([]);
+  expect(diagnostics.getStats()).toEqual({ diagnosticEcho: 0, diagnosticPing: 0 });
+  fake.end(started.info.localSessionId);
+  expect(diagnostics.getStats()).toEqual({ diagnosticEcho: 0, diagnosticPing: 0 });
+});
+
+test("テキスト表示用セッションは診断対象にしない", () => {
+  const fake = new FakeServer();
+  const diagnostics = startOn(fake);
+  // 論理名 `text` の reliable セッションを開始しても診断は割り当てない。
+  const started = fake.startReliable(TEXT_SESSION_ID);
+
+  fake.deliver(started.info.localSessionId, { op: "echo", id: "対象外-1", value: 1 });
+  fake.deliver(started.info.localSessionId, { op: "ping", id: "対象外-2" });
   expect(started.session.sent).toEqual([]);
   expect(diagnostics.getStats()).toEqual({ diagnosticEcho: 0, diagnosticPing: 0 });
   fake.end(started.info.localSessionId);
