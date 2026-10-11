@@ -260,10 +260,12 @@ document.addEventListener("click", (event) => {
     return;
   }
   const action = target.dataset["action"];
-  const id = target.dataset["id"];
-  if (action === undefined || id === undefined) {
+  if (action === undefined) {
     return;
   }
+  // ADR: 識別子が不要な操作（受付の開閉・終了）もあるため `data-id` は
+  // 必須にしない。必要な操作だけが `handleAction` 内で `id` を使う。
+  const id = target.dataset["id"] ?? "";
   void handleAction(action, id);
 });
 
