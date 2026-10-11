@@ -197,6 +197,20 @@ export const TEXT_SEND_REQUEST_TIMEOUT_MS = 15_000;
  */
 export const PLUGIN_PENDING_TIMEOUT_MS = 15_000;
 
+/**
+ * 子画面の初回取得の試行回数。
+ *
+ * 初回同期の到達保証であり、RPC の既定待機での取りこぼし
+ * （子画面側の接続確立・主処理の混雑）に備えて bounded に再試行する。
+ * 使い果たしたら子画面に残し、main 側の準備完了待ちの期限超過に任せる。
+ */
+export const PLUGIN_INITIAL_FETCH_ATTEMPTS = 3;
+
+/**
+ * 子画面の初回取得の再試行間隔（ミリ秒）。
+ */
+export const PLUGIN_INITIAL_FETCH_RETRY_MS = 1_000;
+
 /** 実プラグイン子画面の種別。 */
 export type PluginUiMountKind =
   /** テキスト個体に束縛する子画面。 */

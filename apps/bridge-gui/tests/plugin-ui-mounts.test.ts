@@ -317,6 +317,49 @@ test("生成待ちの期限超過を失敗表示に回し再配置しない", ()
   expect(coordinator.listFailures()).toHaveLength(1);
 });
 
+test("結線後に準備完了が無いまま期限超過したら失敗表示に回し再配置しない", () => {
+  const { backend, coordinator, setNow } = setup();
+  backend.textBinding = { instanceId: "instance-1", localSessionId: "local-1", portId: "text" };
+  backend.textView = TEXT_VIEW;
+  coordinator.syncNow();
+  const placement = coordinator.listPlacements()[0];
+  if (placement === undefined) throw new Error("配置が無い。");
+  const view = new FakeView(11, 7, placement.initialUrl);
+  coordinator.handleTagCreated(view);
+  expect(coordinator.listPlacements()[0]?.phase).toBe("bound");
+  // 子画面の初期取得が無いまま期限を過ぎると失敗表示に回る。
+  setNow(PLUGIN_PENDING_TIMEOUT_MS + 1);
+  expect(coordinator.syncNow()).toBe(true);
+  expect(coordinator.size).toBe(0);
+  expect(view.removed).toBe(true);
+  const failures = coordinator.listFailures();
+  expect(failures).toHaveLength(1);
+  expect(failures[0]?.kind).toBe("text");
+  expect(failures[0]?.instanceId).toBe("instance-1");
+  // 現割当てが残っていても明示の再試行まで再配置しない。
+  expect(coordinator.syncNow()).toBe(false);
+  expect(coordinator.size).toBe(0);
+  expect(coordinator.listFailures()).toHaveLength(1);
+});
+
+test("準備完了があれば期限超過で回収しない", () => {
+  const { backend, coordinator, setNow } = setup();
+  backend.textBinding = { instanceId: "instance-1", localSessionId: "local-1", portId: "text" };
+  backend.textView = TEXT_VIEW;
+  coordinator.syncNow();
+  const placement = coordinator.listPlacements()[0];
+  if (placement === undefined) throw new Error("配置が無い。");
+  const view = new FakeView(11, 7, placement.initialUrl);
+  coordinator.handleTagCreated(view);
+  coordinator.handleGetTextState(placement.mountId);
+  setNow(PLUGIN_PENDING_TIMEOUT_MS + 1);
+  expect(coordinator.syncNow()).toBe(false);
+  expect(coordinator.size).toBe(1);
+  expect(view.removed).toBe(false);
+  expect(coordinator.listFailures()).toHaveLength(0);
+  expect(coordinator.listPlacements()[0]?.ready).toBe(true);
+});
+
 test("再試行で現割当てへ再配置する", () => {
   const { backend, coordinator, setNow } = setup();
   backend.textBinding = { instanceId: "instance-1", localSessionId: "local-1", portId: "text" };

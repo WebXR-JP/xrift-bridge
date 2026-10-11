@@ -18,8 +18,8 @@
  *   依存しない。初期化前 DOM 削除でも native 生成が止まらない段0の対策
  *   （退役集合・遅延生成回収）を実結線にも適用する。
  * - 失敗はそのマウントに局所化する。生成・読込み・初期 RPC の失敗と
- *   生成待ちの期限超過は対応付けを回収して失敗表示に回し、インスタンスや
- *   Session を自動解除せず、送信も自動再実行しない。再生成は明示の
+ *   生成待ち・準備完了待ちの期限超過は対応付けを回収して失敗表示に回し、
+ *   インスタンスや Session を自動解除せず、送信も自動再実行しない。再生成は明示の
  *   再試行だけが行う。
  * - 全工程は同期的であり、event loop 上で直列化される。
  *   退役と遅延生成のどちらが先でも残存を残さない。
@@ -156,7 +156,7 @@ interface PluginUiMountRecord {
   view: PluginUiChildView | null;
   /** 初期状態取得を受けた場合に真。 */
   ready: boolean;
-  /** 配置を受け付けた時刻（単調時計ではない）。生成待ちの期限用である。 */
+  /** 配置を受け付けた時刻（単調時計ではない）。生成待ち・準備完了待ちの期限用である。 */
   createdAt: number;
 }
 
@@ -187,7 +187,7 @@ export class PluginUiCoordinator implements InstanceChannelHooks {
   private readonly failures: PluginUiMountFailure[] = [];
   /** 失敗した実インスタンスの識別子。明示の再試行まで再配置しない。 */
   private readonly failedInstances = new Set<string>();
-  /** 生成待ちの走査タイマー。待ちが無ければ `null`。 */
+  /** 生成待ち・準備完了待ちの走査タイマー。待ちが無ければ `null`。 */
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
   private disposed = false;
 
@@ -195,7 +195,7 @@ export class PluginUiCoordinator implements InstanceChannelHooks {
    * @param parentWebviewId - 管理画面 Webview の識別子。親の照合に使う。
    * @param backend - 現割当てと個体別射影の最小口。
    * @param createChannel - 個体別チャネルの工場。SDK 依存はここに閉じる。
-   * @param now - 時刻取得。生成待ちの期限用であり、試験で差し替える。
+   * @param now - 時刻取得。生成待ち・準備完了待ちの期限用であり、試験で差し替える。
    */
   constructor(
     private readonly parentWebviewId: number,
@@ -231,7 +231,7 @@ export class PluginUiCoordinator implements InstanceChannelHooks {
    * 現割当てへ対応付けを追随させる。
    *
    * 終了した割当ての対応付けを回収し、新しい現割当てに配置を作り、
-   * 生成待ちの期限超過を失敗表示に回す。変化があれば backend の
+   * 生成待ち・準備完了待ちの期限超過を失敗表示に回す。変化があれば backend の
    * 共有時計へ通知を予約する。backend の取得失敗では何も変えない。
    *
    * @returns 対応付け・失敗表示を変えた場合に真。
@@ -262,11 +262,24 @@ export class PluginUiCoordinator implements InstanceChannelHooks {
     const nowMs = this.now();
     // ADR: 走査中の削除は当該の1行だけであり、`Map` の反復は壊さない。
     // 予約の追加は走査後に行い、反復中の追加はしない。
+    // ADR: 期限は配置からの総予算とし、生成待ちと準備完了待ちで分けない。
+    // タグ生成自体に時間を要した配置は子画面側も含めて不調とみなし、
+    // 黙って採用待ちに残さず失敗表示に回す。
     for (const record of this.mounts.values()) {
       if (record.phase === "pending" && nowMs - record.createdAt > PLUGIN_PENDING_TIMEOUT_MS) {
         this.failMount(
           record,
           "子画面の生成待ちが期限切れになった。管理画面の配置を確認すること。",
+        );
+        changed = true;
+      } else if (
+        record.phase === "bound" &&
+        !record.ready &&
+        nowMs - record.createdAt > PLUGIN_PENDING_TIMEOUT_MS
+      ) {
+        this.failMount(
+          record,
+          "子画面の準備完了が期限切れになった。管理画面の配置を確認すること。",
         );
         changed = true;
       }
@@ -736,12 +749,14 @@ export class PluginUiCoordinator implements InstanceChannelHooks {
   }
 
   /**
-   * 生成待ちの走査タイマーを保つ。待ちがある間だけ動かし、
+   * 生成待ち・準備完了待ちの走査タイマーを保つ。待ちがある間だけ動かし、
    * 無ければ止める。終了・破棄では残さない。
    */
   private maintainSweepTimer(): void {
-    const hasPending = [...this.mounts.values()].some((record) => record.phase === "pending");
-    if (this.disposed || !hasPending) {
+    const needsSweep = [...this.mounts.values()].some(
+      (record) => record.phase === "pending" || (record.phase === "bound" && !record.ready),
+    );
+    if (this.disposed || !needsSweep) {
       this.stopSweepTimer();
       return;
     }
@@ -761,7 +776,7 @@ export class PluginUiCoordinator implements InstanceChannelHooks {
     }
   }
 
-  /** 生成待ちの走査タイマーを止める。 */
+  /** 生成待ち・準備完了待ちの走査タイマーを止める。 */
   private stopSweepTimer(): void {
     const timer = this.sweepTimer;
     this.sweepTimer = null;

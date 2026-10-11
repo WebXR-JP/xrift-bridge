@@ -16,6 +16,8 @@ import { validateTextForSend } from "bridge-app-core/text-contract";
 import type { TextSendResult } from "bridge-app-core";
 import type { TextInstanceRpc, TextInstanceSnapshot } from "../../shared/plugin-instance.ts";
 import {
+  PLUGIN_INITIAL_FETCH_ATTEMPTS,
+  PLUGIN_INITIAL_FETCH_RETRY_MS,
   TEXT_SEND_REQUEST_TIMEOUT_MS,
   parsePluginMountId,
   pluginMountKindOf,
@@ -252,7 +254,27 @@ if (mountId === null || pluginMountKindOf(mountId) !== "text") {
 
   try {
     // 更新ハンドラ登録後に初回取得し、revision が新しいときだけ採用する。
-    adopt(await rpc.request.getTextState({}));
+    // ADR: 初回同期の到達保証のため bounded に再試行する。子画面側の接続確立や
+    // 主処理の混雑で RPC の既定待機に間に合わない場合に備える。使い果たしたら
+    // 子画面に残し、main 側の準備完了待ちの期限超過に任せる。自動再送はしない。
+    let fetched = false;
+    for (let attempt = 1; attempt <= PLUGIN_INITIAL_FETCH_ATTEMPTS; attempt += 1) {
+      try {
+        adopt(await rpc.request.getTextState({}));
+        fetched = true;
+        break;
+      } catch (error: unknown) {
+        console.log(`[bridge-gui] 初回取得に失敗した（${attempt}回目）: ${String(error)}`);
+        if (attempt < PLUGIN_INITIAL_FETCH_ATTEMPTS) {
+          await new Promise((resolve) => {
+            setTimeout(resolve, PLUGIN_INITIAL_FETCH_RETRY_MS);
+          });
+        }
+      }
+    }
+    if (!fetched) {
+      show("text-error", "初期取得に失敗した。管理画面の割当てを確認すること。");
+    }
   } catch (error: unknown) {
     console.log(`[bridge-gui] 初回取得・表示に失敗した: ${String(error)}`);
     show("text-error", "初期取得に失敗した。管理画面の割当てを確認すること。");
