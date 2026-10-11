@@ -42,13 +42,26 @@
     </div>
   </section>
 
+  <app-plugin-mounts
+    [mounts]="snapshot()?.pluginMounts ?? []"
+    [failures]="snapshot()?.pluginMountFailures ?? []"
+    (retryRequested)="onRetryPluginMounts()"
+  />
+
+  <app-spike-section
+    [spikes]="spikeMounts()"
+    (createRequested)="onCreateSpike()"
+    (pushRequested)="onPushSpike($event)"
+    (destroyRequested)="onDestroySpike($event)"
+    (resetRequested)="onResetSpikes()"
+  />
+
   <app-event-log [entries]="eventLog()" />
 
   <section class="card">
     <h2>子画面の配置先</h2>
-    <div class="row">
-      <button type="button" (click)="onCreateSpike()">子画面を作る</button>
-    </div>
+    <p class="note">管理領域とは別のペインであり、重ねない。</p>
     <div #spikeHost id="spike-host"></div>
+    <div #pluginHost id="plugin-host"></div>
   </section>
 </main>

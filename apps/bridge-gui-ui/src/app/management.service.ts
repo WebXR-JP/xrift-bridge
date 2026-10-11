@@ -5,8 +5,9 @@
  * 採用（`selectNewer`）・初期同期・共通操作処理だけを行う。DTO・操作・採用規約の
  * 再定義はしない。契約型（`ManagementRpc`・`ManagementSnapshot`・`selectNewer`）
  * は `bridge-gui-contract` の公開 subpath から再利用する（循環が無いことを
- * `tsc` で確かめる）。子画面タグの配置は既存の所有表（`spikeCreate` 発行の
- * DTO）とだけ結び付け、実プラグインの対応付けには触らない。
+ * `tsc` で確かめる）。子画面タグの配置は所有表の発行する配置用 DTO
+ * （実プラグインは snapshot の `pluginMounts`、段0は `spikeList` の結果）と
+ * だけ結び付け、任意 URL・HTML・preload は付けない。
  *
  * 比較コード本文・業務 payload・テキスト本文は signals・ログに残さない。
  * 比較コードの表示用取得結果だけを保留行の一時状態（`pairingViews`）に保持し、
@@ -19,7 +20,10 @@ import type {
   PairingViewResult,
 } from "bridge-gui-contract/management";
 import { selectNewer } from "bridge-gui-contract/management";
+import { PLUGIN_NAVIGATION_RULES_ATTRIBUTE } from "bridge-gui-contract/plugin-instance";
+import type { PluginUiMountPlacement } from "bridge-gui-contract/plugin-instance";
 import { SPIKE_NAVIGATION_RULES_ATTRIBUTE } from "bridge-gui-contract/plugin-spike";
+import type { SpikeMountSummary } from "bridge-gui-contract/plugin-spike";
 import { ManagementRpcClient } from "./rpc.ts";
 import { buildNgDebugProbeResult } from "./ng-probe.ts";
 
@@ -72,16 +76,31 @@ export class ManagementService {
   /** 受信記録。採用／無視と操作結果の要約だけを載せる。 */
   readonly eventLog = this.log.asReadonly();
 
-  /** テキスト操作の失敗表示。空なら失敗は無い。 */
+  /** テキスト操作の失敗表示。本文は含めない（失敗理由だけである）。 */
   readonly textError = this.textFailure.asReadonly();
+
+  // 段0スパイクの所有一覧の表示状態。タグ配置の照合元であり、
+  // `spikeList` の結果だけを載せる（履歴は持たない）。
+  private readonly spikeSummaries = signal<readonly SpikeMountSummary[]>([]);
+
+  /** 段0スパイクの所有一覧の表示状態。 */
+  readonly spikeMounts = this.spikeSummaries.asReadonly();
 
   // ADR: 二重押下での重複送信を避けるため、実行中の操作を識別子で覚える。
   // 汎用 store は作らず、この集合だけを重複抑止に使う。失敗・成功のいずれでも
   // 実行後は外す。
   private readonly inflight = new Set<string>();
 
-  /** 配置した子画面タグ。更新ごとの作り直しはしない。 */
-  private spikeTag: HTMLElement | null = null;
+  // ADR: 子画面タグは Angular テンプレートで宣言的に描画せず、安定した host
+  // 要素へ命令的に追加／削除する。表示状態の更新（revision 進行）で `src` の
+  // 再設定・タグの再生成・DOM の移動をしない。同一性は mountId 単位の所有表
+  // （実プラグインは snapshot の `pluginMounts`、段0は `spikeList` の結果）で
+  // 保ち、一度置いた要素は作り直さない。消えた mountId の要素だけを外す。
+  // 配置先の host は入れ物が `registerMountHosts` で渡す（`ViewChild` の要素）。
+  private readonly spikeTags = new Map<string, HTMLElement>();
+  private readonly pluginTags = new Map<string, HTMLElement>();
+  private spikeHost: HTMLElement | null = null;
+  private pluginHost: HTMLElement | null = null;
 
   constructor(private readonly rpc: ManagementRpcClient) {
     this.rpc.setProbeHandler(() => this.buildProbe());
@@ -115,6 +134,9 @@ export class ManagementService {
       document.title = `XRift Bridge 管理画面（Angular） — rev ${next.revision}`;
       console.log(`[bridge-gui-ng] 状態を更新した: via=${via} revision=${next.revision}`);
       this.appendLog(`更新 via=${via} revision=${next.revision}`);
+      // 実プラグイン子画面の配置は snapshot 由来であり、採用時に合わせる。
+      // 段0は `spikeList` 由来であり、ここでは触らない。
+      this.reconcilePluginTags(next.pluginMounts);
     } else {
       console.log(`[bridge-gui-ng] 古い状態を無視した: via=${via} incoming=${incoming.revision}`);
       this.appendLog(`無視 via=${via} incoming=${incoming.revision} current=${previous?.revision}`);
@@ -207,7 +229,7 @@ export class ManagementService {
       componentMounted: document.querySelector("app-root") !== null,
       revision: this.current()?.revision ?? null,
       webviewTagCount: document.querySelectorAll("electrobun-webview").length,
-      spikeTagKept: this.spikeTag !== null && document.contains(this.spikeTag),
+      spikeTagKept: this.isSpikeTagKept(),
       execMark: readExecMark(),
       hasGetComponent: component.hasGetComponent,
       resolvedComponent: component.resolvedComponent,
@@ -240,8 +262,158 @@ export class ManagementService {
     try {
       await this.rpc.resetSpike();
       console.log("[bridge-gui-ng] 子画面の残存を掃除した");
+      await this.refreshSpike("子画面の掃除");
     } catch (error: unknown) {
       console.log(`[bridge-gui-ng] 子画面の掃除に失敗した: ${via} ${String(error)}`);
+    }
+  }
+
+  /**
+   * 子画面タグの配置先を登録する。入れ物の安定した host 要素を受ける。
+   *
+   * 登録時に採用中の表示状態・所有一覧と合わせ、以後は採用・読直しで
+   * 自動的に足し引きする。host 要素自体は作り替えない。
+   *
+   * @param spike - 段0スパイク子画面の配置先。
+   * @param plugin - 実プラグイン子画面の配置先。
+   */
+  registerMountHosts(spike: HTMLElement, plugin: HTMLElement): void {
+    this.spikeHost = spike;
+    this.pluginHost = plugin;
+    const current = this.current();
+    if (current !== null) {
+      this.reconcilePluginTags(current.pluginMounts);
+    }
+    this.reconcileSpikeTags(this.spikeSummaries());
+  }
+
+  /** 子画面タグを1つ作る。属性は所有表の発行値だけを載せる。 */
+  private buildMountTag(
+    kind: "spike" | "plugin",
+    mountId: string,
+    initialUrl: string,
+  ): HTMLElement {
+    const tag = document.createElement("electrobun-webview");
+    // 初期 URL は main 発行の DTO をそのまま載せる。任意 URL・HTML・preload は付けない。
+    tag.setAttribute("src", initialUrl);
+    tag.setAttribute("renderer", "native");
+    tag.setAttribute(
+      "navigation-rules",
+      kind === "spike" ? SPIKE_NAVIGATION_RULES_ATTRIBUTE : PLUGIN_NAVIGATION_RULES_ATTRIBUTE,
+    );
+    // `sandbox` 属性は付けない（main が照合する）。
+    tag.id = `${kind}-${mountId}`;
+    return tag;
+  }
+
+  /**
+   * 段0スパイクの配置用 DTO に従ってタグを一度だけ置く。既存は作り直さない。
+   *
+   * @param mountId - 所有表が発行したマウント識別子。
+   * @param initialUrl - 所有表が発行した初期 URL。
+   */
+  private placeSpikeTag(mountId: string, initialUrl: string): void {
+    if (this.spikeTags.has(mountId) || this.spikeHost === null) {
+      return;
+    }
+    const tag = this.buildMountTag("spike", mountId, initialUrl);
+    this.spikeHost.append(tag);
+    this.spikeTags.set(mountId, tag);
+  }
+
+  /** 配置中の段0タグを外す。表示の破棄は main の所有表が行う。 */
+  private dropSpikeTag(mountId: string): void {
+    const tag = this.spikeTags.get(mountId);
+    if (tag === undefined) {
+      return;
+    }
+    tag.remove();
+    this.spikeTags.delete(mountId);
+  }
+
+  /**
+   * 段0の所有一覧に合わせてタグを足し引きする。既存は触らない。
+   *
+   * @param mounts - `spikeList` の結果。
+   */
+  reconcileSpikeTags(mounts: readonly SpikeMountSummary[]): void {
+    const live = new Set(mounts.map((mount) => mount.mountId));
+    // 巡回中の削除は当該項目だけであり、仕様上安全である（未訪問の削除は起きない）。
+    for (const mountId of this.spikeTags.keys()) {
+      if (!live.has(mountId)) {
+        this.dropSpikeTag(mountId);
+        this.appendLog(`子画面を外した mountId=${mountId}`);
+      }
+    }
+    for (const mount of mounts) {
+      if (!this.spikeTags.has(mount.mountId)) {
+        this.placeSpikeTag(mount.mountId, mount.initialUrl);
+        // host 未登録で置けなかった場合は記録しない（次回の登録・読直しで置く）。
+        if (this.spikeTags.has(mount.mountId)) {
+          this.appendLog(`子画面を置いた mountId=${mount.mountId}`);
+        }
+      }
+    }
+  }
+
+  /**
+   * 実プラグインの配置用 DTO に従ってタグを一度だけ置く。既存は作り直さない。
+   *
+   * @param mountId - 所有表が発行したマウント識別子。
+   * @param initialUrl - 所有表が発行した初期 URL。
+   */
+  private placePluginTag(mountId: string, initialUrl: string): void {
+    if (this.pluginTags.has(mountId) || this.pluginHost === null) {
+      return;
+    }
+    const tag = this.buildMountTag("plugin", mountId, initialUrl);
+    this.pluginHost.append(tag);
+    this.pluginTags.set(mountId, tag);
+  }
+
+  /** 配置中の実プラグイン用タグを外す。表示の破棄は main の対応付けが行う。 */
+  private dropPluginTag(mountId: string): void {
+    const tag = this.pluginTags.get(mountId);
+    if (tag === undefined) {
+      return;
+    }
+    tag.remove();
+    this.pluginTags.delete(mountId);
+  }
+
+  /**
+   * 実プラグインの配置一覧に合わせてタグを足し引きする。既存は触らない。
+   *
+   * @param mounts - snapshot の配置一覧。
+   */
+  reconcilePluginTags(mounts: readonly PluginUiMountPlacement[]): void {
+    const live = new Set(mounts.map((mount) => mount.mountId));
+    // 巡回中の削除は当該項目だけであり、仕様上安全である（未訪問の削除は起きない）。
+    for (const mountId of this.pluginTags.keys()) {
+      if (!live.has(mountId)) {
+        this.dropPluginTag(mountId);
+        this.appendLog(`実プラグイン子画面を外した mountId=${mountId}`);
+      }
+    }
+    for (const mount of mounts) {
+      if (!this.pluginTags.has(mount.mountId)) {
+        this.placePluginTag(mount.mountId, mount.initialUrl);
+        // host 未登録で置けなかった場合は記録しない（次回の登録・採用で置く）。
+        if (this.pluginTags.has(mount.mountId)) {
+          this.appendLog(`実プラグイン子画面を置いた mountId=${mount.mountId}`);
+        }
+      }
+    }
+  }
+
+  /** 所有一覧を読み直し、タグと表示を合わせる。 */
+  async refreshSpike(via: string): Promise<void> {
+    try {
+      const mounts = await this.rpc.listSpikes();
+      this.spikeSummaries.set(mounts);
+      this.reconcileSpikeTags(mounts);
+    } catch (error: unknown) {
+      console.log(`[bridge-gui-ng] 子画面の再取得に失敗した: ${via} ${String(error)}`);
     }
   }
 
@@ -516,44 +688,125 @@ export class ManagementService {
   }
 
   /**
-   * 子画面を1つ作り、配置用 DTO に従ってタグを一度だけ置く。
+   * 子画面を1つ作り、所有一覧の読直しでタグを置く。
    *
-   * @param host - 配置先の要素。
+   * 作った直後の `spikeCreate` の応答だけでは置かず、`spikeList` の結果に
+   * 合わせて置く（vanilla の `refreshSpike` と同様）。
    */
-  async createSpike(host: HTMLElement): Promise<void> {
+  async createSpike(): Promise<void> {
+    if (!this.beginOperation("spike-create")) {
+      return;
+    }
     try {
       const created = await this.rpc.createSpike();
       console.log(`[bridge-gui-ng] 子画面を作った: mountId=${created.mountId}`);
-      this.placeSpikeTag(created.mountId, created.initialUrl, host);
+      this.appendLog(`子画面を作った mountId=${created.mountId}`);
+      await this.refreshSpike("子画面作成");
     } catch (error: unknown) {
       console.log(`[bridge-gui-ng] 子画面の作成に失敗した: ${String(error)}`);
+      this.appendLog("子画面の作成に失敗した");
+    } finally {
+      this.endOperation("spike-create");
     }
   }
 
   /**
-   * 配置用 DTO に従ってタグを一度だけ置く。既存は作り直さない。
+   * 子画面へ push を送り、所有一覧を読み直す。混線の確認用である。
    *
-   * @param mountId - 所有表が発行したマウント識別子。
-   * @param initialUrl - 所有表が発行した初期 URL。
-   * @param host - 配置先の要素。
+   * @param mountId - 送り先マウントの識別子。
    */
-  placeSpikeTag(mountId: string, initialUrl: string, host: HTMLElement): void {
-    if (this.spikeTag !== null) {
+  async pushSpike(mountId: string): Promise<void> {
+    const key = `spike-push:${mountId}`;
+    if (!this.beginOperation(key)) {
       return;
     }
-    const tag = document.createElement("electrobun-webview");
-    // 初期 URL は main 発行の DTO をそのまま載せる。任意 URL・HTML・preload は付けない。
-    tag.setAttribute("src", initialUrl);
-    tag.setAttribute("renderer", "native");
-    tag.setAttribute("navigation-rules", SPIKE_NAVIGATION_RULES_ATTRIBUTE);
-    tag.id = `ng-spike-${mountId}`;
-    host.append(tag);
-    this.spikeTag = tag;
-    console.log(`[bridge-gui-ng] 子画面を置いた mountId=${mountId}`);
+    try {
+      const pushed = await this.rpc.pushSpike(mountId);
+      console.log(`[bridge-gui-ng] 子画面へ送った: mountId=${mountId} revision=${pushed.revision}`);
+      this.appendLog(`子画面へ送った mountId=${mountId}`);
+      await this.refreshSpike("子画面送信");
+    } catch (error: unknown) {
+      console.log(`[bridge-gui-ng] 子画面への送信に失敗した: mountId=${mountId} ${String(error)}`);
+      this.appendLog(`子画面への送信に失敗した mountId=${mountId}`);
+    } finally {
+      this.endOperation(key);
+    }
   }
 
-  /** 配置した子画面タグが文書に残っているか。同一性保持の確認用である。 */
+  /**
+   * 子画面を1つ外し、所有一覧を読み直す。
+   *
+   * @param mountId - 外す子画面のマウント識別子。
+   */
+  async destroySpike(mountId: string): Promise<void> {
+    const key = `spike-destroy:${mountId}`;
+    if (!this.beginOperation(key)) {
+      return;
+    }
+    try {
+      await this.rpc.destroySpike(mountId);
+      console.log(`[bridge-gui-ng] 子画面を外した: mountId=${mountId}`);
+      this.appendLog(`子画面を外した mountId=${mountId}`);
+      await this.refreshSpike("子画面破棄");
+    } catch (error: unknown) {
+      console.log(`[bridge-gui-ng] 子画面の破棄に失敗した: mountId=${mountId} ${String(error)}`);
+      this.appendLog(`子画面の破棄に失敗した mountId=${mountId}`);
+    } finally {
+      this.endOperation(key);
+    }
+  }
+
+  /** 子画面を全て外し、所有一覧を読み直す。 */
+  async resetSpikes(): Promise<void> {
+    if (!this.beginOperation("spike-reset")) {
+      return;
+    }
+    try {
+      await this.rpc.resetSpike();
+      console.log("[bridge-gui-ng] 子画面を全て外した");
+      this.appendLog("子画面を全て外した");
+      await this.refreshSpike("子画面全破棄");
+    } catch (error: unknown) {
+      console.log(`[bridge-gui-ng] 子画面の全破棄に失敗した: ${String(error)}`);
+      this.appendLog("子画面の全破棄に失敗した");
+    } finally {
+      this.endOperation("spike-reset");
+    }
+  }
+
+  /**
+   * 実プラグイン子画面の失敗消去と現割当てへの再配置を要求する。
+   *
+   * 失敗表示を消し、現在の割当てに配置が無いものを作り直す。
+   * 既存の配置・割当て・送信には触らない。
+   */
+  async retryPluginMounts(): Promise<void> {
+    if (!this.beginOperation("retry-plugin-mounts")) {
+      return;
+    }
+    try {
+      await this.rpc.retryPluginMounts();
+      console.log("[bridge-gui-ng] 実プラグイン子画面の再試行を要求した");
+      this.appendLog("実プラグイン子画面の再試行を要求した");
+      await this.refresh("実プラグイン再試行");
+    } catch (error: unknown) {
+      console.log(`[bridge-gui-ng] 実プラグイン子画面の再試行に失敗した: ${String(error)}`);
+      this.appendLog("実プラグイン子画面の再試行に失敗した");
+    } finally {
+      this.endOperation("retry-plugin-mounts");
+    }
+  }
+
+  /** 配置した段0子画面タグが文書に残っているか。同一性保持の確認用である。 */
   isSpikeTagKept(): boolean {
-    return this.spikeTag !== null && document.contains(this.spikeTag);
+    if (this.spikeTags.size === 0) {
+      return false;
+    }
+    for (const tag of this.spikeTags.values()) {
+      if (!document.contains(tag)) {
+        return false;
+      }
+    }
+    return true;
   }
 }

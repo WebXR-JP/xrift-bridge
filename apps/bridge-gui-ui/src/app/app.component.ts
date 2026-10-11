@@ -13,7 +13,9 @@ import { EventLogComponent } from "./event-log.component.ts";
 import { ManagementService } from "./management.service.ts";
 import { PendingListComponent } from "./pending-list.component.ts";
 import type { ApproveRequest } from "./pending-row.component.ts";
+import { PluginMountsComponent } from "./plugin-mounts.component.ts";
 import { SessionListComponent } from "./session-list.component.ts";
+import { SpikeSectionComponent } from "./spike-section.component.ts";
 import { StatusSummaryComponent } from "./status-summary.component.ts";
 import { TextCardComponent } from "./text-card.component.ts";
 
@@ -25,7 +27,9 @@ import { TextCardComponent } from "./text-card.component.ts";
     ConnectionListComponent,
     EventLogComponent,
     PendingListComponent,
+    PluginMountsComponent,
     SessionListComponent,
+    SpikeSectionComponent,
     StatusSummaryComponent,
     TextCardComponent,
   ],
@@ -53,15 +57,35 @@ export class AppComponent implements OnInit {
     return this.management.textError;
   }
 
+  /** 段0スパイクの所有一覧。 */
+  get spikeMounts() {
+    return this.management.spikeMounts;
+  }
+
   @ViewChild("spikeHost", { static: true })
   spikeHost?: ElementRef<HTMLElement>;
+
+  @ViewChild("pluginHost", { static: true })
+  pluginHost?: ElementRef<HTMLElement>;
 
   constructor(private readonly management: ManagementService) {}
 
   async ngOnInit(): Promise<void> {
     console.log("[bridge-gui-ng] Angular 画面を起動した");
+    // ADR: 子画面タグの配置先は安定した host 要素に固定し、テンプレートでは
+    // 描画しない。表示状態の更新で作り替えない。
+    // ADR: 読み込み直しの残存掃除（vanilla の init `spikeReset` 相当）は main
+    // 側の `did-navigate` が遷移時に行うため、ここでは送らない（重複排除）。
+    // 初期化では所有一覧の読直しだけを行い、タグと表示を合わせる。
+    if (this.spikeHost !== undefined && this.pluginHost !== undefined) {
+      this.management.registerMountHosts(
+        this.spikeHost.nativeElement,
+        this.pluginHost.nativeElement,
+      );
+    }
     await this.management.fetchInitial();
     this.management.notifyReady();
+    await this.management.refreshSpike("初期化");
   }
 
   /** 受付を有効化する（人間の操作用）。 */
@@ -136,8 +160,34 @@ export class AppComponent implements OnInit {
 
   /** 子画面を作る（人間の操作用）。 */
   async onCreateSpike(): Promise<void> {
-    if (this.spikeHost !== undefined) {
-      await this.management.createSpike(this.spikeHost.nativeElement);
-    }
+    await this.management.createSpike();
+  }
+
+  /**
+   * 子画面へ送る（人間の操作用）。混線の確認用である。
+   *
+   * @param mountId - 送り先マウントの識別子。
+   */
+  async onPushSpike(mountId: string): Promise<void> {
+    await this.management.pushSpike(mountId);
+  }
+
+  /**
+   * 子画面を外す（人間の操作用）。
+   *
+   * @param mountId - 外す子画面のマウント識別子。
+   */
+  async onDestroySpike(mountId: string): Promise<void> {
+    await this.management.destroySpike(mountId);
+  }
+
+  /** 子画面を全て外す（人間の操作用）。 */
+  async onResetSpikes(): Promise<void> {
+    await this.management.resetSpikes();
+  }
+
+  /** 実プラグイン子画面の再試行を要求する（人間の操作用）。 */
+  async onRetryPluginMounts(): Promise<void> {
+    await this.management.retryPluginMounts();
   }
 }

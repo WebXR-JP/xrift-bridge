@@ -18,8 +18,11 @@ function prepareServiceStub() {
     pairingViews: signal(new Map()),
     eventLog: signal([] as readonly string[]),
     textError: signal(""),
+    spikeMounts: signal([] as readonly never[]),
     fetchInitial: vi.fn(async () => {}),
     notifyReady: vi.fn(),
+    registerMountHosts: vi.fn((_spike: HTMLElement, _plugin: HTMLElement) => {}),
+    refreshSpike: vi.fn(async (_via: string) => {}),
     enableAcceptance: vi.fn(async () => {}),
     disableAcceptance: vi.fn(async () => {}),
     showPairingView: vi.fn(async (_requestId: string) => {}),
@@ -30,7 +33,11 @@ function prepareServiceStub() {
     assignText: vi.fn(async () => {}),
     unassignText: vi.fn(async () => {}),
     quit: vi.fn(async () => {}),
-    createSpike: vi.fn(async (_host: HTMLElement) => {}),
+    createSpike: vi.fn(async () => {}),
+    pushSpike: vi.fn(async (_mountId: string) => {}),
+    destroySpike: vi.fn(async (_mountId: string) => {}),
+    resetSpikes: vi.fn(async () => {}),
+    retryPluginMounts: vi.fn(async () => {}),
   };
 }
 
@@ -74,5 +81,16 @@ describe("入れ物の起動", () => {
     expect(text).toContain("テキスト送信");
     expect(text).toContain("終了");
     expect(text).toContain("受信記録");
+  });
+
+  it("子画面の一覧と配置先を描画し初期化で所有を読み直す", async () => {
+    const { fixture, stub } = await prepareRoot();
+    const text: string = fixture.nativeElement.textContent ?? "";
+    expect(text).toContain("実プラグイン");
+    expect(text).toContain("段0スパイク");
+    expect(fixture.nativeElement.querySelector("#spike-host")).not.toBe(null);
+    expect(fixture.nativeElement.querySelector("#plugin-host")).not.toBe(null);
+    expect(stub.registerMountHosts).toHaveBeenCalledTimes(1);
+    expect(stub.refreshSpike).toHaveBeenCalledWith("初期化");
   });
 });

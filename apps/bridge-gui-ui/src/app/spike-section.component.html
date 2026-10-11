@@ -1,0 +1,23 @@
+<section class="card">
+  <h2>埋込み検証（段0スパイク）</h2>
+  <p class="note">検証用の小さな子画面を置き、往復と破棄を確かめる。実プラグインの結線はしない。</p>
+  <div class="row">
+    <button type="button" (click)="createRequested.emit()">子画面を作る</button>
+    <button type="button" (click)="resetRequested.emit()">子画面を全て外す</button>
+  </div>
+  @if (spikes().length === 0) {
+    <ul class="entries">
+      <li>子画面は無い</li>
+    </ul>
+  } @else {
+    <ul class="entries">
+      @for (mount of spikes(); track mount.mountId) {
+        <li>
+          <span>{{ mount.mountId }}（{{ describeState(mount) }}・rev {{ mount.revision }}） </span>
+          <button type="button" (click)="pushRequested.emit(mount.mountId)">送る</button>
+          <button type="button" (click)="destroyRequested.emit(mount.mountId)">外す</button>
+        </li>
+      }
+    </ul>
+  }
+</section>

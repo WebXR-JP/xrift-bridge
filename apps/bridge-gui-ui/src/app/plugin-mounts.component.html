@@ -1,0 +1,26 @@
+<section class="card">
+  <h2>子画面の配置（実プラグイン）</h2>
+  <p class="note">
+    実在インスタンスに対応する子画面を置き、読込み状態を確かめる。失敗はその配置に局所化し、再試行で作り直す。
+  </p>
+  <div class="row">
+    <button type="button" (click)="retryRequested.emit()">失敗を消して作り直す</button>
+  </div>
+  @if (empty) {
+    <ul class="entries">
+      <li>実プラグイン子画面は無い</li>
+    </ul>
+  } @else {
+    <ul class="entries">
+      @for (mount of mounts(); track mount.mountId) {
+        <li>
+          {{ mount.mountId }}（{{ mount.kind }}・{{ describeState(mount) }}・rev
+          {{ mount.revision }}・割当て先 {{ mount.localSessionId }}）
+        </li>
+      }
+      @for (failure of failures(); track failure.kind + failure.reason) {
+        <li>失敗（{{ failure.kind }}）: {{ failure.reason }}</li>
+      }
+    </ul>
+  }
+</section>

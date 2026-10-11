@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import type { PairingViewResult } from "bridge-gui-contract/management";
+import type { SpikeMountSummary } from "bridge-gui-contract/plugin-spike";
 import { ManagementService } from "./management.service.ts";
 import type { ManagementRpcClient, StateChangedHandler } from "./rpc.ts";
 import { makeSnapshot } from "./snapshot-fixture.ts";
@@ -15,6 +16,7 @@ function makePairingView(requestId: string): PairingViewResult {
 /** 試験用の接続口の代役。push 処理の受付けと送受信の記録だけを行う。 */
 function prepareRpcStub() {
   let pushHandler: StateChangedHandler | null = null;
+  const noSpikes: readonly SpikeMountSummary[] = [];
   const client = {
     setProbeHandler: vi.fn(),
     onStateChanged: vi.fn((handler: StateChangedHandler): (() => void) => {
@@ -42,8 +44,15 @@ function prepareRpcStub() {
     unassignText: vi.fn(async () => ({ ok: true as const })),
     quit: vi.fn(async () => ({ ok: true as const })),
     notifyViewReady: vi.fn(),
-    createSpike: vi.fn(),
-    resetSpike: vi.fn(),
+    createSpike: vi.fn(async () => ({
+      mountId: "spike-1",
+      initialUrl: "views://plugin-host/blank.html#mount=spike-1",
+    })),
+    destroySpike: vi.fn(async () => ({ ok: true as const })),
+    pushSpike: vi.fn(async () => ({ revision: 2 })),
+    listSpikes: vi.fn(async (): Promise<readonly SpikeMountSummary[]> => noSpikes),
+    resetSpike: vi.fn(async () => ({ ok: true as const })),
+    retryPluginMounts: vi.fn(async () => ({ ok: true as const })),
   };
   return { client, pushHandler: (): StateChangedHandler | null => pushHandler };
 }
@@ -321,5 +330,194 @@ describe("秘密の非記録", () => {
     await service.showPairingView("r1");
     expect(JSON.stringify(service.snapshot())).not.toContain("041003");
     expect(JSON.stringify(service.snapshot())).not.toContain("041 003");
+  });
+});
+
+// 子画面タグの照合。happy-dom では `electrobun-webview` は未知要素として
+// 扱われるため、属性・同一ノード保持・個数で確かめる（描画は保証しない）。
+// 本文は扱わない（mountId の要約だけを記録する）。
+
+/** 照合試験用の配置先。文書に付け、試験後に外す。 */
+function prepareMountHosts() {
+  const spike = document.createElement("div");
+  const plugin = document.createElement("div");
+  document.body.append(spike, plugin);
+  return {
+    spike,
+    plugin,
+    dispose(): void {
+      spike.remove();
+      plugin.remove();
+    },
+  };
+}
+
+/** 段0所有一覧の試験値。 */
+function makeSpikeMount(mountId: string, revision = 1) {
+  return {
+    mountId,
+    initialUrl: `views://plugin-host/blank.html#mount=${mountId}`,
+    phase: "pending" as const,
+    ready: false,
+    revision,
+  };
+}
+
+/** 実プラグイン配置一覧の試験値。 */
+function makePluginMount(mountId: string) {
+  return {
+    mountId,
+    kind: "text" as const,
+    initialUrl: `views://plugin-host/blank.html#mount=${mountId}`,
+    phase: "pending" as const,
+    ready: false,
+    revision: 1,
+    instanceId: "i1",
+    localSessionId: "s1",
+    portId: "text",
+  };
+}
+
+describe("子画面タグの照合", () => {
+  it("段0所有一覧に従ってタグを置き消えたものを外す", () => {
+    const hosts = prepareMountHosts();
+    try {
+      const { service } = prepareService();
+      service.registerMountHosts(hosts.spike, hosts.plugin);
+      service.reconcileSpikeTags([makeSpikeMount("spike-1"), makeSpikeMount("spike-2")]);
+      expect(hosts.spike.querySelectorAll("electrobun-webview").length).toBe(2);
+      service.reconcileSpikeTags([makeSpikeMount("spike-2")]);
+      const tags = hosts.spike.querySelectorAll("electrobun-webview");
+      expect(tags.length).toBe(1);
+      expect(tags[0]?.id).toBe("spike-spike-2");
+      expect(service.eventLog().join("\n")).toContain("mountId=spike-1");
+    } finally {
+      hosts.dispose();
+    }
+  });
+
+  it("更新でタグを作り直さず src を変えない", () => {
+    const hosts = prepareMountHosts();
+    try {
+      const { service } = prepareService();
+      service.registerMountHosts(hosts.spike, hosts.plugin);
+      service.reconcileSpikeTags([makeSpikeMount("spike-1")]);
+      const before = hosts.spike.querySelector("electrobun-webview");
+      // 所有一覧の URL 表記が変わっても既存は触らない。
+      service.reconcileSpikeTags([
+        {
+          ...makeSpikeMount("spike-1", 2),
+          initialUrl: "views://plugin-host/blank.html#mount=spike-1x",
+          ready: true,
+        },
+      ]);
+      const after = hosts.spike.querySelector("electrobun-webview");
+      expect(after).toBe(before);
+      expect(after?.getAttribute("src")).toBe("views://plugin-host/blank.html#mount=spike-1");
+      expect(hosts.spike.querySelectorAll("electrobun-webview").length).toBe(1);
+    } finally {
+      hosts.dispose();
+    }
+  });
+
+  it("段0タグは main 照合の属性だけを載せる", () => {
+    const hosts = prepareMountHosts();
+    try {
+      const { service } = prepareService();
+      service.registerMountHosts(hosts.spike, hosts.plugin);
+      service.reconcileSpikeTags([makeSpikeMount("spike-1")]);
+      const tag = hosts.spike.querySelector("electrobun-webview");
+      expect(tag?.getAttribute("src")).toBe("views://plugin-host/blank.html#mount=spike-1");
+      expect(tag?.getAttribute("renderer")).toBe("native");
+      expect(tag?.getAttribute("navigation-rules")).toContain("plugin-spike");
+      expect(tag?.id).toBe("spike-spike-1");
+      expect(tag?.hasAttribute("sandbox")).toBe(false);
+    } finally {
+      hosts.dispose();
+    }
+  });
+
+  it("実プラグイン配置一覧に従ってタグを置き更新で作り直さない", async () => {
+    const hosts = prepareMountHosts();
+    try {
+      const { service, stub } = prepareService();
+      service.registerMountHosts(hosts.spike, hosts.plugin);
+      stub.client.getSnapshot.mockResolvedValueOnce(
+        makeSnapshot({ revision: 3, pluginMounts: [makePluginMount("plugin-text-1")] }),
+      );
+      await service.fetchInitial();
+      const before = hosts.plugin.querySelector("electrobun-webview");
+      expect(hosts.plugin.querySelectorAll("electrobun-webview").length).toBe(1);
+      expect(before?.getAttribute("renderer")).toBe("native");
+      expect(before?.getAttribute("navigation-rules")).toContain("plugin-text");
+      expect(before?.id).toBe("plugin-plugin-text-1");
+      expect(before?.hasAttribute("sandbox")).toBe(false);
+      // 改訂が進んでも同一ノードを保つ。
+      stub.client.getSnapshot.mockResolvedValueOnce(
+        makeSnapshot({ revision: 4, pluginMounts: [makePluginMount("plugin-text-1")] }),
+      );
+      await service.fetchInitial();
+      expect(hosts.plugin.querySelector("electrobun-webview")).toBe(before);
+      // 配置が消えたら外す。
+      stub.client.getSnapshot.mockResolvedValueOnce(makeSnapshot({ revision: 5 }));
+      await service.fetchInitial();
+      expect(hosts.plugin.querySelectorAll("electrobun-webview").length).toBe(0);
+    } finally {
+      hosts.dispose();
+    }
+  });
+
+  it("配置した段0タグが文書に残れば同一性保持になる", () => {
+    const hosts = prepareMountHosts();
+    try {
+      const { service } = prepareService();
+      expect(service.isSpikeTagKept()).toBe(false);
+      service.registerMountHosts(hosts.spike, hosts.plugin);
+      service.reconcileSpikeTags([makeSpikeMount("spike-1")]);
+      expect(service.isSpikeTagKept()).toBe(true);
+    } finally {
+      hosts.dispose();
+    }
+  });
+});
+
+describe("子画面操作の要求送出", () => {
+  it("子画面の作成は要求後に所有一覧を読み直す", async () => {
+    const hosts = prepareMountHosts();
+    try {
+      const { service, stub } = prepareService();
+      service.registerMountHosts(hosts.spike, hosts.plugin);
+      stub.client.listSpikes.mockResolvedValueOnce([makeSpikeMount("spike-1")]);
+      await service.createSpike();
+      expect(stub.client.createSpike).toHaveBeenCalledTimes(1);
+      expect(stub.client.listSpikes).toHaveBeenCalledTimes(1);
+      expect(hosts.spike.querySelectorAll("electrobun-webview").length).toBe(1);
+      expect(service.spikeMounts().map((mount) => mount.mountId)).toEqual(["spike-1"]);
+    } finally {
+      hosts.dispose();
+    }
+  });
+
+  it("子画面への送信・破棄・全破棄は識別子を載せて送る", async () => {
+    const { service, stub } = prepareService();
+    await service.pushSpike("spike-1");
+    await service.destroySpike("spike-1");
+    await service.resetSpikes();
+    expect(stub.client.pushSpike).toHaveBeenCalledWith("spike-1");
+    expect(stub.client.destroySpike).toHaveBeenCalledWith("spike-1");
+    expect(stub.client.resetSpike).toHaveBeenCalledTimes(1);
+    // いずれも所有一覧の読直しを伴う。
+    expect(stub.client.listSpikes).toHaveBeenCalledTimes(3);
+    expect(service.eventLog().join("\n")).toContain("mountId=spike-1");
+  });
+
+  it("実プラグインの再試行は要求後に最新状態を読み直す", async () => {
+    const { service, stub } = prepareService();
+    await service.fetchInitial();
+    const baseline = stub.client.getSnapshot.mock.calls.length;
+    await service.retryPluginMounts();
+    expect(stub.client.retryPluginMounts).toHaveBeenCalledTimes(1);
+    expect(stub.client.getSnapshot.mock.calls.length).toBe(baseline + 1);
+    expect(service.eventLog().join("\n")).toContain("再試行を要求した");
   });
 });
