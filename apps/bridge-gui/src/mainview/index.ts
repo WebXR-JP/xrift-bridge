@@ -1,6 +1,6 @@
 import { Electroview } from "electrobun/view";
 import type { TextSendResult } from "bridge-app-core";
-import { validateTextForSend } from "bridge-app-core/text-contract";
+import { TEXT_SESSION_ID, validateTextForSend } from "bridge-app-core/text-contract";
 import type { ManagementRpc, ManagementSnapshot, PairingViewResult } from "../shared/management.ts";
 import { selectNewer } from "../shared/management.ts";
 
@@ -156,8 +156,15 @@ function renderSessions(snapshot: ManagementSnapshot): void {
     const item = document.createElement("li");
     item.append(
       `${session.localSessionId}（論理名 ${session.sessionId}・${session.kind}・${session.direction}・接続 ${session.connectionId}） `,
-      actionButton("assign", session.localSessionId, "診断を割り当てる"),
     );
+    // テキスト表示用セッションは診断割当ての対象外であり、割当て操作を受け付けない。
+    if (session.sessionId === TEXT_SESSION_ID) {
+      const note = document.createElement("span");
+      note.textContent = "診断対象外";
+      item.append(note);
+    } else {
+      item.append(actionButton("assign", session.localSessionId, "診断を割り当てる"));
+    }
     list.append(item);
   }
 }
