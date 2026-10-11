@@ -96,18 +96,19 @@
           <button type="button" data-action="assign-text">テキストを割り当てる</button>
           <button type="button" data-action="unassign-text">テキストの割当てを外す</button>
         </div>
-        <div class="text-form">
-          <label for="text-input">送信する本文</label>
-          <textarea
-            id="text-input"
-            rows="3"
-            placeholder="送信する本文（改行可・上限 512 文字）"
-          ></textarea>
-          <div class="row">
-            <button type="button" data-action="send-text">送信する</button>
-          </div>
-          <p id="text-error" class="error" aria-live="polite"></p>
+        <p class="note">本文の入力と送信は子画面で行う。割当てと解除だけをここで行う。</p>
+        <p id="text-error" class="error" aria-live="polite"></p>
+      </section>
+
+      <section class="card">
+        <h2>子画面の配置（実プラグイン）</h2>
+        <p class="note">
+          実在インスタンスに対応する子画面を置き、読込み状態を確かめる。失敗はその配置に局所化し、再試行で作り直す。
+        </p>
+        <div class="row">
+          <button type="button" data-action="retry-plugin-mounts">失敗を消して作り直す</button>
         </div>
+        <ul id="plugin-list" class="entries"></ul>
       </section>
 
       <section class="card">
@@ -126,6 +127,7 @@
         <h2>子画面の配置先</h2>
         <p class="note">管理領域とは別のペインであり、重ねない。</p>
         <div id="spike-container"></div>
+        <div id="plugin-container"></div>
       </section>
 
       <section class="card">

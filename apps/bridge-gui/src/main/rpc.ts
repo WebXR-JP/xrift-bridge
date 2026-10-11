@@ -1,5 +1,6 @@
 import { BrowserView } from "electrobun/main";
 import type { ManagementRpc, OperationAck } from "../shared/management.ts";
+import type { PluginUiMountFailure, PluginUiMountPlacement } from "../shared/plugin-instance.ts";
 import type { PluginMountDto, SpikeMountSummary, SpikePushResult } from "../shared/plugin-spike.ts";
 import type { GuiBackend } from "./backend.ts";
 
@@ -46,6 +47,32 @@ export interface SpikeMountOperations {
 }
 
 /**
+ * 実プラグイン子画面の配置操作口。実体は対応付けが担い、RPC 層は薄く保つ。
+ *
+ * 配置の実体（`BrowserView`）は main が持ち、backend は持たない。
+ * snapshot への現在値の載せ替えはここで行い、backend の改訂番号を
+ * 共有時計として使う。
+ */
+export interface PluginUiOperations {
+  /**
+   * 現割当てへの対応付けの追随。配置・回収・期限切れの整理を行う。
+   *
+   * 表示状態の取得前に呼び、読み取り時点の現割当てを反映する。
+   */
+  readonly syncPluginUi: () => void;
+  /** 配置中の対応付け一覧の取得。 */
+  readonly listPluginUiMounts: () => readonly PluginUiMountPlacement[];
+  /** 失敗表示の一覧の取得。 */
+  readonly listPluginUiFailures: () => readonly PluginUiMountFailure[];
+  /**
+   * 失敗表示の消去と現割当てへの再配置。
+   *
+   * @returns 受付応答。後続の状態は `stateChanged` で受け取る。
+   */
+  readonly retryPluginUiMounts: () => OperationAck;
+}
+
+/**
  * main 側 RPC 定義。表示データ（DTO）と限定操作だけを公開する。
  *
  * Webview へ関数や生オブジェクトを渡さない。引数・ID・終了中状態の検証は
@@ -56,12 +83,14 @@ export interface SpikeMountOperations {
  * @param backend - 表示状態の提供元と限定操作の実行先。
  * @param hooks - Webview 通知に対する後処理。
  * @param spike - 段0スパイクのマウント操作口。
+ * @param pluginUi - 実プラグイン子画面の配置操作口。
  * @returns `BrowserWindow` に渡す RPC 接続。
  */
 export function createManagementRpc(
   backend: GuiBackend,
   hooks: ManagementRpcHooks,
   spike: SpikeMountOperations,
+  pluginUi: PluginUiOperations,
 ) {
   return BrowserView.defineRPC<ManagementRpc>({
     handlers: {
@@ -69,7 +98,14 @@ export function createManagementRpc(
         // 段2の観測点。到達の事実だけを残し、応答内容は残さない。
         getSnapshot: () => {
           hooks.onSnapshotRequested();
-          return backend.getSnapshot();
+          // 読み取り時点の現割当てへ対応付けを追随させ、配置の現在値を載せる。
+          pluginUi.syncPluginUi();
+          const snapshot = backend.getSnapshot();
+          return {
+            ...snapshot,
+            pluginMounts: pluginUi.listPluginUiMounts(),
+            pluginMountFailures: pluginUi.listPluginUiFailures(),
+          };
         },
         openAcceptance: () => backend.openAcceptance(),
         closeAcceptance: () => backend.closeAcceptance(),
@@ -87,6 +123,7 @@ export function createManagementRpc(
         spikePush: ({ mountId }) => spike.pushSpikeMount(mountId),
         spikeList: () => spike.listSpikeMounts(),
         spikeReset: () => spike.resetSpikeMounts(),
+        retryPluginMounts: () => pluginUi.retryPluginUiMounts(),
         quit: () => {
           hooks.onQuitRequested();
           return { ok: true as const };

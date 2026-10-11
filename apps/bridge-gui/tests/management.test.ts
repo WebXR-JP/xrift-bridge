@@ -21,6 +21,8 @@ function snapshot(revision: number): ManagementSnapshot {
       lastResult: null,
       stats: { attempts: 0, acknowledged: 0, unknown: 0 },
     },
+    pluginMounts: [],
+    pluginMountFailures: [],
   };
 }
 

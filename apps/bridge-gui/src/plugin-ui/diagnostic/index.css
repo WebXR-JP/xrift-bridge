@@ -1,0 +1,26 @@
+.plugin-diagnostic {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: 1rem;
+  font-family: sans-serif;
+}
+
+.plugin-diagnostic dl > div {
+  display: flex;
+  gap: 1rem;
+  margin: 0.25rem 0;
+}
+
+.plugin-diagnostic dt {
+  min-width: 6rem;
+  font-weight: bold;
+}
+
+.plugin-diagnostic dd {
+  margin: 0;
+}
+
+.plugin-diagnostic .error {
+  color: #a00;
+  min-height: 1.5em;
+}

@@ -20,6 +20,12 @@ export default {
       "plugin-spike": {
         entrypoint: "src/plugin-spike/index.ts",
       },
+      "plugin-text": {
+        entrypoint: "src/plugin-ui/text/index.ts",
+      },
+      "plugin-diagnostic": {
+        entrypoint: "src/plugin-ui/diagnostic/index.ts",
+      },
     },
     // UI バンドルは Hutch の build.views＋HTML/CSS コピーで足りる。Vite は増やさない。
     copy: {
@@ -28,6 +34,10 @@ export default {
       "src/plugin-spike/index.html": "views/plugin-spike/index.html",
       "src/plugin-spike/index.css": "views/plugin-spike/index.css",
       "src/plugin-host/blank.html": "views/plugin-host/blank.html",
+      "src/plugin-ui/text/index.html": "views/plugin-text/index.html",
+      "src/plugin-ui/text/index.css": "views/plugin-text/index.css",
+      "src/plugin-ui/diagnostic/index.html": "views/plugin-diagnostic/index.html",
+      "src/plugin-ui/diagnostic/index.css": "views/plugin-diagnostic/index.css",
     },
     // CEF・トレイ・更新配信は追加しない。
     mac: {

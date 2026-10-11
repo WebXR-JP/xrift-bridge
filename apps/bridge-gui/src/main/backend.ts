@@ -48,6 +48,14 @@ import type { DiagnosticInstanceView, TextInstanceView } from "../shared/plugin-
 /** 既定の待ち受けポート。 */
 export const DEFAULT_BRIDGE_PORT = 3100;
 
+/**
+ * 診断統計の変化検出の間隔（ミリ秒）。
+ *
+ * 診断プラグインに状態購読が無いため、GUI 側で統計の写しを比べて
+ * 変化を検出する周期である。汎用基盤の再設計はしない。
+ */
+export const DEFAULT_DIAGNOSTIC_POLL_MS = 500;
+
 /** `GuiBackend.create` の設定。 */
 export interface GuiBackendOptions {
   /**
@@ -67,6 +75,14 @@ export interface GuiBackendOptions {
    * @defaultValue `[PRODUCTION_ORIGIN]`（省略時に生成処理が適用）。
    */
   readonly allowedOrigins?: readonly string[];
+  /**
+   * 診断統計の変化検出の間隔（ミリ秒）。正の有限値であること。
+   *
+   * 試験で短縮する場合に使う。通常は既定のままとする。
+   *
+   * @defaultValue `500`（省略時に生成処理が適用）。
+   */
+  readonly diagnosticPollMs?: number;
 }
 
 /**
@@ -171,6 +187,17 @@ export class GuiBackend {
   private textLocalSessionId: string | null = null;
   /** テキスト状態購読の解除口。未購読なら null。 */
   private textStateUnsubscribe: Unsubscribe | null = null;
+  /** 診断統計の変化検出の間隔（ミリ秒）。生成時に確定する。 */
+  private diagnosticPollMs: number = DEFAULT_DIAGNOSTIC_POLL_MS;
+  /** 診断統計の変化検出タイマー。監視対象が無ければ null。 */
+  private diagnosticPollTimer: ReturnType<typeof setInterval> | null = null;
+  /**
+   * 診断統計の前回値（インスタンス識別子→直列化した統計）。
+   *
+   * 診断プラグインに状態購読が無いため、変化検出の基準として保持する。
+   * 統計以外の情報（本文など）は含めない。
+   */
+  private readonly lastDiagnosticStats = new Map<string, string>();
   private revision = 0;
   private cached: ManagementSnapshot | null = null;
   private notifyScheduled = false;
@@ -192,6 +219,12 @@ export class GuiBackend {
   static async create(options: GuiBackendOptions = {}): Promise<GuiBackend> {
     const backend = new GuiBackend();
     const allowedOrigins = options.allowedOrigins ?? [PRODUCTION_ORIGIN];
+    const diagnosticPollMs = options.diagnosticPollMs ?? DEFAULT_DIAGNOSTIC_POLL_MS;
+    // 不正な指定では既定に戻し、検出自体を止めない。
+    backend.diagnosticPollMs =
+      Number.isFinite(diagnosticPollMs) && diagnosticPollMs > 0
+        ? diagnosticPollMs
+        : DEFAULT_DIAGNOSTIC_POLL_MS;
     try {
       const server = await createBridgeServer({
         port: options.port ?? DEFAULT_BRIDGE_PORT,
@@ -476,6 +509,7 @@ export class GuiBackend {
     // GUI バックエンドが生成した handle を保持し、表示と合わせて提供する。
     this.diagnosticHandles.set(handle.instanceId, handle);
     this.diagnosticSessions.set(localSessionId, handle.instanceId);
+    this.watchDiagnostic(handle.instanceId);
     this.requestNotify();
     return { localSessionId, instanceId: handle.instanceId, portId: DIAGNOSTIC_PORT_ID };
   }
@@ -707,6 +741,162 @@ export class GuiBackend {
   }
 
   /**
+   * 外部状態（子画面配置など）の変化を状態通知に載せる。
+   *
+   * main 側の配置管理が backend の改訂番号を共有時計として使うための口で
+   * あり、配置の有無自体は snapshot に含めない。ここでは通知予約だけを
+   * 行い、改訂は既存の確定経路で進める。
+   */
+  notifyExternalChange(): void {
+    this.requestNotify();
+  }
+
+  /**
+   * 現在のテキスト束縛を返す。子画面配置の対応付け用である。
+   *
+   * handle と基盤の現割当ての両方が現在のものでなければ `null` とし、
+   * 古い割当てへの配置は作らない。管理 snapshot 全体・他個体の情報・
+   * 候補一覧・保留情報は返さない。
+   *
+   * @returns 現割当てがある場合の束縛情報。無ければ `null`。
+   */
+  getTextBinding(): { instanceId: string; localSessionId: string; portId: string } | null {
+    if (this.status !== "ready" || this.core === null) {
+      return null;
+    }
+    const handle = this.textHandle;
+    const localSessionId = this.textLocalSessionId;
+    if (handle === null || localSessionId === null) {
+      return null;
+    }
+    const assigned = this.core
+      .listAssignments()
+      .some(
+        (assignment) =>
+          assignment.instanceId === handle.instanceId &&
+          assignment.localSessionId === localSessionId &&
+          assignment.portId === TEXT_PORT_ID,
+      );
+    if (!assigned) {
+      return null;
+    }
+    return { instanceId: handle.instanceId, localSessionId, portId: TEXT_PORT_ID };
+  }
+
+  /**
+   * 現在の診断束縛の一覧を返す。子画面配置の対応付け用である。
+   *
+   * 基盤の現割当てと生成分の保持の両方にあるものだけを返し、失効した
+   * 割当てへの配置は作らない。管理 snapshot 全体・他個体の情報・
+   * 候補一覧・保留情報は返さない。
+   *
+   * @returns 現割当てがある束縛情報の一覧。無ければ空配列。
+   */
+  listDiagnosticBindings(): Array<{
+    instanceId: string;
+    localSessionId: string;
+    portId: string;
+  }> {
+    if (this.status !== "ready" || this.core === null) {
+      return [];
+    }
+    const live = new Map<string, string>();
+    for (const assignment of this.core.listAssignments()) {
+      if (assignment.portId !== DIAGNOSTIC_PORT_ID) {
+        continue;
+      }
+      if (!this.diagnosticHandles.has(assignment.instanceId)) {
+        continue;
+      }
+      live.set(assignment.instanceId, assignment.localSessionId);
+    }
+    return [...live].map(([instanceId, localSessionId]) => ({
+      instanceId,
+      localSessionId,
+      portId: DIAGNOSTIC_PORT_ID,
+    }));
+  }
+
+  /**
+   * 診断統計の変化検出を始める。
+   *
+   * 診断プラグインに状態購読が無いため、GUI 側で統計の写しを保持し、
+   * 周期的に比べて変化を検出する。テキストと同程度の最小の購読口であり、
+   * 汎用プラグイン基盤の再設計はしない（`packages/*` は変更しない）。
+   * 監視対象が無くなったらタイマーを止め、残さない。
+   *
+   * @param instanceId - 監視する診断インスタンスの識別子。
+   */
+  private watchDiagnostic(instanceId: string): void {
+    const handle = this.diagnosticHandles.get(instanceId);
+    if (handle === undefined) {
+      return;
+    }
+    try {
+      this.lastDiagnosticStats.set(instanceId, JSON.stringify(handle.getState()));
+    } catch {
+      this.lastDiagnosticStats.set(instanceId, "");
+    }
+    if (this.diagnosticPollTimer !== null) {
+      return;
+    }
+    this.diagnosticPollTimer = setInterval(() => {
+      this.pollDiagnosticStats();
+    }, this.diagnosticPollMs);
+    // ADR: `as` で `unref` の有無を主張する理由は、実行系（Node・Bun）で
+    // タイマー型が異なるためである。待機の維持には使わず、単独滞留での
+    // 固着を避けるために外せる場合だけ外す。根拠は Node の `Timeout.unref`
+    // と Bun の互換タイマーであり、無い環境では何もしない。
+    const timer = this.diagnosticPollTimer as unknown as { unref?: () => void };
+    try {
+      timer.unref?.();
+    } catch {
+      // 解除の失敗は検出を止めない。
+    }
+  }
+
+  /** 診断統計の変化検出タイマーを止める。監視対象が無い場合に使う。 */
+  private stopDiagnosticPoll(): void {
+    const timer = this.diagnosticPollTimer;
+    this.diagnosticPollTimer = null;
+    if (timer === null) {
+      return;
+    }
+    clearInterval(timer);
+  }
+
+  /**
+   * 診断統計の変化を検出し、変化があれば状態通知を予約する。
+   *
+   * 取得の失敗は無視し、検出自体を止めない。監視対象が空になったら
+   * タイマーを止める。
+   */
+  private pollDiagnosticStats(): void {
+    if (this.disposed) {
+      return;
+    }
+    let changed = false;
+    for (const [instanceId, handle] of this.diagnosticHandles) {
+      let current: string;
+      try {
+        current = JSON.stringify(handle.getState());
+      } catch {
+        continue;
+      }
+      if (this.lastDiagnosticStats.get(instanceId) !== current) {
+        this.lastDiagnosticStats.set(instanceId, current);
+        changed = true;
+      }
+    }
+    if (changed) {
+      this.requestNotify();
+    }
+    if (this.diagnosticHandles.size === 0) {
+      this.stopDiagnosticPoll();
+    }
+  }
+
+  /**
    * 束縛テキスト個体を取り出す。handle と現割当ての両方が現在のもので
    * なければ拒否し、古い割当てへの転送はしない。
    *
@@ -790,6 +980,10 @@ export class GuiBackend {
     }
     this.diagnosticSessions.delete(localSessionId);
     this.diagnosticHandles.delete(instanceId);
+    this.lastDiagnosticStats.delete(instanceId);
+    if (this.diagnosticHandles.size === 0) {
+      this.stopDiagnosticPoll();
+    }
     if (this.core !== null) {
       try {
         this.core.removeInstance(instanceId);
@@ -882,6 +1076,8 @@ export class GuiBackend {
     this.detachTextSubscription();
     this.textHandle = null;
     this.textLocalSessionId = null;
+    this.stopDiagnosticPoll();
+    this.lastDiagnosticStats.clear();
     if (this.managementUnsubscribe !== null) {
       try {
         this.managementUnsubscribe();
@@ -939,6 +1135,10 @@ export class GuiBackend {
               })),
       },
       text: this.buildTextState(),
+      // 実プラグイン子画面の配置は main 側の対応付けが持ち、backend は
+      // 所有しない。ここでは空を返し、RPC 層で対応付けの現在値を載せる。
+      pluginMounts: [],
+      pluginMountFailures: [],
     };
   }
 

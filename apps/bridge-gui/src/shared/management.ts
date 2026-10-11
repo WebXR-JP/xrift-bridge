@@ -15,6 +15,7 @@ import type {
 } from "bridge-server";
 import type { TextSendResult, TextStats } from "bridge-app-core";
 import type { PluginMountDto, SpikeMountSummary, SpikePushResult } from "./plugin-spike.ts";
+import type { PluginUiMountFailure, PluginUiMountPlacement } from "./plugin-instance.ts";
 
 /** GUI バックエンドの起動状態。 */
 export type BackendStatus =
@@ -187,6 +188,20 @@ export interface ManagementSnapshot {
   readonly plugins: PluginAssignmentState;
   /** 固定テキスト表示の状態。本文は含めない。 */
   readonly text: TextDisplayState;
+  /**
+   * 実プラグイン子画面の配置一覧。
+   *
+   * 実在インスタンスに対応するタグ配置用であり、管理画面は追加のみ・
+   * 更新で作り直さない規約でタグを配置する。本文は含めない。
+   */
+  readonly pluginMounts: readonly PluginUiMountPlacement[];
+  /**
+   * 実プラグイン子画面の失敗一覧。
+   *
+   * 生成・読込み・初期 RPC の失敗と期限超過をそのマウントに局所化した
+   * 表示であり、再生成は明示の再試行で行う。本文は含めない。
+   */
+  readonly pluginMountFailures: readonly PluginUiMountFailure[];
 }
 
 /** main→Webview の状態通知。最新の全状態を送る唯一の通知である。 */
@@ -281,6 +296,13 @@ export type ManagementRpc = {
        * 識別子の連番は巻き戻さない。
        */
       spikeReset: { params: {}; response: OperationAck };
+      /**
+       * 実プラグイン子画面の失敗消去と現割当てへの再配置。
+       *
+       * 失敗表示を消し、現在の割当てに配置が無いものを作り直す。
+       * 既存の配置・割当て・送信には触らない。
+       */
+      retryPluginMounts: { params: {}; response: OperationAck };
       /** アプリ終了を要求する。後始末完了後に終了する。 */
       quit: { params: {}; response: OperationAck };
     };

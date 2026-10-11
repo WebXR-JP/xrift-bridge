@@ -1,8 +1,11 @@
 import Electrobun, { BrowserView, BrowserWindow, type ElectrobunEvent } from "electrobun/main";
 import { PRODUCTION_ORIGIN } from "bridge-server";
+import { parsePluginMountId } from "../shared/plugin-instance.ts";
 import { GuiBackend } from "./backend.ts";
 import { createManagementRpc } from "./rpc.ts";
+import { ElectrobunPluginUiChildView, createPluginUiChannelFactory } from "./instance-rpc.ts";
 import { PluginMountManager } from "./plugin-mounts.ts";
+import { PluginUiCoordinator } from "./plugin-ui-mounts.ts";
 import { ElectrobunMountChildView, createChannelFactory } from "./spike-rpc.ts";
 
 /**
@@ -33,6 +36,8 @@ const backendPromise: Promise<GuiBackend> = GuiBackend.create(backendOptions);
 let shutdownTask: Promise<void> | null = null;
 // 段0スパイクの所有表。窓の生成後に結び付け、終了処理で破棄する。
 let spikeMounts: PluginMountManager | null = null;
+// 実プラグイン子画面の対応付け。窓の生成後に結び付け、終了処理で破棄する。
+let pluginUi: PluginUiCoordinator | null = null;
 // 後始末が終わり、終了・閉鎖の再要求を許可できるか。
 let shutdownFinished = false;
 // 終了の再要求は一度だけ行う。
@@ -51,6 +56,9 @@ function shutdown(): Promise<void> {
         // 子画面の所有表を先に破棄し、BrowserView・購読を残さない。
         spikeMounts?.resetAll("終了");
         spikeMounts = null;
+        // 実プラグイン子画面も対応付けの削除と表示の破棄を行い残さない。
+        pluginUi?.resetAll("終了");
+        pluginUi = null;
         const target = await backendPromise;
         await target.close();
       } catch (error: unknown) {
@@ -85,6 +93,15 @@ function quitAfterShutdown(): void {
  */
 function failSpike(): never {
   throw new Error("子画面の所有表が無い。");
+}
+
+/**
+ * 実プラグイン子画面の管理が無い状態での書込み要求拒否。窓の生成前には到達しない。
+ *
+ * @throws `Error` — 常に投げる。
+ */
+function failPluginUi(): never {
+  throw new Error("実プラグイン子画面の管理が無い。");
 }
 
 // 段2の観測点。終了要求の受付と再要求だけを残し、待機はしない。
@@ -143,15 +160,20 @@ void backendPromise.then((ready) => {
       listSpikeMounts: () => spikeMounts?.listMounts() ?? [],
       resetSpikeMounts: () => spikeMounts?.resetAll("管理画面の要求") ?? { ok: true as const },
     },
+    // 実プラグイン子画面の配置操作口。読み取りは管理が無ければ空とし、
+    // 書込み（再試行）は結線の不備として拒否する。
+    {
+      syncPluginUi: () => {
+        pluginUi?.syncNow();
+      },
+      listPluginUiMounts: () => pluginUi?.listPlacements() ?? [],
+      listPluginUiFailures: () => pluginUi?.listFailures() ?? [],
+      retryPluginUiMounts: () => pluginUi?.retryFailed() ?? failPluginUi(),
+    },
   );
 
-  // バックエンドの状態変化を Webview へ送る唯一の通知である。
-  // 購読者の例外はバックエンド側で隔離する。
-  ready.onStateChanged(({ revision, snapshot }) => {
-    // 比較コード本文・業務 payload はここに含まれない。
-    console.log(`[bridge-gui] 状態を通知する: revision=${revision}`);
-    rpc.send.stateChanged({ revision, snapshot });
-  });
+  // バックエンドの状態変化を Webview へ送る購読は、対応付けの用意後に
+  // 登録する。対応付けの追随を先に行い、配置の現在値を載せて送る。
 
   const mainWindow = new BrowserWindow({
     title: "XRift Bridge",
@@ -206,7 +228,55 @@ void backendPromise.then((ready) => {
   // 段0スパイクの所有表。親 Webview の識別子でタグ生成元を照合する。
   // タグ生成は管理画面の読込みより後であるため、ここでの登録で間に合う。
   spikeMounts = new PluginMountManager(mainWindow.webview.id, createChannelFactory());
+  // 実プラグイン子画面の対応付け。backend の現割当てへの追随と
+  // 個体別チャネルの結線を担い、段0とは名前空間を分ける。
+  pluginUi = new PluginUiCoordinator(mainWindow.webview.id, ready, createPluginUiChannelFactory());
+  // バックエンドの状態変化への追随を先に登録し、Webview への通知を後に
+  // 登録する。対応付けの整理と子画面への送信を先に行い、配置の現在値を
+  // 載せて送る。購読者の例外はバックエンド側で隔離する。
+  ready.onStateChanged(() => {
+    pluginUi?.syncNow();
+    pluginUi?.pushBound();
+  });
+  // バックエンドの状態変化を Webview へ送る唯一の通知である。
+  ready.onStateChanged(({ revision, snapshot }) => {
+    // 比較コード本文・業務 payload・テキスト本文はここに含まれない。
+    console.log(`[bridge-gui] 状態を通知する: revision=${revision}`);
+    rpc.send.stateChanged({
+      revision,
+      snapshot: {
+        ...snapshot,
+        pluginMounts: pluginUi?.listPlacements() ?? [],
+        pluginMountFailures: pluginUi?.listFailures() ?? [],
+      },
+    });
+  });
+
   BrowserView.on("created", (view) => {
+    // 実プラグインと段0スパイクは識別子の名前空間で振り分ける。
+    // 互いの所有表が相手の生成を回収しない（混線させない）。
+    const pluginCandidate = new ElectrobunPluginUiChildView(view);
+    if (parsePluginMountId(pluginCandidate.currentUrl) !== null) {
+      if (pluginUi === null) {
+        console.log("[bridge-gui] 実プラグイン子画面の管理が無いため回収した");
+        try {
+          pluginCandidate.removeView();
+        } catch {
+          // 破棄の失敗は生成の照合を止めない。
+        }
+        return;
+      }
+      const consumed = pluginUi.handleTagCreated(pluginCandidate);
+      if (!consumed && pluginCandidate.hostWebviewId === mainWindow.webview.id) {
+        console.log("[bridge-gui] 由来不明の実プラグイン生成を回収した");
+        try {
+          pluginCandidate.removeView();
+        } catch {
+          // 破棄の失敗は生成の照合を止めない。
+        }
+      }
+      return;
+    }
     spikeMounts?.handleTagCreated(new ElectrobunMountChildView(view));
   });
 
@@ -215,6 +285,9 @@ void backendPromise.then((ready) => {
     // 管理画面の再読込みでは配置が作り直されるため、所有表に残さない。
     // 初回遷移では所有が空であり、何もしない。
     spikeMounts?.resetAll("管理画面の遷移");
+    // 実プラグイン子画面も対応付けの削除と表示の破棄を行い残さない。
+    // 現割当てへの再配置は次回の状態通知・取得で作り直す。
+    pluginUi?.resetAll("管理画面の遷移");
   });
 
   mainWindow.webview.on("dom-ready", () => {

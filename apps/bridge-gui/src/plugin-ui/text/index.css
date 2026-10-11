@@ -1,0 +1,43 @@
+.plugin-text {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: 1rem;
+  font-family: sans-serif;
+}
+
+.plugin-text dl > div {
+  display: flex;
+  gap: 1rem;
+  margin: 0.25rem 0;
+}
+
+.plugin-text dt {
+  min-width: 6rem;
+  font-weight: bold;
+}
+
+.plugin-text dd {
+  margin: 0;
+}
+
+.plugin-text .text-form {
+  margin-top: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.plugin-text .text-form textarea {
+  width: 100%;
+  font: inherit;
+}
+
+.plugin-text .row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.plugin-text .error {
+  color: #a00;
+  min-height: 1.5em;
+}

@@ -1,8 +1,9 @@
 import { Electroview } from "electrobun/view";
-import type { TextSendResult } from "bridge-app-core";
-import { TEXT_SESSION_ID, validateTextForSend } from "bridge-app-core/text-contract";
+import { TEXT_SESSION_ID } from "bridge-app-core/text-contract";
 import type { ManagementRpc, ManagementSnapshot, PairingViewResult } from "../shared/management.ts";
 import { selectNewer } from "../shared/management.ts";
+import type { PluginUiMountPlacement } from "../shared/plugin-instance.ts";
+import { PLUGIN_NAVIGATION_RULES_ATTRIBUTE } from "../shared/plugin-instance.ts";
 import type { SpikeMountSummary } from "../shared/plugin-spike.ts";
 import { SPIKE_NAVIGATION_RULES_ATTRIBUTE } from "../shared/plugin-spike.ts";
 
@@ -64,6 +65,7 @@ function render(snapshot: ManagementSnapshot): void {
   renderConnections(snapshot);
   renderSessions(snapshot);
   renderText(snapshot);
+  renderPluginMounts(snapshot);
 }
 
 /** 保留一覧を描画する。比較コード本文は載せない。 */
@@ -171,7 +173,10 @@ function renderSessions(snapshot: ManagementSnapshot): void {
   }
 }
 
-// ---- 固定テキスト送信（この節はテキスト送信カード内に閉じる） ----
+// ---- 固定テキスト表示（この節はテキスト表示カード内に閉じる） ----
+//
+// 本文の入力と送信は子画面へ移した。管理画面には割当て／解除・割当て先の
+// 要約・子画面の読込み状態だけを残す。失敗時に暫定フォームへ自動で戻さない。
 
 /**
  * 結果不明の理由を人間向けの短い説明にする。
@@ -196,7 +201,7 @@ function describeUnknownReason(reason: string): string {
 }
 
 /**
- * テキスト送信の失敗表示を出す。本文は載せない。
+ * テキスト操作の失敗表示を出す。本文は載せない。
  *
  * @param message - 表示する説明。空なら表示を消す。
  */
@@ -207,39 +212,17 @@ function setTextError(message: string): void {
   }
 }
 
-/**
- * 送信本文の入力欄を読む。入力欄の内容は表示更新で消さない。
- *
- * @returns 入力欄の本文。入力欄が無ければ空文字。
- */
-function readTextInput(): string {
-  const input = document.getElementById("text-input");
-  return input instanceof HTMLTextAreaElement ? input.value : "";
-}
-
-/**
- * 反映確認で決着した送信の後に限って入力欄を空にする。
- *
- * 結果不明・失敗では本文を保持し、再送の手がかりを残す。
- */
-function clearTextInput(): void {
-  const input = document.getElementById("text-input");
-  if (input instanceof HTMLTextAreaElement) {
-    input.value = "";
-  }
-}
-
 /** 操作失敗の説明を作る。本文は含めない（失敗理由だけである）。 */
 function describeActionError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
 /**
- * 固定テキスト送信カードを描画する。入力欄の内容には触れない。
+ * 固定テキスト表示カードを描画する。割当て／解除の可否だけを扱う。
  *
- * 割当て先・送信可能／実行中・直近結果・統計を示し、未割当て・送信中は
- * 送信ボタンを無効化する。直近結果の「反映確認」はワールドの表示用状態に
- * 反映した意味であり、送信完了や描画完了の保証ではない。
+ * 割当て先・送信可能／実行中・直近結果・統計を示し、割当て中は割当て
+ * ボタンを、未割当ては解除ボタンを無効化する。直近結果の「反映確認」は
+ * ワールドの表示用状態に反映した意味であり、送信完了や描画完了の保証ではない。
  *
  * @param snapshot - 採用中の表示状態。
  */
@@ -282,13 +265,9 @@ function renderText(snapshot: ManagementSnapshot): void {
   if (unassignButton !== null) {
     unassignButton.disabled = !assigned;
   }
-  const sendButton = document.querySelector<HTMLButtonElement>('button[data-action="send-text"]');
-  if (sendButton !== null) {
-    sendButton.disabled = !text.canSend;
-  }
 }
 
-// ---- 固定テキスト送信の節ここまで ----
+// ---- 固定テキスト表示の節ここまで ----
 
 /** 操作ボタンを作る。識別子は data 属性で渡し、選択子には使わない。 */
 function actionButton(action: string, id: string, label: string): HTMLButtonElement {
@@ -474,6 +453,95 @@ async function refreshSpike(via: string): Promise<void> {
 
 // ---- 段0スパイクの節ここまで ----
 
+// ---- 実プラグイン子画面（配置と読込み状態の確認） ----
+
+// 配置中のタグ（識別子→要素）。更新ごとの作り直しはしない。
+const pluginTags = new Map<string, HTMLElement>();
+
+/** 実プラグイン子画面の配置先。管理領域とは別のペインである。 */
+function pluginContainer(): HTMLElement {
+  return el("plugin-container");
+}
+
+/** 配置用 DTO に従ってタグを一度だけ置く。既存は作り直さない。 */
+function placePluginTag(mountId: string, initialUrl: string): void {
+  if (pluginTags.has(mountId)) {
+    return;
+  }
+  const tag = document.createElement("electrobun-webview");
+  // 初期 URL は main 発行の配置をそのまま載せる。任意 URL・HTML・preload は付けない。
+  tag.setAttribute("src", initialUrl);
+  tag.setAttribute("renderer", "native");
+  tag.setAttribute("navigation-rules", PLUGIN_NAVIGATION_RULES_ATTRIBUTE);
+  // `sandbox` 属性は付けない（main が照合する）。
+  tag.id = `plugin-${mountId}`;
+  pluginContainer().append(tag);
+  pluginTags.set(mountId, tag);
+}
+
+/** 配置中のタグを外す。表示の破棄は main の対応付けが行う。 */
+function dropPluginTag(mountId: string): void {
+  const tag = pluginTags.get(mountId);
+  if (tag === undefined) {
+    return;
+  }
+  tag.remove();
+  pluginTags.delete(mountId);
+}
+
+/** 配置一覧に合わせてタグを足し引きする。既存は触らない。 */
+function reconcilePluginTags(mounts: readonly PluginUiMountPlacement[]): void {
+  const live = new Set(mounts.map((mount) => mount.mountId));
+  for (const mountId of pluginTags.keys()) {
+    if (!live.has(mountId)) {
+      dropPluginTag(mountId);
+      appendLog(`実プラグイン子画面を外した mountId=${mountId}`);
+    }
+  }
+  for (const mount of mounts) {
+    if (!pluginTags.has(mount.mountId)) {
+      placePluginTag(mount.mountId, mount.initialUrl);
+      appendLog(`実プラグイン子画面を置いた mountId=${mount.mountId}`);
+    }
+  }
+}
+
+/**
+ * 実プラグイン子画面の配置と失敗の表示を描き直す。タグ自体は作り直さない。
+ *
+ * 割当て／解除・割当て先の要約・UI読込み状態（結線段階・準備・改訂）を残し、
+ * 本文の入力・送信は子画面に任せる。失敗はその配置に局所化して示す。
+ *
+ * @param snapshot - 採用中の表示状態。
+ */
+function renderPluginMounts(snapshot: ManagementSnapshot): void {
+  reconcilePluginTags(snapshot.pluginMounts);
+  const list = document.querySelector<HTMLUListElement>("#plugin-list");
+  if (!list) {
+    return;
+  }
+  list.replaceChildren();
+  if (snapshot.pluginMounts.length === 0 && snapshot.pluginMountFailures.length === 0) {
+    const item = document.createElement("li");
+    item.textContent = "実プラグイン子画面は無い";
+    list.append(item);
+    return;
+  }
+  for (const mount of snapshot.pluginMounts) {
+    const item = document.createElement("li");
+    const state = mount.ready ? "準備完了" : mount.phase === "pending" ? "生成待ち" : "採用待ち";
+    item.textContent = `${mount.mountId}（${mount.kind}・${state}・rev ${mount.revision}・割当て先 ${mount.localSessionId}）`;
+    list.append(item);
+  }
+  for (const failure of snapshot.pluginMountFailures) {
+    const item = document.createElement("li");
+    item.textContent = `失敗（${failure.kind}）: ${failure.reason}`;
+    list.append(item);
+  }
+}
+
+// ---- 実プラグイン子画面の節ここまで ----
+
 document.addEventListener("click", (event) => {
   const target = event.target;
   if (!(target instanceof HTMLButtonElement)) {
@@ -563,66 +631,6 @@ async function handleAction(action: string, id: string): Promise<void> {
         await refresh("テキスト割当て解除");
         break;
       }
-      case "send-text": {
-        const snapshot = current;
-        const assignedLocal = snapshot?.text.localSessionId ?? null;
-        const assignedInstance = snapshot?.text.instanceId ?? null;
-        if (assignedLocal === null || assignedInstance === null) {
-          setTextError("未割当てのため送信できない。先にテキストを割り当てること。");
-          break;
-        }
-        // 未取得・未割当ては上で弾くため、ここでは応答待ちの有無だけを見る。
-        const pendingId = snapshot?.text.pendingId ?? null;
-        if (pendingId !== null) {
-          setTextError("送信中のため待つこと。応答待ちが終わってから送ること。");
-          break;
-        }
-        const validated = validateTextForSend(readTextInput());
-        if (!validated.ok) {
-          const reason =
-            validated.reason === "empty"
-              ? "本文が空のため送信しない。"
-              : validated.reason === "too-long"
-                ? "本文が長すぎるため送信しない（上限 512 文字・改行可）。"
-                : "本文が文字列でないため送信しない。";
-          console.log(`[bridge-gui] テキスト送信を送信前に拒否した: reason=${validated.reason}`);
-          setTextError(reason);
-          break;
-        }
-        // ADR: 同期的な `RangeError`（未割当て・識別子不一致・入力不正）と
-        // `Promise` の拒否（同時実行等）を区別するため、要求の発行と待機を
-        // 分けて扱う。本文は要求にだけ載せ、記録には残さない。
-        let flight: Promise<TextSendResult>;
-        try {
-          flight = rpc.request.sendText({
-            localSessionId: assignedLocal,
-            instanceId: assignedInstance,
-            text: validated.text,
-          });
-        } catch (error: unknown) {
-          console.log(`[bridge-gui] テキスト送信を拒否した: ${String(error)}`);
-          setTextError(`送信できない: ${describeActionError(error)}`);
-          break;
-        }
-        try {
-          const result = await flight;
-          if (result.status === "acknowledged") {
-            console.log("[bridge-gui] テキスト送信が反映確認で決着した");
-            setTextError("");
-            clearTextInput();
-          } else {
-            console.log(`[bridge-gui] テキスト送信が結果不明で決着した: reason=${result.reason}`);
-            setTextError(
-              `結果不明で決着した（理由: ${describeUnknownReason(result.reason)}）。本文は保持する。`,
-            );
-          }
-        } catch (error: unknown) {
-          console.log(`[bridge-gui] テキスト送信に失敗した: ${String(error)}`);
-          setTextError(`送信に失敗した: ${describeActionError(error)}`);
-        }
-        await refresh("テキスト送信");
-        break;
-      }
       case "spike-create": {
         const created = await rpc.request.spikeCreate({});
         console.log(`[bridge-gui] 子画面を作った: mountId=${created.mountId}`);
@@ -647,6 +655,12 @@ async function handleAction(action: string, id: string): Promise<void> {
         await refreshSpike("子画面全破棄");
         break;
       }
+      case "retry-plugin-mounts": {
+        await rpc.request.retryPluginMounts({});
+        console.log("[bridge-gui] 実プラグイン子画面の再試行を要求した");
+        await refresh("実プラグイン再試行");
+        break;
+      }
       case "quit": {
         await rpc.request.quit({});
         console.log("[bridge-gui] アプリの終了を要求した");
@@ -660,7 +674,7 @@ async function handleAction(action: string, id: string): Promise<void> {
   } catch (error: unknown) {
     console.log(`[bridge-gui] 操作に失敗した: action=${action} ${String(error)}`);
     // テキスト操作の失敗は状態表示にも残す。本文は含めない（失敗理由だけである）。
-    if (action === "assign-text" || action === "unassign-text" || action === "send-text") {
+    if (action === "assign-text" || action === "unassign-text") {
       setTextError(`操作に失敗した: ${describeActionError(error)}`);
     }
   }

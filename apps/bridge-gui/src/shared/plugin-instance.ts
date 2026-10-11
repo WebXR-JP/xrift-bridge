@@ -145,3 +145,203 @@ export function selectNewerInstanceSnapshot<T extends { readonly revision: numbe
   }
   return current;
 }
+
+/**
+ * 実プラグイン子画面の配置・表示契約（段2・段3）。
+ *
+ * 段0スパイク（`plugin-spike.ts`）とは別の識別子名前空間・別の初期 URL・
+ * 別の子画面を使い、検証専用の結線と混線させない。子画面は自分の束縛個体の
+ * 限定情報と操作だけを使い、受付・保留・照合・承認・接続断・割当て／解除・
+ * インスタンス管理・終了といった管理操作、他個体の情報、候補一覧、
+ * 保留情報はここに載せない。実行時の依存を持たない。
+ */
+
+/** 実プラグイン子画面の配置先（空ページ）。初期配置先であり、検証内容は持たない。 */
+export const PLUGIN_BLANK_PATH = "views://plugin-host/blank.html";
+
+/** テキスト子画面。本文の入力と送信だけを行う。 */
+export const PLUGIN_TEXT_VIEW_PATH = "views://plugin-text/index.html";
+
+/** 診断子画面。自分の割当てと echo／ping 統計の表示だけを行う。 */
+export const PLUGIN_DIAGNOSTIC_VIEW_PATH = "views://plugin-diagnostic/index.html";
+
+/**
+ * 実プラグイン子画面タグの遷移規則。全面拒否を先に置き、
+ * 空ページと実プラグイン子画面だけを後に許可する（後に一致した規則が勝つ）。
+ */
+export const PLUGIN_NAVIGATION_RULES: readonly string[] = [
+  "^*",
+  "views://plugin-host/*",
+  "views://plugin-text/*",
+  "views://plugin-diagnostic/*",
+];
+
+/** タグの `navigation-rules` 属性に載せる形。 */
+export const PLUGIN_NAVIGATION_RULES_ATTRIBUTE: string = JSON.stringify(PLUGIN_NAVIGATION_RULES);
+
+/**
+ * テキスト送信 request の RPC 待機期限（ミリ秒）。
+ *
+ * プラグインの応答期限（`TEXT_RESPONSE_TIMEOUT_MS`＝10秒）より長くし、
+ * 反映確認の到達を RPC 側の期限切れで落とさない。余裕は遅延確認の到達用で
+ * あり、自動再送の猶予ではない。RPC 自体の失敗は反映確認とみなさず、
+ * 状態再取得で確かめる。
+ */
+export const TEXT_SEND_REQUEST_TIMEOUT_MS = 15_000;
+
+/**
+ * 子画面の生成待ちが失効するまでの時間（ミリ秒）。
+ *
+ * 配置からタグ生成の照合が無いまま過ぎたら、配置の不備として回収し、
+ * 失敗表示に回す。自動で作り直さず、再生成は明示の再試行に任せる。
+ */
+export const PLUGIN_PENDING_TIMEOUT_MS = 15_000;
+
+/** 実プラグイン子画面の種別。 */
+export type PluginUiMountKind =
+  /** テキスト個体に束縛する子画面。 */
+  | "text"
+  /** 診断個体に束縛する子画面。 */
+  | "diagnostic";
+
+/** 実プラグイン子画面の結線段階。 */
+export type PluginUiMountPhase =
+  /** 配置を受け付け、子画面の生成待ち。 */
+  | "pending"
+  /** 生成を照合して個体別 RPC を結線し、子画面を読み込み済み。 */
+  | "bound";
+
+/**
+ * 管理画面へ渡す配置用 DTO。マウント識別子・種別・初期 URL・結線状態と
+ * 対象インスタンス／割当ての要約の組である。
+ *
+ * 初期 URL は main の静的登録表（空ページ＋識別子の断片）から作り、
+ * 画面は申告せずそのまま `src` 属性に載せる。任意 URL・HTML・preload の
+ * 指定口は持たない。本文は含めない。
+ */
+export interface PluginUiMountPlacement {
+  /** 再利用しないマウント識別子。`plugin-<種別>-<連番>` の形である。 */
+  readonly mountId: string;
+  /** 束縛する個体の種別。 */
+  readonly kind: PluginUiMountKind;
+  /** タグの初期配置先。空ページに識別子の断片を付けたもの。 */
+  readonly initialUrl: string;
+  /** 結線段階。 */
+  readonly phase: PluginUiMountPhase;
+  /** 子画面の初期状態取得を受けた場合に真。 */
+  readonly ready: boolean;
+  /** 対応付け単位の改訂番号。push ごとに進む。 */
+  readonly revision: number;
+  /** 束縛した実インスタンスの識別子。再利用しない。 */
+  readonly instanceId: string;
+  /** 現割当ての生存セッションのローカル識別子。 */
+  readonly localSessionId: string;
+  /** 束縛した接続口の識別子。 */
+  readonly portId: string;
+}
+
+/**
+ * 実プラグイン子画面の失敗表示。生成・読込み・初期 RPC の失敗と期限超過を
+ * そのマウントに局所化するための情報であり、インスタンスや Session の
+ * 状態、送信本文は含めない。
+ */
+export interface PluginUiMountFailure {
+  /** 失敗した配置の種別。 */
+  readonly kind: PluginUiMountKind;
+  /** 人間向けの短い理由。識別子・本文は含めない。 */
+  readonly reason: string;
+  /** 対象だった実インスタンスの識別子。特定できない場合は `null`。 */
+  readonly instanceId: string | null;
+  /** 対象だった割当てのローカル識別子。特定できない場合は `null`。 */
+  readonly localSessionId: string | null;
+}
+
+/**
+ * マウント識別子つきの初期 URL を作る。
+ *
+ * 識別子は断片（`#mount=`）に載せる。scheme 側の解決には影響させず、
+ * 子画面だけが読み取る。main は発行した文字列の完全一致で照合する。
+ *
+ * @param mountId - 再利用しないマウント識別子。空でないこと。
+ * @returns 空ページの初期 URL。
+ */
+export function buildPluginBlankUrl(mountId: string): string {
+  return `${PLUGIN_BLANK_PATH}#mount=${encodeURIComponent(mountId)}`;
+}
+
+/**
+ * マウント識別子つきのテキスト子画面 URL を作る。
+ *
+ * main が個体別 RPC の結線後に `loadURL()` で読み込む先である。
+ * 画面からの指定は受け付けない。
+ *
+ * @param mountId - 再利用しないマウント識別子。空でないこと。
+ * @returns テキスト子画面の URL。
+ */
+export function buildPluginTextUrl(mountId: string): string {
+  return `${PLUGIN_TEXT_VIEW_PATH}#mount=${encodeURIComponent(mountId)}`;
+}
+
+/**
+ * マウント識別子つきの診断子画面 URL を作る。
+ *
+ * main が個体別 RPC の結線後に `loadURL()` で読み込む先である。
+ * 画面からの指定は受け付けない。
+ *
+ * @param mountId - 再利用しないマウント識別子。空でないこと。
+ * @returns 診断子画面の URL。
+ */
+export function buildPluginDiagnosticUrl(mountId: string): string {
+  return `${PLUGIN_DIAGNOSTIC_VIEW_PATH}#mount=${encodeURIComponent(mountId)}`;
+}
+
+/**
+ * URL の断片から実プラグインのマウント識別子を読む。
+ *
+ * main が発行する `#mount=plugin-<種別>-<連番>` だけを受け付ける。
+ * 段0スパイクの識別子（`spike-<連番>`）は対象外であり、形式外・空は
+ * `null` とし、呼び出し側が回収・拒否する。
+ *
+ * @param url - 照合・表示対象の URL。`null` の場合がある。
+ * @returns マウント識別子。形式外なら `null`。
+ */
+export function parsePluginMountId(url: string | null): string | null {
+  if (url === null) {
+    return null;
+  }
+  const marker = "#mount=";
+  const at = url.indexOf(marker);
+  if (at < 0) {
+    return null;
+  }
+  const raw = url.slice(at + marker.length).split("&", 1)[0] ?? "";
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(raw);
+  } catch {
+    return null;
+  }
+  // main の発行形式だけを受け付ける（使い回し・偽装の混入を避ける）。
+  if (!/^plugin-(text|diagnostic)-[1-9][0-9]*$/.test(decoded)) {
+    return null;
+  }
+  return decoded;
+}
+
+/**
+ * マウント識別子から種別を読む。
+ *
+ * main が発行した形式だけを受け付け、形式外は `null` とする。
+ *
+ * @param mountId - 照合するマウント識別子。
+ * @returns 種別。形式外なら `null`。
+ */
+export function pluginMountKindOf(mountId: string): PluginUiMountKind | null {
+  if (/^plugin-text-[1-9][0-9]*$/.test(mountId)) {
+    return "text";
+  }
+  if (/^plugin-diagnostic-[1-9][0-9]*$/.test(mountId)) {
+    return "diagnostic";
+  }
+  return null;
+}

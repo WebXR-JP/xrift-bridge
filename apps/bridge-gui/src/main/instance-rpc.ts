@@ -12,6 +12,7 @@ import { BrowserView } from "electrobun/main";
 import type {
   DiagnosticInstanceChangedMessage,
   DiagnosticInstanceRpc,
+  PluginUiMountKind,
   TextInstanceChangedMessage,
   TextInstanceRpc,
 } from "../shared/plugin-instance.ts";
@@ -20,6 +21,11 @@ import {
   buildTextRequestHandlers,
   type InstanceChannelHooks,
 } from "./plugin-instances.ts";
+import type {
+  PluginUiChannel,
+  PluginUiChannelFactory,
+  PluginUiChildView,
+} from "./plugin-ui-mounts.ts";
 
 /** テキスト個体専用の push 口。当該マウントの結線だけに送る。 */
 export interface TextInstanceChannel {
@@ -99,5 +105,94 @@ export function createDiagnosticInstanceChannel(
     pushDiagnostic(message: DiagnosticInstanceChangedMessage): void {
       rpc.send.diagnosticStateChanged(message);
     },
+  };
+}
+
+/**
+ * `BrowserView` への `PluginUiChildView` 適合。
+ *
+ * 生成時の照合に必要な読み取りと、対応付けからの破棄だけを公開する。
+ * 段0の適合層（`spike-rpc.ts`）とは別の型であり、取り違えない。
+ */
+export class ElectrobunPluginUiChildView implements PluginUiChildView {
+  private readonly inner: BrowserView;
+
+  constructor(view: BrowserView) {
+    this.inner = view;
+  }
+
+  /** 適合元の `BrowserView`。工場での取り出し専用である。 */
+  unwrap(): BrowserView {
+    return this.inner;
+  }
+
+  get viewId(): number {
+    return this.inner.id;
+  }
+
+  get hostWebviewId(): number | undefined {
+    return this.inner.hostWebviewId;
+  }
+
+  get renderer(): string {
+    return this.inner.renderer;
+  }
+
+  get sandbox(): boolean {
+    return this.inner.sandbox;
+  }
+
+  get preload(): string | null {
+    return this.inner.preload;
+  }
+
+  get navigationRules(): string | null {
+    return this.inner.navigationRules;
+  }
+
+  get currentUrl(): string | null {
+    return this.inner.url;
+  }
+
+  loadPluginUrl(url: string): void {
+    this.inner.loadURL(url);
+  }
+
+  removeView(): void {
+    this.inner.remove();
+  }
+}
+
+/**
+ * 対応付けが使うチャネル工場。適合層の取り出し専用である。
+ *
+ * 種別に応じてテキスト・診断のいずれかの個体別チャネルを結線する。
+ * 子からの識別子指定は受け付けず、結線時に束縛した個体だけを使う。
+ *
+ * @returns `ElectrobunPluginUiChildView` 専用の工場。偽ハンドルには使わない。
+ */
+export function createPluginUiChannelFactory(): PluginUiChannelFactory {
+  return (
+    view: PluginUiChildView,
+    mountId: string,
+    kind: PluginUiMountKind,
+    hooks: InstanceChannelHooks,
+  ) => {
+    if (!(view instanceof ElectrobunPluginUiChildView)) {
+      throw new Error("適合層の子画面ではない。");
+    }
+    const raw = view.unwrap();
+    if (kind === "text") {
+      const channel = createTextInstanceChannel(raw, mountId, hooks);
+      const pushText: PluginUiChannel = {
+        pushText: (message) => channel.pushText(message),
+      };
+      return pushText;
+    }
+    const channel = createDiagnosticInstanceChannel(raw, mountId, hooks);
+    const pushDiagnostic: PluginUiChannel = {
+      pushDiagnostic: (message) => channel.pushDiagnostic(message),
+    };
+    return pushDiagnostic;
   };
 }

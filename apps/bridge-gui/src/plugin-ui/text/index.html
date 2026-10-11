@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width" />
+    <title>テキスト送信の子画面</title>
+    <link rel="stylesheet" href="index.css" />
+  </head>
+  <body>
+    <main class="plugin-text">
+      <h1>テキスト送信</h1>
+      <dl>
+        <div>
+          <dt>割当て先</dt>
+          <dd id="text-assignment">未取得</dd>
+        </div>
+        <div>
+          <dt>状態</dt>
+          <dd id="text-status">未取得</dd>
+        </div>
+        <div>
+          <dt>直近結果</dt>
+          <dd id="text-result">未取得</dd>
+        </div>
+        <div>
+          <dt>統計</dt>
+          <dd id="text-stats">未取得</dd>
+        </div>
+        <div>
+          <dt>改訂番号</dt>
+          <dd id="text-revision">未取得</dd>
+        </div>
+      </dl>
+      <div class="text-form">
+        <label for="text-input">送信する本文</label>
+        <textarea
+          id="text-input"
+          rows="3"
+          placeholder="送信する本文（改行可・上限 512 文字）"
+        ></textarea>
+        <div class="row">
+          <button type="button" id="text-send">送信する</button>
+        </div>
+        <p id="text-error" class="error" aria-live="polite"></p>
+      </div>
+    </main>
+    <script src="index.js" type="module"></script>
+  </body>
+</html>
