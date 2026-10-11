@@ -49,6 +49,8 @@ apm_modules/
 build/
 artifacts/
 *.tsbuildinfo
+# 管理画面の Hutch 包装用写し（`gui:run`・`gui:build` が Angular の `dist` から作る。正本は `apps/bridge-gui-ui/dist/`）
+apps/bridge-gui/src/mainview-dist/
 
 # Python
 __pycache__/

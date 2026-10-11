@@ -264,6 +264,9 @@ importers:
       bridge-gui-contract:
         specifier: workspace:*
         version: link:../../packages/bridge-gui-contract
+      bridge-gui-ui:
+        specifier: workspace:*
+        version: link:../bridge-gui-ui
       bridge-protocol:
         specifier: workspace:*
         version: link:../../packages/bridge-protocol

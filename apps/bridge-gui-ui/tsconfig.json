@@ -1,8 +1,8 @@
 {
   // ADR: ルート catalog の TypeScript（7系）は Angular v22 の compiler-cli が
   // 受け付けない（>=6.0 <6.1 のみ対応）ため、このパッケージだけ TS 6.0 系を
-  // 直接指定する（`catalog:` 不使用）。再帰 build に載せるのは型検査のみであり、
-  // Angular の AOT 成果物は opt-in の `ng:build:*` で作る。
+  // 直接指定する（`catalog:` 不使用）。再帰 build には型検査だけでなく
+  // Angular の production AOT 成果物（`dist/prod`）生成を含める。
   // `tsconfig.app.json` は ng 用にこの設定を継承する。
   "compilerOptions": {
     "lib": ["ES2022", "DOM"],

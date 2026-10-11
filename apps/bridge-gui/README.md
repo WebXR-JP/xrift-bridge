@@ -1,6 +1,7 @@
 # bridge-gui（Electrobun 実現性スパイク・段0〜2）
 
 XRift Bridge の管理画面。Electrobun 2.x＋Bun main を前提とする。
+管理画面（mainview）の正本は Angular 実装（`apps/bridge-gui-ui`）である。
 設計の正本は `design/bridge-app.md`（三層責務・GUI 境界）である。
 標準の GUI 手順は設計の移行節（「管理画面の Angular 移行（設計変更）」）に従う。
 
@@ -26,17 +27,15 @@ pnpm install
 # Hutch の生成物（.hutch/devkit）を用意する（初回・pin 変更時。
 # `electrobun/*` の型解決に要るため `vp run -r build` より先に行う）
 pnpm --filter bridge-gui gui:prepare
-# 上流の dist を作る（段2以降で backend が参照するため）
+# 上流の dist を作る（段2以降で backend が参照するため。Angular の production AOT を含む）
 vp run -r build
-# Angular 画面を使う場合のみ。ng 生成物を作る（dev 包装用。製品包装なら ng:build:prod）
-pnpm --filter bridge-gui-ui ng:build:dev
 ```
 
 `hutch` が `PATH` に無い環境では `export PATH="$HOME/.hutch/bin:$PATH"` を足すこと
 （`gui:prepare`・`gui:run`・`gui:build` は `hutch` 呼び出しのため）。
 
 順序を変えると devkit・上流 dist の未生成で `TS2307` になるため、
-`gui:run:ng` 等に入る前に上記を済ませること。
+`gui:run` 等に入る前に上記を済ませること。
 fresh 直後でも `vp run -r build` が vp のキャッシュに救われて通る場合がある。
 失敗の再現確認はキャッシュ外（`--no-cache`）か `tsc` 直叩きで行うこと。
 
@@ -49,26 +48,28 @@ fresh 直後でも `vp run -r build` が vp のキャッシュに救われて通
 `hutch.config.ts` の ADR コメントを参照。GUI の起動・包装は opt-in の入口を使う。
 
 ```sh
-pnpm --filter bridge-gui gui:run    # 開発実行（単発。起動前に dev ビルドする）
-pnpm --filter bridge-gui gui:dev    # 開発実行（監視付き再起動・再ビルド）
-pnpm --filter bridge-gui gui:build  # 配布用に包装（stable）
-
-# Angular スパイク画面（mainview のみ・opt-in。既定は vanilla のまま）
-pnpm --filter bridge-gui gui:run:ng        # Angular 開発生成物＋dev 包装で起動
-pnpm --filter bridge-gui gui:run:ng:debug  # 上記に開発観測（ngDebugProbe）を足す
-pnpm --filter bridge-gui gui:build:ng      # Angular 製品生成物＋stable 包装
+pnpm --filter bridge-gui gui:run          # 開発実行（単発。Angular dev 生成＋dev 包装＋起動）
+pnpm --filter bridge-gui gui:run:console  # 上記に開発観測（ngDebugProbe）と開発口を足す
+pnpm --filter bridge-gui gui:build        # 配布用に包装（stable。Angular prod 生成＋stable 包装）
 
 # ローカル開発ワールド（http://localhost:5173）から接続して確認する場合
 BRIDGE_GUI_DEV_ORIGINS=http://localhost:5173 pnpm --filter bridge-gui gui:run
 ```
 
-Angular スパイクの実体は `apps/bridge-gui-ui/`（UI 専用に TS 6.0 系を局所固定。
+管理画面の実体は `apps/bridge-gui-ui/`（UI 専用に TS 6.0 系を局所固定。
 契約型は `bridge-gui-contract` の公開 subpath から再利用し、DTO の重複定義はしない）。
-AOT 生成物は `apps/bridge-gui/src/mainview-ng/dist/`（生成物のため無視）に作り、
-Hutch の `copy` で `views/mainview-ng/` に載せる。再帰 build に載せるのは型検査のみ。
-view の選択は `BRIDGE_GUI_VIEW=mainview-ng`（既定 `mainview`・未知値は既定に戻る）、
+AOT 生成物は UI パッケージ自身の `dist/`（`dist/dev/browser`・`dist/prod/browser`。
+dev と prod を別ディレクトリに分け、混在させない。生成物のため無視）に作り、
+`gui:run`・`gui:build` が選んだ側を `src/mainview-dist/dev`・`prod` へ写してから
+Hutch の `copy` で `views/mainview/` に載せる（ディレクトリごと。将来 chunks／
+assets が増えた場合も写し経由で同梱される）。再帰 build には Angular の
+production AOT を含める（`tsc --noEmit` だけではテンプレートを検証できない）。
+GUI から UI への `workspace:*` ビルド依存を明示し、再帰 build で UI が先行する。
+コピー元は環境変数 `BRIDGE_GUI_UI_DIR` で選ぶ（未指定時は prod の写しを既定。
+`gui:run` 系は dev、`gui:build` は prod を設定する）。生成物が無ければ包装は
+失敗する（存在時のみコピーにしない）。
 開発観測は `BRIDGE_GUI_NG_DEBUG=1`（既定無効）である。
-ng スパイクの起動時間（main 起動→`viewReady` で測る）・配布物寸法の差分は
+Angular 画面の起動時間（main 起動→`viewReady` で測る）・配布物寸法の差分は
 未計測である（`ng:build:*` の wall を起動時間としない）。
 `ng:build:*` 実行時の `File '../bridge-gui/.hutch/devkit/api/browser/global.d.ts'
 not found in TypeScript compilation` は既知の非致命の警告である
@@ -113,7 +114,7 @@ AI からの自動操作用の loopback 接続口。Bun main 上で完結し、�
   終了経路）で待受を必ず閉じる。
 
 ```sh
-pnpm --filter bridge-gui gui:run:ng:console  # dev 包装＋ng 画面＋開発口で起動
+pnpm --filter bridge-gui gui:run:console  # dev 包装＋開発口で起動
 # 起動記録の port・token を見て curl 等で叩く（例: 受付の無効化）
 curl -s -H "Authorization: Bearer <token>" -H 'Content-Type: application/json' \
   -d '{"op":"disableAcceptance","correlationId":"probe-1"}' \
@@ -137,8 +138,10 @@ apps/bridge-gui/
   src/main/index.ts        # バックエンド組立て、終了集約、RPC接続
   src/main/backend.ts      # bridge-server＋bridge-app-core の組立て（GuiBackend）
   src/main/rpc.ts          # main 側 RPC 定義（表示DTOと限定操作のみ）
+  src/mainview-stub.ts     # Hutch view 用の最小スタブ（実体は Angular 生成物の写し）
+  src/mainview-dist/dev    # Angular dev 生成物の写し（`gui:run` 系が作る。生成物のため無視）
+  src/mainview-dist/prod   # Angular prod 生成物の写し（`gui:build` が作る。生成物のため無視）
   ../../packages/bridge-gui-contract/src/management.ts # 表示DTO・限定操作の型（実行時依存なし）
-  src/mainview/index.html  src/mainview/index.ts  src/mainview/index.css
   tests/management.test.ts # revision 採用規約の単体検証
   tests/backend.test.ts    # backend 直接の統合検証（実WS・既存ws・yamux）
   records/                 # 段1の独立起動ログ（証拠）

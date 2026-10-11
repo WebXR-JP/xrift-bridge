@@ -12,11 +12,12 @@
         "build": {
           "builder": "@angular/build:application",
           "options": {
-            // ADR: 生成先は bridge-gui の view 素材置き場に直書きする。
-            // Hutch の `copy` は相対配置の安定ファイル名を要求するため、
-            // `outputHashing: none` で固定名（main.js 等）にし、再帰 build には混ぜず
-            // opt-in の `ng:build:*` だけで作る。独立 lockfile は持たない。
-            "outputPath": "../bridge-gui/src/mainview-ng/dist",
+            // ADR: 生成先は UI パッケージ自身の `dist` に置き、dev と prod を
+            // 別ディレクトリに分ける（混在の罠の排除。prod 成果物を dev 包装に
+            // 詰めない）。Hutch の `copy` は相対配置の安定ファイル名を要求する
+            // ため、`outputHashing: none` で固定名（main.js 等）にし、再帰 build
+            // には型検査だけでなく production AOT を含める。独立 lockfile は持たない。
+            "outputPath": "dist/prod",
             "index": "src/index.html",
             "browser": "src/main.ts",
             "tsConfig": "tsconfig.app.json",
@@ -35,6 +36,7 @@
               "extractLicenses": false
             },
             "development": {
+              "outputPath": "dist/dev",
               "optimization": false,
               "extractLicenses": false,
               "sourceMap": true

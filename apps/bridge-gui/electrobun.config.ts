@@ -1,36 +1,22 @@
-import { existsSync } from "node:fs";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 import type { ElectrobunConfig } from "electrobun";
 
 /**
- * mainview-ng（Angular スパイク）の事前生成物の有無。
+ * 管理画面（Angular）の事前生成物の配置。
  *
- * 生成物が無い既定（vanilla）経路では `copy` に載せず、Hutch の必須複写を
- * 欠落させない（`CopySourceMissing` の回帰防止）。生成は opt-in
- * （`gui:run:ng` 等で `ng:build:*` を先行）である。Bun が build 時にこの
- * config を評価するため、判定は config 基準の絶対配置で行い作業ディレクトリに
- * 依存しない。3件が揃う場合だけ載せる（同一 `ng:build:*` の生成単位）。
+ * 生成の正本は UI パッケージ自身の `dist` であり、dev と prod を別ディレクトリに
+ * 分ける（`apps/bridge-gui-ui/dist/dev/browser`・`dist/prod/browser`。混在の罠の
+ * 排除）。`gui:run`・`gui:build` が選んだ側を `src/mainview-dist/dev`・`prod` へ
+ * 写し、Hutch の `copy` で `views/mainview/` へ載せる。Hutch の `copy` 源は
+ * package 内配置に限る（package 外の `../bridge-gui-ui/dist/...` 直接指定は
+ * `UnsafeOutputPath` で却下される実測のため、写しを経由する）。
+ * `copy` 表の源はそのまま載せる。相対は package 基準で解決される
+ * （Hutch の解決であり、起動時の作業ディレクトリに依存しない）。
+ *
+ * コピー元は環境変数 `BRIDGE_GUI_UI_DIR` で選ぶ。未指定時は prod の写しを既定と
+ * する。成果物が無ければ失敗させる（存在時のみコピーはしない。生成忘れの検出の
+ * ために落とす）。
  */
-const ngDistDir = join(
-  dirname(fileURLToPath(import.meta.url)),
-  "src",
-  "mainview-ng",
-  "dist",
-  "browser",
-);
-const hasNgDist = (["index.html", "main.js", "styles.css"] as const).every((name) =>
-  existsSync(join(ngDistDir, name)),
-);
-
-/** ng 生成物がある場合だけ `views/mainview-ng/` へ載せる複写表。 */
-const ngCopy: Record<string, string> = hasNgDist
-  ? {
-      "src/mainview-ng/dist/browser/index.html": "views/mainview-ng/index.html",
-      "src/mainview-ng/dist/browser/main.js": "views/mainview-ng/main.js",
-      "src/mainview-ng/dist/browser/styles.css": "views/mainview-ng/styles.css",
-    }
-  : {};
+const uiSource = process.env.BRIDGE_GUI_UI_DIR?.trim() || "src/mainview-dist/prod";
 
 export default {
   app: {
@@ -46,16 +32,11 @@ export default {
       entrypoint: "src/main/index.ts",
     },
     views: {
+      // ADR: 管理画面の UI 実体は Angular CLI の事前生成物であり、Hutch の
+      // view バンドル対象ではない。entrypoint は Hutch が要求する最小スタブ
+      // （`src/mainview-stub.ts`）とし、実体は `copy` で `views/mainview/` に載せる。
       mainview: {
-        entrypoint: "src/mainview/index.ts",
-      },
-      // ADR: mainview-ng の UI 実体は Angular CLI の事前生成物であり、
-      // Hutch の view バンドル対象ではない。entrypoint は Hutch が要求する
-      // 最小スタブ（`src/mainview-ng/stub.ts`）とし、実体は `copy` で載せる。
-      // 生成は opt-in（`gui:run:ng` 等で `ng:build:*` を先行）であり、
-      // 再帰 build（型検査のみ）・Vite には混ぜない。
-      "mainview-ng": {
-        entrypoint: "src/mainview-ng/stub.ts",
+        entrypoint: "src/mainview-stub.ts",
       },
       "plugin-spike": {
         entrypoint: "src/plugin-spike/index.ts",
@@ -69,12 +50,12 @@ export default {
     },
     // UI バンドルは Hutch の build.views＋HTML/CSS コピーで足りる。Vite は増やさない。
     copy: {
-      "src/mainview/index.html": "views/mainview/index.html",
-      "src/mainview/index.css": "views/mainview/index.css",
-      // ADR: mainview-ng（Angular スパイク）の実体は事前生成物である。
-      // `ng:build:*`（`outputHashing: none` の固定名）で作った `dist/browser/` を載せる。
-      // 生成物が無い既定経路では載せない（`hasNgDist` の判定。有無は上記）。
-      ...ngCopy,
+      // ADR: 管理画面（Angular）の実体は事前生成物の写しである。生成ディレクトリ
+      // ごと `views/mainview/` へ載せる（Hutch のディレクトリコピーの実測で
+      // 成立を確認。固定名 `index.html`・`main.js`・`styles.css` の
+      // `outputHashing: none` 生成を含む。将来 chunks／assets が増えた場合も
+      // `gui:run`・`gui:build` の写し経由で同梱される）。
+      [uiSource]: "views/mainview",
       "src/plugin-spike/index.html": "views/plugin-spike/index.html",
       "src/plugin-spike/index.css": "views/plugin-spike/index.css",
       "src/plugin-host/blank.html": "views/plugin-host/blank.html",

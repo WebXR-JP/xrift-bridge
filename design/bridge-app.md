@@ -30,7 +30,7 @@ flowchart LR
 - 依存方向は Angular UI・GUI main・vanilla 子画面から contract へ向ける。contract から `bridge-app-core`／`bridge-server` への参照は型のみとし、逆依存は持たない。
 - contract に Angular・Electrobun の実体、Bun・Node の実行依存、backend を入れない。contract のビルドを `.hutch` に依存させない。Angular UI から GUI ソースへの相対 import はしない。
 - プラグイン UI（`plugin-ui/*`）は当面 vanilla のままとし、プラグイン UI 基盤として Angular を必須にしない。
-- mainview の二重実装・フォールバックは恒久化しない。切替え方針は「管理画面の Angular 移行（設計変更）」節を正本とする。
+- 管理画面（mainview）の正本は Angular 実装（`apps/bridge-gui-ui`）であり、vanilla の二重実装・フォールバックは残さない。
 
 ## サーバーが公開するセッション口
 
@@ -96,21 +96,22 @@ flowchart LR
 
 mainview を Angular に本移行する。本節が設計変更の正本であり、他節は本節に従う。
 
-- 移行方針：機能・実 Webview・人間の確認が揃った時点で既定を Angular に切り替え、vanilla mainview（`apps/bridge-gui/src/mainview/`）は削除する。恒久的な二重実装・フォールバックは残さない。
+- 移行方針：既定の管理画面は Angular であり、vanilla 製の旧管理画面は削除済みである。恒久的な二重実装・フォールバックは残さない。
 - 契約境界：契約（DTO・限定操作・純粋な微少ランタイム＝`selectNewer`、URL 組立て／解析、navigation-rules 属性値等）を `packages/bridge-gui-contract` へ切り出す。依存方向・禁止は「三層の責務」節を正本とする。
-- ビルド：Angular 成果物は UI パッケージ自身の `dist` に生成する。再帰 `build` に Angular production AOT を含める（`tsc --noEmit` だけではテンプレートを検証できない）。GUI から UI への `workspace:*` ビルド依存を明示する。切替え時に URL を `views://mainview/index.html` に統一し、Hutch stub＋成果物コピーへ変える。`BRIDGE_GUI_VIEW`・`mainview-ng`・vanilla の views／copy を削除する。成果物が無ければ失敗させる。コピーは生成された chunks／assets を含める。
+- ビルド：Angular 成果物は UI パッケージ自身の `dist` に生成する（`dist/dev/browser`・`dist/prod/browser` の分離で混在させない）。再帰 `build` に Angular production AOT を含める（`tsc --noEmit` だけではテンプレートを検証できない）。GUI から UI への `workspace:*` ビルド依存を明示する。URL は `views://mainview/index.html` に統一し、Hutch stub＋生成物の写しのコピーとする。成果物が無ければ失敗させる。コピーは生成された chunks／assets を含める。
 - Angular 構造：RPC アダプター（接続・型付き request／push。表示状態や DOM を持たない）／状態・操作サービス（signals で snapshot 採用、初期同期、共通操作処理、実行中／失敗表示、安全な受信記録）／表示コンポーネント（状態要約＋受付＋終了、保留一覧・行、接続一覧、生存セッション、固定テキストカード）／子画面ホスト（実プラグイン配置・失敗・再試行、段0スパイク操作。タグ同一性保持）／開発専用デバッグアダプター。汎用ストア・ルーターは追加しない。比較コードは保留行の一時状態だけに置き、消滅後の遅延取得は再表示しない。子画面は安定領域へ命令的に追加・削除し、revision 更新で再生成しない。スパイクの起動時自動走行は削除する。
 - AI 観測口：開発ビルド＋明示 opt-in＋隔離実行の三条件で有効化する。経路は AI → loopback 接続口 → Bun main → 限定 Webview RPC → 共通操作サービス → 既存管理 RPC → backend とする。`127.0.0.1`・実行ごとランダム token・Origin／Host 制限・入力検証・サイズ／期限制限を設け、ブラウザ向け CORS は開かない。stable は環境変数を設定しても待受けを開かない。許可操作と DTO だけを通し、任意 JS・関数名・DOM 全文・実体取得口は持たない。`ng.*` は可否・件数等の補助観測だけに使う。操作受付・業務結果・snapshot 採用・Angular の DOM 反映は別々に返す（RPC 成功や rAF を描画完了と呼ばない）。native 画素観測は自動化の対象外とし、ここでは扱わない。比較コード取得からの自動承認はしない。汎用ジョブ履歴・再送基盤は作らない。
 - 描画確認：native 画素観測（`Screen.captureRegion()` 等）と実入力送信（cliclick／System Events 等）の自動化は行わない（非目標）。`Screen.captureRegion()` はデスクトップ矩形で Webview 単体捕獲ではないため採用しない。自動観測は開発専用の操作・観測口による DOM 観測までとし、固定要素キー・矩形・表示／disabled・`document.hasFocus()`・activeElement キーだけを返し、入力値・本文は返さない。描画・フォーカス・操作フローの最終確認は人間の GUI セッションで行う。
-- 未確認事項：`@angular/build:unit-test`（Vitest runner）と現 Vite+ override の互換、Hutch のディレクトリコピー可否。native 画素観測・実入力送信の自動化は非目標として確定し、本項目の対象外とする。成立しなければ独自試験基盤を作らず再相談する。
+- 確認済み：Hutch のディレクトリコピーは package 内配置で成立する（生成物の写しディレクトリ→`views/mainview/`。`index.html`・`main.js`・`styles.css` の同梱を実測）。package 外の直接指定は `UnsafeOutputPath` で却下されるため、UI の `dist` からの写しを経由する。native 画素観測・実入力送信の自動化は非目標として確定し、本項目の対象外とする。
+- 未確認事項：`@angular/build:unit-test`（Vitest runner）と現 Vite+ override の互換。成立しなければ独自試験基盤を作らず再相談する。
 
 ## 対象プラットフォームと GUI 基盤
 
 - 対象は macOS（Apple Silicon）を最優先とする。Electrobun は macOS x64 を提供しないため、Intel Mac は対象外とする。
 - GUI 基盤は Electrobun を採用する。実行ランタイムは Bun main、表示は native Webview 1枚とする。Electrobun 既定の Cottontail では Webview→main の RPC が本構成で成立しない観測があり、Bun main で成立することを確認した（観測は[アプリの検証計画](../docs/verification/bridge-app.md)を正本とする）。ベータ段階・単一メンテナというリスクは許容し、埋込み・配布・実行互換に問題が出た場合は Electron へ切り替える。その場合も本節の三層境界は維持する。
 - 管理画面（mainview）に Angular を採用する（mainview 限定。プラグイン UI は含まない）。変更検知は zoneless＋signals とする。
-- 再帰 `build` に Angular production AOT を含める（`tsc --noEmit` だけではテンプレートを検証できない）。成果物は UI パッケージ自身の `dist` に生成し、GUI から UI への `workspace:*` ビルド依存を明示する。
-- native 包装・起動は引き続き opt-in とする。切替え全体は「管理画面の Angular 移行（設計変更）」節を正本とする。
+- 再帰 `build` に Angular production AOT を含める（`tsc --noEmit` だけではテンプレートを検証できない）。成果物は UI パッケージ自身の `dist` に生成し（dev／prod を分離）、`gui:run`・`gui:build` が選んだ側を Hutch 包装用の写しへ載せ、GUI から UI への `workspace:*` ビルド依存を明示する。
+- native 包装・起動は引き続き opt-in とする。
 - 非目標は以下とする。サーバー起点のセッション作成、外部の非信頼プラグインの実行、分配・合流、通信途中のプラグイン付替え、認可や割当ての継承、汎用の接続管理 UI・永続化・複数 Webview 管理（後工程）。
 
 ## 文書の正本分担
@@ -128,4 +129,4 @@ mainview を Angular に本移行する。本節が設計変更の正本であ�
 - 実行情報：Electrobun で直接実行できるならこの構成で進める。別プロセスが必要なら IPC・監視・終了処理の増加を示して再相談する。埋込み・配布・実行互換に問題があれば Electron へ切り替える。境界は維持する。
 - 再相談：ローカル操作を行うプラグイン、非信頼コードの実行、分配・合流、通信途中の付替え、認可や割当ての継承が必要になった場合。
 - capability の一致を権限判定として扱わない。既存の接続認可はあらゆるローカル操作の包括承認ではない。
-- 観測能力：TestBed（`@angular/build:unit-test` の Vitest runner）と現 Vite+ override の互換、Hutch のディレクトリコピー可否は未確認である。成立しなければ独自試験基盤を作らず再相談する。機能移行の完了判断に視覚自動化を含めず、後者を完了扱いしない。native 画素・実入力の自動化が必要になった場合は再検討する。
+- 観測能力：TestBed（`@angular/build:unit-test` の Vitest runner）と現 Vite+ override の互換は未確認である。成立しなければ独自試験基盤を作らず再相談する。Hutch のディレクトリコピー（package 内配置）は成立を確認済みである。機能移行の完了判断に視覚自動化を含めず、後者を完了扱いしない。native 画素・実入力の自動化が必要になった場合は再検討する。

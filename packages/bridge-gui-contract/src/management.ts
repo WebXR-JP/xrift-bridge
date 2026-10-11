@@ -204,10 +204,10 @@ export interface StateChangedMessage {
 }
 
 /**
- * 開発専用の Angular スパイク観測口の応答。
+ * 開発専用の Angular 観測口の応答。
  *
- * mainview-ng の開発ビルドだけが有効応答を返し、製品ビルドでは無効応答に
- * なる（`available` が偽）。既定の vanilla 画面は handle しない。
+ * 管理画面（Angular）の開発ビルドだけが有効応答を返し、製品ビルドでは無効応答に
+ * なる（`available` が偽）。
  * 許可するのは可否・件数・改訂番号のみであり、比較コード本文・業務
  * payload・テキスト本文は含めない。
  */
@@ -406,13 +406,13 @@ export type ManagementRpc = {
   webview: RpcSchema<
     {
       /**
-       * 開発専用の Angular スパイク観測口。mainview-ng の開発ビルドだけが
-       * 有効応答を返し、製品ビルドでは無効応答になる。既定の vanilla 画面は
-       * handle しない。main は明示の opt-in（`BRIDGE_GUI_NG_DEBUG=1`）でのみ呼ぶ。
+       * 開発専用の Angular 観測口。管理画面（Angular）の開発ビルドだけが
+       * 有効応答を返し、製品ビルドでは無効応答になる。
+       * main は明示の opt-in（`BRIDGE_GUI_NG_DEBUG=1`）でのみ呼ぶ。
        */
       ngDebugProbe: { params: {}; response: NgDebugProbeResult };
       /**
-       * 開発専用の Angular 段階観測（DOM 反映）。mainview-ng の開発ビルドだけが
+       * 開発専用の Angular 段階観測（DOM 反映）。管理画面（Angular）の開発ビルドだけが
        * 有効応答を返し、製品ビルドでは無効応答になる。固定要素キー・矩形・
        * 表示/disabled・焦点だけを返し、入力値・本文は含めない。開発接続口
        * （loopback）が操作実行後の段階観測として呼ぶ。
