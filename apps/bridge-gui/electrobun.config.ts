@@ -17,11 +17,17 @@ export default {
       mainview: {
         entrypoint: "src/mainview/index.ts",
       },
+      "plugin-spike": {
+        entrypoint: "src/plugin-spike/index.ts",
+      },
     },
     // UI バンドルは Hutch の build.views＋HTML/CSS コピーで足りる。Vite は増やさない。
     copy: {
       "src/mainview/index.html": "views/mainview/index.html",
       "src/mainview/index.css": "views/mainview/index.css",
+      "src/plugin-spike/index.html": "views/plugin-spike/index.html",
+      "src/plugin-spike/index.css": "views/plugin-spike/index.css",
+      "src/plugin-host/blank.html": "views/plugin-host/blank.html",
     },
     // CEF・トレイ・更新配信は追加しない。
     mac: {

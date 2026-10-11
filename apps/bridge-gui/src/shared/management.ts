@@ -14,6 +14,7 @@ import type {
   RejectionResult,
 } from "bridge-server";
 import type { TextSendResult, TextStats } from "bridge-app-core";
+import type { PluginMountDto, SpikeMountSummary, SpikePushResult } from "./plugin-spike.ts";
 
 /** GUI バックエンドの起動状態。 */
 export type BackendStatus =
@@ -254,6 +255,32 @@ export type ManagementRpc = {
        * 対象セッションの中断は基盤の解除規約に従う。未割当てなら拒否する。
        */
       unassignText: { params: {}; response: OperationAck };
+      /**
+       * 段0スパイクの子画面配置。配置用 DTO（識別子＋初期 URL）を返す。
+       *
+       * 識別子は再利用しない。初期 URL は空ページに限る。
+       */
+      spikeCreate: { params: {}; response: PluginMountDto };
+      /**
+       * 段0スパイクの子画面破棄。所有表からの削除と表示の破棄を行う。
+       *
+       * 配置待ちの破棄では遅延生成の回収に回す。
+       */
+      spikeDestroy: { params: { mountId: string }; response: OperationAck };
+      /**
+       * 段0スパイクの子画面へ push を送る。混線の確認用である。
+       *
+       * 当該マウントだけに送り、他には届けない。
+       */
+      spikePush: { params: { mountId: string }; response: SpikePushResult };
+      /** 段0スパイクの所有中マウント一覧。表示用である。 */
+      spikeList: { params: {}; response: readonly SpikeMountSummary[] };
+      /**
+       * 段0スパイクの全マウント破棄。再読込み掃除と終了処理に使う。
+       *
+       * 識別子の連番は巻き戻さない。
+       */
+      spikeReset: { params: {}; response: OperationAck };
       /** アプリ終了を要求する。後始末完了後に終了する。 */
       quit: { params: {}; response: OperationAck };
     };

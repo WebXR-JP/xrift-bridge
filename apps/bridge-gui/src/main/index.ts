@@ -1,7 +1,9 @@
-import Electrobun, { BrowserWindow, type ElectrobunEvent } from "electrobun/main";
+import Electrobun, { BrowserView, BrowserWindow, type ElectrobunEvent } from "electrobun/main";
 import { PRODUCTION_ORIGIN } from "bridge-server";
 import { GuiBackend } from "./backend.ts";
 import { createManagementRpc } from "./rpc.ts";
+import { PluginMountManager } from "./plugin-mounts.ts";
+import { ElectrobunMountChildView, createChannelFactory } from "./spike-rpc.ts";
 
 /**
  * 同梱ページだけを許可する遷移規則。全面拒否を先に置き、
@@ -29,6 +31,8 @@ const backendOptions =
 const backendPromise: Promise<GuiBackend> = GuiBackend.create(backendOptions);
 // 終了手順の共有。二度目以降は同じ終了を待つ（冪等）。
 let shutdownTask: Promise<void> | null = null;
+// 段0スパイクの所有表。窓の生成後に結び付け、終了処理で破棄する。
+let spikeMounts: PluginMountManager | null = null;
 // 後始末が終わり、終了・閉鎖の再要求を許可できるか。
 let shutdownFinished = false;
 // 終了の再要求は一度だけ行う。
@@ -44,6 +48,9 @@ function shutdown(): Promise<void> {
   if (shutdownTask === null) {
     shutdownTask = (async () => {
       try {
+        // 子画面の所有表を先に破棄し、BrowserView・購読を残さない。
+        spikeMounts?.resetAll("終了");
+        spikeMounts = null;
         const target = await backendPromise;
         await target.close();
       } catch (error: unknown) {
@@ -69,6 +76,15 @@ function quitAfterShutdown(): void {
       Electrobun.Utils.quit();
     }
   });
+}
+
+/**
+ * 子画面の所有表が無い状態での要求拒否。窓の生成前には到達しない。
+ *
+ * @throws `Error` — 常に投げる。
+ */
+function failSpike(): never {
+  throw new Error("子画面の所有表が無い。");
 }
 
 // 段2の観測点。終了要求の受付と再要求だけを残し、待機はしない。
@@ -99,23 +115,35 @@ void backendPromise.then((ready) => {
   /** 要求の到達回数。Webview 側の到達証明用に数える（内容は残さない）。 */
   let snapshotRequestCount = 0;
 
-  const rpc = createManagementRpc(ready, {
-    onSnapshotRequested: () => {
-      snapshotRequestCount += 1;
-      console.log(`[bridge-gui] 表示状態の要求を受信した: count=${snapshotRequestCount}`);
+  const rpc = createManagementRpc(
+    ready,
+    {
+      onSnapshotRequested: () => {
+        snapshotRequestCount += 1;
+        console.log(`[bridge-gui] 表示状態の要求を受信した: count=${snapshotRequestCount}`);
+      },
+      onViewReady: (title) => {
+        console.log(`[bridge-gui] 管理画面の準備ができた: ${title}`);
+      },
+      onQuitRequested: () => {
+        if (shutdownFinished) {
+          Electrobun.Utils.quit();
+          return;
+        }
+        console.log("[bridge-gui] 管理画面から終了要求を受け付けた");
+        quitAfterShutdown();
+      },
     },
-    onViewReady: (title) => {
-      console.log(`[bridge-gui] 管理画面の準備ができた: ${title}`);
+    // 段0スパイクの操作口。所有表は窓の生成後に結び付けるため、
+    // 到達時点では必ず存在する（RPC 到達は窓の生成より後である）。
+    {
+      createSpikeMount: () => spikeMounts?.createMount() ?? failSpike(),
+      destroySpikeMount: (mountId) => spikeMounts?.destroyMount(mountId) ?? failSpike(),
+      pushSpikeMount: (mountId) => spikeMounts?.pushMount(mountId) ?? failSpike(),
+      listSpikeMounts: () => spikeMounts?.listMounts() ?? [],
+      resetSpikeMounts: () => spikeMounts?.resetAll("管理画面の要求") ?? { ok: true as const },
     },
-    onQuitRequested: () => {
-      if (shutdownFinished) {
-        Electrobun.Utils.quit();
-        return;
-      }
-      console.log("[bridge-gui] 管理画面から終了要求を受け付けた");
-      quitAfterShutdown();
-    },
-  });
+  );
 
   // バックエンドの状態変化を Webview へ送る唯一の通知である。
   // 購読者の例外はバックエンド側で隔離する。
@@ -175,8 +203,18 @@ void backendPromise.then((ready) => {
     return "詳細不明";
   }
 
+  // 段0スパイクの所有表。親 Webview の識別子でタグ生成元を照合する。
+  // タグ生成は管理画面の読込みより後であるため、ここでの登録で間に合う。
+  spikeMounts = new PluginMountManager(mainWindow.webview.id, createChannelFactory());
+  BrowserView.on("created", (view) => {
+    spikeMounts?.handleTagCreated(new ElectrobunMountChildView(view));
+  });
+
   mainWindow.webview.on("did-navigate", (event: unknown) => {
     console.log(`[bridge-gui] Webview が遷移した: ${describeNavigation(event)}`);
+    // 管理画面の再読込みでは配置が作り直されるため、所有表に残さない。
+    // 初回遷移では所有が空であり、何もしない。
+    spikeMounts?.resetAll("管理画面の遷移");
   });
 
   mainWindow.webview.on("dom-ready", () => {

@@ -111,6 +111,24 @@
       </section>
 
       <section class="card">
+        <h2>埋込み検証（段0スパイク）</h2>
+        <p class="note">
+          検証用の小さな子画面を置き、往復と破棄を確かめる。実プラグインの結線はしない。
+        </p>
+        <div class="row">
+          <button type="button" data-action="spike-create">子画面を作る</button>
+          <button type="button" data-action="spike-reset">子画面を全て外す</button>
+        </div>
+        <ul id="spike-list" class="entries"></ul>
+      </section>
+
+      <section class="card">
+        <h2>子画面の配置先</h2>
+        <p class="note">管理領域とは別のペインであり、重ねない。</p>
+        <div id="spike-container"></div>
+      </section>
+
+      <section class="card">
         <h2>終了</h2>
         <div class="row">
           <button type="button" data-action="quit">アプリを終了する</button>

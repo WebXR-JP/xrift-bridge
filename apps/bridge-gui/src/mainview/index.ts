@@ -3,6 +3,8 @@ import type { TextSendResult } from "bridge-app-core";
 import { TEXT_SESSION_ID, validateTextForSend } from "bridge-app-core/text-contract";
 import type { ManagementRpc, ManagementSnapshot, PairingViewResult } from "../shared/management.ts";
 import { selectNewer } from "../shared/management.ts";
+import type { SpikeMountSummary } from "../shared/plugin-spike.ts";
+import { SPIKE_NAVIGATION_RULES_ATTRIBUTE } from "../shared/plugin-spike.ts";
 
 function el(id: string): HTMLElement {
   const element = document.getElementById(id);
@@ -383,6 +385,95 @@ async function refresh(via: string): Promise<void> {
   }
 }
 
+// ---- 段0スパイク（子画面の配置と往復の確認） ----
+
+// 配置中のタグ（識別子→要素）。更新ごとの作り直しはしない。
+const spikeTags = new Map<string, HTMLElement>();
+
+/** 子画面の配置先。管理領域とは別のペインである。 */
+function spikeContainer(): HTMLElement {
+  return el("spike-container");
+}
+
+/** 配置用 DTO に従ってタグを一度だけ置く。既存は作り直さない。 */
+function placeSpikeTag(mountId: string, initialUrl: string): void {
+  if (spikeTags.has(mountId)) {
+    return;
+  }
+  const tag = document.createElement("electrobun-webview");
+  // 初期 URL は main 発行の DTO をそのまま載せる。任意 URL・HTML・preload は付けない。
+  tag.setAttribute("src", initialUrl);
+  tag.setAttribute("renderer", "native");
+  tag.setAttribute("navigation-rules", SPIKE_NAVIGATION_RULES_ATTRIBUTE);
+  // `sandbox` 属性は付けない（main が照合する）。
+  tag.id = `spike-${mountId}`;
+  spikeContainer().append(tag);
+  spikeTags.set(mountId, tag);
+}
+
+/** 配置中のタグを外す。表示の破棄は main の所有表が行う。 */
+function dropSpikeTag(mountId: string): void {
+  const tag = spikeTags.get(mountId);
+  if (tag === undefined) {
+    return;
+  }
+  tag.remove();
+  spikeTags.delete(mountId);
+}
+
+/** 所有一覧に合わせてタグを足し引きする。既存は触らない。 */
+function reconcileSpikeTags(mounts: readonly SpikeMountSummary[]): void {
+  const live = new Set(mounts.map((mount) => mount.mountId));
+  for (const mountId of spikeTags.keys()) {
+    if (!live.has(mountId)) {
+      dropSpikeTag(mountId);
+      appendLog(`子画面を外した mountId=${mountId}`);
+    }
+  }
+  for (const mount of mounts) {
+    if (!spikeTags.has(mount.mountId)) {
+      placeSpikeTag(mount.mountId, mount.initialUrl);
+      appendLog(`子画面を置いた mountId=${mount.mountId}`);
+    }
+  }
+}
+
+/** 所有一覧の表示を描き直す。タグ自体は作り直さない。 */
+function renderSpikeStatus(mounts: readonly SpikeMountSummary[]): void {
+  const list = document.querySelector<HTMLUListElement>("#spike-list");
+  if (!list) {
+    return;
+  }
+  list.replaceChildren();
+  if (mounts.length === 0) {
+    const item = document.createElement("li");
+    item.textContent = "子画面は無い";
+    list.append(item);
+    return;
+  }
+  for (const mount of mounts) {
+    const item = document.createElement("li");
+    const state = mount.ready ? "準備完了" : mount.phase === "pending" ? "生成待ち" : "採用待ち";
+    item.append(`${mount.mountId}（${state}・rev ${mount.revision}） `);
+    item.append(actionButton("spike-push", mount.mountId, "送る"), " ");
+    item.append(actionButton("spike-destroy", mount.mountId, "外す"));
+    list.append(item);
+  }
+}
+
+/** 所有一覧を読み直し、タグと表示を合わせる。 */
+async function refreshSpike(via: string): Promise<void> {
+  try {
+    const mounts = await rpc.request.spikeList({});
+    reconcileSpikeTags(mounts);
+    renderSpikeStatus(mounts);
+  } catch (error: unknown) {
+    console.log(`[bridge-gui] 子画面の再取得に失敗した: ${via} ${String(error)}`);
+  }
+}
+
+// ---- 段0スパイクの節ここまで ----
+
 document.addEventListener("click", (event) => {
   const target = event.target;
   if (!(target instanceof HTMLButtonElement)) {
@@ -532,6 +623,30 @@ async function handleAction(action: string, id: string): Promise<void> {
         await refresh("テキスト送信");
         break;
       }
+      case "spike-create": {
+        const created = await rpc.request.spikeCreate({});
+        console.log(`[bridge-gui] 子画面を作った: mountId=${created.mountId}`);
+        await refreshSpike("子画面作成");
+        break;
+      }
+      case "spike-destroy": {
+        await rpc.request.spikeDestroy({ mountId: id });
+        console.log(`[bridge-gui] 子画面を外した: mountId=${id}`);
+        await refreshSpike("子画面破棄");
+        break;
+      }
+      case "spike-push": {
+        const pushed = await rpc.request.spikePush({ mountId: id });
+        console.log(`[bridge-gui] 子画面へ送った: mountId=${id} revision=${pushed.revision}`);
+        await refreshSpike("子画面送信");
+        break;
+      }
+      case "spike-reset": {
+        await rpc.request.spikeReset({});
+        console.log("[bridge-gui] 子画面を全て外した");
+        await refreshSpike("子画面全破棄");
+        break;
+      }
       case "quit": {
         await rpc.request.quit({});
         console.log("[bridge-gui] アプリの終了を要求した");
@@ -564,6 +679,14 @@ try {
 } catch (error: unknown) {
   console.log(`[bridge-gui] 準備完了の通知に失敗した: ${String(error)}`);
 }
+try {
+  // 再読込み時の残存を掃除する。所有表に残る表示・購読を残さない。
+  await rpc.request.spikeReset({});
+  console.log("[bridge-gui] 子画面の残存を掃除した");
+} catch (error: unknown) {
+  console.log(`[bridge-gui] 子画面の掃除に失敗した: ${String(error)}`);
+}
+await refreshSpike("初期化");
 
 setInterval(tick, 500);
 
