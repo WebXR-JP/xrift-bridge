@@ -21,8 +21,8 @@ import type {
   SpikePushMessage,
   SpikePushResult,
   SpikeSnapshot,
-} from "../shared/plugin-spike.ts";
-import { buildBlankUrl, buildSpikeUrl, parseMountId } from "../shared/plugin-spike.ts";
+} from "bridge-gui-contract/plugin-spike";
+import { buildBlankUrl, buildSpikeUrl, parseMountId } from "bridge-gui-contract/plugin-spike";
 
 /**
  * SDK 非依存の子画面ハンドル。実体は適合層が `BrowserView` に結び付ける。

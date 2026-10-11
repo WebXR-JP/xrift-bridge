@@ -7,8 +7,8 @@
  * main へ送り、`dom-ready` だけでは判定しない。
  */
 import { Electroview } from "electrobun/view";
-import type { SpikeRpc } from "../shared/plugin-spike.ts";
-import { parseMountId } from "../shared/plugin-spike.ts";
+import type { SpikeRpc } from "bridge-gui-contract/plugin-spike";
+import { parseMountId } from "bridge-gui-contract/plugin-spike";
 
 /**
  * 表示欄に短い文を出す。

@@ -7,23 +7,30 @@
 ```mermaid
 flowchart LR
     S["生存セッション<br/>(bridge-server が公開)"] -->|"割当て"| P["プラグインインスタンス<br/>(bridge-app-core が管理)"]
-    P -->|"埋込み表示"| G["管理画面・比較コード照合<br/>(bridge-gui)"]
+    P -->|"埋込み表示"| G["管理画面・比較コード照合<br/>(bridge-gui-ui + bridge-gui)"]
     G --- B["GUIバックエンド<br/>(両者を組み立て)"]
     B --- S
+    G --- C["契約<br/>(bridge-gui-contract)"]
 ```
 
-三層の関係は、公開された生存セッションを割当てで結び、画面に埋め込む大枠である。詳細は本文に置く。
+三層の関係は、公開された生存セッションを割当てで結び、画面に埋め込む大枠である。画面と backend が共有する契約は `bridge-gui-contract` に置く。詳細は本文に置く。
 
 ## 三層の責務
 
-| 層                         | 担うこと                                                                                                         |
-| -------------------------- | ---------------------------------------------------------------------------------------------------------------- |
-| `bridge-server`            | 接続前検証・ペアリング・Connection認可・輸送・生存セッションの公開・輸送統計                                     |
-| `packages/bridge-app-core` | プラグイン定義とインスタンス管理、接続口の適合判定、割当て・解除、失効処理、UI非依存の状態と操作、同梱プラグイン |
-| `apps/bridge-gui`          | 起動・終了、管理画面、比較コード照合、プラグインUIの埋込み、デスクトップ機能、画面との通信                       |
+| 層                             | 担うこと                                                                                                             |
+| ------------------------------ | -------------------------------------------------------------------------------------------------------------------- |
+| `bridge-server`                | 接続前検証・ペアリング・Connection認可・輸送・生存セッションの公開・輸送統計                                         |
+| `packages/bridge-app-core`     | プラグイン定義とインスタンス管理、接続口の適合判定、割当て・解除、失効処理、UI非依存の状態と操作、同梱プラグイン     |
+| `packages/bridge-gui-contract` | 契約（表示DTO・限定操作・純粋な微少ランタイム）。`management`／`plugin-instance`／`plugin-spike` の subpath を分ける |
+| `apps/bridge-gui-ui`           | 管理画面（mainview）の Angular 実装。契約だけを参照する                                                              |
+| `apps/bridge-gui`              | 起動・終了、比較コード照合、Angular 画面の包装・表示、プラグインUIの埋込み、デスクトップ機能、画面との通信           |
 
 - `bridge-app-core` はサーバー管理境界を受け取り、GUIライブラリを参照しない。GUIのバックエンドが両者を組み立てる。
 - 埋込み画面（Webview）へ `BridgeServer` や生の `Session` を渡さない。表示用データと限定した操作だけを渡す。
+- 依存方向は Angular UI・GUI main・vanilla 子画面から contract へ向ける。contract から `bridge-app-core`／`bridge-server` への参照は型のみとし、逆依存は持たない。
+- contract に Angular・Electrobun の実体、Bun・Node の実行依存、backend を入れない。contract のビルドを `.hutch` に依存させない。Angular UI から GUI ソースへの相対 import はしない。
+- プラグイン UI（`plugin-ui/*`）は当面 vanilla のままとし、プラグイン UI 基盤として Angular を必須にしない。
+- mainview の二重実装・フォールバックは恒久化しない。切替え方針は「管理画面の Angular 移行（設計変更）」節を正本とする。
 
 ## サーバーが公開するセッション口
 
@@ -82,13 +89,28 @@ flowchart LR
 - 反映確認は「表示用状態に反映した」ことであり、送信 API の成功や描画完了とは区別する。同時実行は一件とし、期限切れ・切断は結果不明として自動再送しない。不正な応答は対象セッションのみ中断し、不正入力は送信前に拒否する。
 - 形状・論理名・上限・応答期限・検証規則は契約モジュール（[`packages/bridge-app-core/src/text-contract.ts`](../packages/bridge-app-core/src/text-contract.ts)の公開 subpath）を正本とし、ここでは複製しない。契約モジュールはブラウザ安全な構成とし、ワールドは root import でサーバー依存を引き込まない。公開範囲は[`packages/bridge-app-core/package.json`](../packages/bridge-app-core/package.json)の exports を正本とする。プラグイン本体の振る舞いは[`packages/bridge-app-core/src/plugins/text/plugin.ts`](../packages/bridge-app-core/src/plugins/text/plugin.ts)、ワールド側の受信・表示は[`apps/diagnostic-world/src/text/`](../apps/diagnostic-world/src/text/)を正本とする。
 - 割当ては固定プラグイン一種類・同時に一インスタンスとし、開始通知での自動割当てはしない。明示操作でのみ行い、論理名と capability が一致する唯一の候補が全接続を通じて一件だけの場合に割り当て、候補ゼロ・複数は理由付きで拒否する（先着順・一件目・Origin 推測をしない）。解除・インスタンス削除は対象セッションを中断する。再接続後は再承認・新規セッション・新規の明示割当てを要求し、同名でも旧操作口・未完了要求・本文を引き継がない。論理名の一致は内容互換性や真正性の証明ではない。
-- 画面は当面、管理 Webview 内の暫定 UI（割当て先・状態・直近結果・統計、割当て／解除、本文入力、送信）とし、専用の埋込み Webview（プラグイン UI 埋込み）は独立したゲートとして本節では未実装とする。移行時は同じ表示データ・限定操作の境界を再利用する。Webview へ生のサーバー・セッションを渡さない方針を維持し、本文は snapshot・ログ・永続保存に残さない。表示データと限定操作は[`apps/bridge-gui/src/shared/management.ts`](../apps/bridge-gui/src/shared/management.ts)、組立ては[`apps/bridge-gui/src/main/backend.ts`](../apps/bridge-gui/src/main/backend.ts)を正本とする。
+- 画面は埋込みの子画面（プラグイン UI 埋込み）で行い、管理 Webview 内の暫定 UI は使わない。同じ表示データ・限定操作の境界を再利用する。Webview へ生のサーバー・セッションを渡さない方針を維持し、本文は snapshot・ログ・永続保存に残さない。表示データと限定操作の正本は `bridge-gui-contract` の `management` subpath（[`packages/bridge-gui-contract/src/management.ts`](../packages/bridge-gui-contract/src/management.ts)）、組立ては[`apps/bridge-gui/src/main/backend.ts`](../apps/bridge-gui/src/main/backend.ts)を正本とする。
 - 診断割当てはテキスト表示用セッションを対象外とし、テキスト割当てと排他にする。
+
+## 管理画面の Angular 移行（設計変更）
+
+mainview を Angular に本移行する。本節が設計変更の正本であり、他節は本節に従う。
+
+- 移行方針：機能・実 Webview・人間の確認が揃った時点で既定を Angular に切り替え、vanilla mainview（`apps/bridge-gui/src/mainview/`）は削除する。恒久的な二重実装・フォールバックは残さない。
+- 契約境界：契約（DTO・限定操作・純粋な微少ランタイム＝`selectNewer`、URL 組立て／解析、navigation-rules 属性値等）を `packages/bridge-gui-contract` へ切り出す。依存方向・禁止は「三層の責務」節を正本とする。
+- ビルド：Angular 成果物は UI パッケージ自身の `dist` に生成する。再帰 `build` に Angular production AOT を含める（`tsc --noEmit` だけではテンプレートを検証できない）。GUI から UI への `workspace:*` ビルド依存を明示する。切替え時に URL を `views://mainview/index.html` に統一し、Hutch stub＋成果物コピーへ変える。`BRIDGE_GUI_VIEW`・`mainview-ng`・vanilla の views／copy を削除する。成果物が無ければ失敗させる。コピーは生成された chunks／assets を含める。
+- Angular 構造：RPC アダプター（接続・型付き request／push。表示状態や DOM を持たない）／状態・操作サービス（signals で snapshot 採用、初期同期、共通操作処理、実行中／失敗表示、安全な受信記録）／表示コンポーネント（状態要約＋受付＋終了、保留一覧・行、接続一覧、生存セッション、固定テキストカード）／子画面ホスト（実プラグイン配置・失敗・再試行、段0スパイク操作。タグ同一性保持）／開発専用デバッグアダプター。汎用ストア・ルーターは追加しない。比較コードは保留行の一時状態だけに置き、消滅後の遅延取得は再表示しない。子画面は安定領域へ命令的に追加・削除し、revision 更新で再生成しない。スパイクの起動時自動走行は削除する。
+- AI 観測口：開発ビルド＋明示 opt-in＋隔離実行の三条件で有効化する。経路は AI → loopback 接続口 → Bun main → 限定 Webview RPC → 共通操作サービス → 既存管理 RPC → backend とする。`127.0.0.1`・実行ごとランダム token・Origin／Host 制限・入力検証・サイズ／期限制限を設け、ブラウザ向け CORS は開かない。stable は環境変数を設定しても待受けを開かない。許可操作と DTO だけを通し、任意 JS・関数名・DOM 全文・実体取得口は持たない。`ng.*` は可否・件数等の補助観測だけに使う。操作受付・業務結果・snapshot 採用・Angular の DOM 反映・native 画素観測は別々に返す（RPC 成功や rAF を描画完了と呼ばない）。比較コード取得からの自動承認はしない。汎用ジョブ履歴・再送基盤は作らない。
+- 描画確認：同梱 SDK の `Screen.captureRegion()` と `BrowserWindow.activate()` を使う。capture はデスクトップ矩形であり Webview 単体ではない。DOM 観測は固定要素キー・矩形・表示／disabled・`document.hasFocus()`・activeElement キーだけとし、入力値・本文は返さない。実入力は cliclick／System Events を第一候補とする。画像は対象アプリ領域だけに限り、機微領域は遮蔽または拒否する。
+- 未確認事項：`@angular/build:unit-test`（Vitest runner）と現 Vite+ override の互換、Hutch のディレクトリコピー可否、`Screen.captureRegion()`／`BrowserWindow.activate()`／native 入力送信の実成立。macOS 権限・座標・遮蔽・実画素も未確認である。成立しなければ独自試験基盤を作らず再相談する。画像取得不能なら機能移行と視覚自動化を分けて報告し、後者を完了扱いしない。
 
 ## 対象プラットフォームと GUI 基盤
 
 - 対象は macOS（Apple Silicon）を最優先とする。Electrobun は macOS x64 を提供しないため、Intel Mac は対象外とする。
 - GUI 基盤は Electrobun を採用する。実行ランタイムは Bun main、表示は native Webview 1枚とする。Electrobun 既定の Cottontail では Webview→main の RPC が本構成で成立しない観測があり、Bun main で成立することを確認した（観測は[アプリの検証計画](../docs/verification/bridge-app.md)を正本とする）。ベータ段階・単一メンテナというリスクは許容し、埋込み・配布・実行互換に問題が出た場合は Electron へ切り替える。その場合も本節の三層境界は維持する。
+- 管理画面（mainview）に Angular を採用する（mainview 限定。プラグイン UI は含まない）。変更検知は zoneless＋signals とする。
+- 再帰 `build` に Angular production AOT を含める（`tsc --noEmit` だけではテンプレートを検証できない）。成果物は UI パッケージ自身の `dist` に生成し、GUI から UI への `workspace:*` ビルド依存を明示する。
+- native 包装・起動は引き続き opt-in とする。切替え全体は「管理画面の Angular 移行（設計変更）」節を正本とする。
 - 非目標は以下とする。サーバー起点のセッション作成、外部の非信頼プラグインの実行、分配・合流、通信途中のプラグイン付替え、認可や割当ての継承、汎用の接続管理 UI・永続化・複数 Webview 管理（後工程）。
 
 ## 文書の正本分担
@@ -98,6 +120,7 @@ flowchart LR
 - [プロトコル](protocol.md)：輸送・配送・方向・終了の契約。
 - コード：公開型・フィールド・操作名・データ形状。
 - テキスト契約 subpath（`packages/bridge-app-core` の公開するテキスト契約）：固定テキスト表示の形状・論理名・上限・応答期限・検証規則。
+- 契約パッケージ（`packages/bridge-gui-contract` の `management`／`plugin-instance`／`plugin-spike` subpath）：GUI 契約の形状・検証規則。
 - [接続の検証計画](../docs/verification/bridge-connection.md)：接続の検証計画。[アプリの検証計画](../docs/verification/bridge-app.md)：アプリ固有の観測。
 
 ## 見直し条件
@@ -105,3 +128,4 @@ flowchart LR
 - 実行情報：Electrobun で直接実行できるならこの構成で進める。別プロセスが必要なら IPC・監視・終了処理の増加を示して再相談する。埋込み・配布・実行互換に問題があれば Electron へ切り替える。境界は維持する。
 - 再相談：ローカル操作を行うプラグイン、非信頼コードの実行、分配・合流、通信途中の付替え、認可や割当ての継承が必要になった場合。
 - capability の一致を権限判定として扱わない。既存の接続認可はあらゆるローカル操作の包括承認ではない。
+- 観測能力：TestBed（`@angular/build:unit-test` の Vitest runner）と現 Vite+ override の互換、Hutch のディレクトリコピー可否、`Screen.captureRegion()`／`BrowserWindow.activate()`／native 入力送信の実成立は未確認である。成立しなければ独自試験基盤を作らず再相談する。画像取得不能なら機能移行と視覚自動化を分けて報告し、後者を完了扱いしない。

@@ -15,7 +15,7 @@ import type {
   PluginUiMountKind,
   TextInstanceChangedMessage,
   TextInstanceRpc,
-} from "../shared/plugin-instance.ts";
+} from "bridge-gui-contract/plugin-instance";
 import {
   buildDiagnosticRequestHandlers,
   buildTextRequestHandlers,

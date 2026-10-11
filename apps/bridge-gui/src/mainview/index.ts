@@ -1,11 +1,15 @@
 import { Electroview } from "electrobun/view";
 import { TEXT_SESSION_ID } from "bridge-app-core/text-contract";
-import type { ManagementRpc, ManagementSnapshot, PairingViewResult } from "../shared/management.ts";
-import { selectNewer } from "../shared/management.ts";
-import type { PluginUiMountPlacement } from "../shared/plugin-instance.ts";
-import { PLUGIN_NAVIGATION_RULES_ATTRIBUTE } from "../shared/plugin-instance.ts";
-import type { SpikeMountSummary } from "../shared/plugin-spike.ts";
-import { SPIKE_NAVIGATION_RULES_ATTRIBUTE } from "../shared/plugin-spike.ts";
+import type {
+  ManagementRpc,
+  ManagementSnapshot,
+  PairingViewResult,
+} from "bridge-gui-contract/management";
+import { selectNewer } from "bridge-gui-contract/management";
+import type { PluginUiMountPlacement } from "bridge-gui-contract/plugin-instance";
+import { PLUGIN_NAVIGATION_RULES_ATTRIBUTE } from "bridge-gui-contract/plugin-instance";
+import type { SpikeMountSummary } from "bridge-gui-contract/plugin-spike";
+import { SPIKE_NAVIGATION_RULES_ATTRIBUTE } from "bridge-gui-contract/plugin-spike";
 
 function el(id: string): HTMLElement {
   const element = document.getElementById(id);

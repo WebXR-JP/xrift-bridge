@@ -1,6 +1,6 @@
 import { expect, test } from "vite-plus/test";
-import type { ManagementSnapshot } from "../src/shared/management.ts";
-import { selectNewer } from "../src/shared/management.ts";
+import type { ManagementSnapshot } from "bridge-gui-contract/management";
+import { selectNewer } from "bridge-gui-contract/management";
 
 // テスト用の表示状態。検証対象は revision の採用規約のみである。
 function snapshot(revision: number): ManagementSnapshot {

@@ -6,7 +6,6 @@
  *
  * @packageDocumentation
  */
-import type { RPCSchema } from "electrobun/rpc";
 import type {
   ApprovalResult,
   BridgeSessionInfo,
@@ -248,10 +247,20 @@ export interface OperationAck {
   readonly ok: true;
 }
 
+// ADR: Electrobun の `RPCSchema<I>` は `{requests, messages}` に解決される
+// 構造型であり、`ElectrobunRPCSchema` 制約（`{bun, webview}`）も構造適合で
+// 満たせる。そのため契約ではこの素朴な構造型で表し、`electrobun/rpc` を
+// import しない（契約パッケージのビルドを `.hutch` に依存させない）。
+// 制約が構造型を拒否する場合は bridge-gui 側のアダプタで最小の型写像を行う。
+type RpcSchema<Requests, Messages> = {
+  requests: Requests;
+  messages: Messages;
+};
+
 /** 管理画面 RPC の型。main・Webview の両方から参照する。 */
 export type ManagementRpc = {
-  bun: RPCSchema<{
-    requests: {
+  bun: RpcSchema<
+    {
       /** 表示状態の取得。読み取りは revision を進めない。 */
       getSnapshot: { params: {}; response: ManagementSnapshot };
       /** ペアリング受付を有効化する。 */
@@ -335,26 +344,26 @@ export type ManagementRpc = {
       retryPluginMounts: { params: {}; response: OperationAck };
       /** アプリ終了を要求する。後始末完了後に終了する。 */
       quit: { params: {}; response: OperationAck };
-    };
-    messages: {
+    },
+    {
       /** Webview の準備完了通知。main は受信を記録する。 */
       viewReady: { title: string };
-    };
-  }>;
-  webview: RPCSchema<{
-    requests: {
+    }
+  >;
+  webview: RpcSchema<
+    {
       /**
        * 開発専用の Angular スパイク観測口。mainview-ng の開発ビルドだけが
        * 有効応答を返し、製品ビルドでは無効応答になる。既定の vanilla 画面は
        * handle しない。main は明示の opt-in（`BRIDGE_GUI_NG_DEBUG=1`）でのみ呼ぶ。
        */
       ngDebugProbe: { params: {}; response: NgDebugProbeResult };
-    };
-    messages: {
+    },
+    {
       /** main からの状態 push。 */
       stateChanged: StateChangedMessage;
-    };
-  }>;
+    }
+  >;
 };
 
 /**

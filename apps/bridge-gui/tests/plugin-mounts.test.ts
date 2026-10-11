@@ -15,8 +15,8 @@ import {
   type SpikeChannelFactory,
   type SpikeChannelHooks,
 } from "../src/main/plugin-mounts.ts";
-import { buildBlankUrl } from "../src/shared/plugin-spike.ts";
-import { parseMountId } from "../src/shared/plugin-spike.ts";
+import { buildBlankUrl } from "bridge-gui-contract/plugin-spike";
+import { parseMountId } from "bridge-gui-contract/plugin-spike";
 
 /** 検証用の偽チャネル。push の到達だけを記録する。 */
 class FakeChannel implements MountChannel {

@@ -14,7 +14,7 @@
 import { Electroview } from "electrobun/view";
 import { validateTextForSend } from "bridge-app-core/text-contract";
 import type { TextSendResult } from "bridge-app-core";
-import type { TextInstanceRpc, TextInstanceSnapshot } from "../../shared/plugin-instance.ts";
+import type { TextInstanceRpc, TextInstanceSnapshot } from "bridge-gui-contract/plugin-instance";
 import {
   PLUGIN_INITIAL_FETCH_ATTEMPTS,
   PLUGIN_INITIAL_FETCH_RETRY_MS,
@@ -22,7 +22,7 @@ import {
   parsePluginMountId,
   pluginMountKindOf,
   selectNewerInstanceSnapshot,
-} from "../../shared/plugin-instance.ts";
+} from "bridge-gui-contract/plugin-instance";
 
 /**
  * 表示欄に短い文を出す。

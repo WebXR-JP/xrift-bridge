@@ -2,7 +2,7 @@
  * GUI バックエンド。同一 main プロセス内で `bridge-server` と
  * `bridge-app-core` を組み立てる。
  *
- * Electron・native API に依存しない。表示状態 DTO（`src/shared/management.ts`）
+ * Electron・native API に依存しない。表示状態 DTO（`bridge-gui-contract/management`）
  * と限定操作だけを公開し、テストから直接生成して使える。
  * `BridgeServer` や生の `Session` を Webview へ渡さない。
  *
@@ -42,8 +42,8 @@ import type {
   PairingViewResult,
   StateChangedMessage,
   TextDisplayState,
-} from "../shared/management.ts";
-import type { DiagnosticInstanceView, TextInstanceView } from "../shared/plugin-instance.ts";
+} from "bridge-gui-contract/management";
+import type { DiagnosticInstanceView, TextInstanceView } from "bridge-gui-contract/plugin-instance";
 
 /** 既定の待ち受けポート。 */
 export const DEFAULT_BRIDGE_PORT = 3100;

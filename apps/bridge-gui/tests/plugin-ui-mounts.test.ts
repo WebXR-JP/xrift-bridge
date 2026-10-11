@@ -20,7 +20,7 @@ import type {
   DiagnosticInstanceView,
   TextInstanceSnapshot,
   TextInstanceView,
-} from "../src/shared/plugin-instance.ts";
+} from "bridge-gui-contract/plugin-instance";
 import {
   buildPluginBlankUrl,
   buildPluginDiagnosticUrl,
@@ -28,7 +28,7 @@ import {
   parsePluginMountId,
   pluginMountKindOf,
   PLUGIN_PENDING_TIMEOUT_MS,
-} from "../src/shared/plugin-instance.ts";
+} from "bridge-gui-contract/plugin-instance";
 
 /** 検証用の束縛情報。表示の照合だけに使う。 */
 interface TestBinding {

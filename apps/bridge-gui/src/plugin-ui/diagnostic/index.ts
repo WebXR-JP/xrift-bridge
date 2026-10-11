@@ -13,14 +13,14 @@ import { Electroview } from "electrobun/view";
 import type {
   DiagnosticInstanceRpc,
   DiagnosticInstanceSnapshot,
-} from "../../shared/plugin-instance.ts";
+} from "bridge-gui-contract/plugin-instance";
 import {
   PLUGIN_INITIAL_FETCH_ATTEMPTS,
   PLUGIN_INITIAL_FETCH_RETRY_MS,
   parsePluginMountId,
   pluginMountKindOf,
   selectNewerInstanceSnapshot,
-} from "../../shared/plugin-instance.ts";
+} from "bridge-gui-contract/plugin-instance";
 
 /**
  * 表示欄に短い文を出す。

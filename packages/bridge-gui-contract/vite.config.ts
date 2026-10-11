@@ -1,0 +1,19 @@
+import { defineConfig } from "vite-plus";
+
+export default defineConfig({
+  pack: {
+    // 管理画面の表示 DTO・限定操作・純粋な微少ランタイムの 3 entry。
+    // 出力は package.json の exports に対応する。
+    entry: ["src/management.ts", "src/plugin-instance.ts", "src/plugin-spike.ts"],
+    deps: {
+      // tsdown <0.23 compatibility: resolve external dependency subpaths.
+      // Remove to preserve subpath imports as written (the new default).
+      // https://tsdown.dev/options/dependencies#deps-resolvedepsubpath
+      resolveDepSubpath: true,
+    },
+    dts: {
+      generator: "tsgo",
+    },
+    exports: true,
+  },
+});

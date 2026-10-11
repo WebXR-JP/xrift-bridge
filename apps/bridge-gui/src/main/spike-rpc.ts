@@ -9,7 +9,7 @@
  * @packageDocumentation
  */
 import { BrowserView } from "electrobun/main";
-import type { SpikePushMessage, SpikeRpc } from "../shared/plugin-spike.ts";
+import type { SpikePushMessage, SpikeRpc } from "bridge-gui-contract/plugin-spike";
 import type {
   MountChannel,
   MountChildView,

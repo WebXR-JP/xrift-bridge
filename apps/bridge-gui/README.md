@@ -2,6 +2,7 @@
 
 XRift Bridge の管理画面。Electrobun 2.x＋Bun main を前提とする。
 設計の正本は `design/bridge-app.md`（三層責務・GUI 境界）である。
+標準の GUI 手順は設計の移行節（「管理画面の Angular 移行（設計変更）」）に従う。
 
 ## 版の記録
 
@@ -62,7 +63,7 @@ BRIDGE_GUI_DEV_ORIGINS=http://localhost:5173 pnpm --filter bridge-gui gui:run
 ```
 
 Angular スパイクの実体は `apps/bridge-gui-ui/`（UI 専用に TS 6.0 系を局所固定。
-契約型は `src/shared/*` の相対 import で再利用し、DTO の重複定義はしない）。
+契約型は `bridge-gui-contract` の公開 subpath から再利用し、DTO の重複定義はしない）。
 AOT 生成物は `apps/bridge-gui/src/mainview-ng/dist/`（生成物のため無視）に作り、
 Hutch の `copy` で `views/mainview-ng/` に載せる。再帰 build に載せるのは型検査のみ。
 view の選択は `BRIDGE_GUI_VIEW=mainview-ng`（既定 `mainview`・未知値は既定に戻る）、
@@ -91,7 +92,7 @@ apps/bridge-gui/
   src/main/index.ts        # バックエンド組立て、終了集約、RPC接続
   src/main/backend.ts      # bridge-server＋bridge-app-core の組立て（GuiBackend）
   src/main/rpc.ts          # main 側 RPC 定義（表示DTOと限定操作のみ）
-  src/shared/management.ts # 表示DTO・限定操作の型（実行時依存なし）
+  ../../packages/bridge-gui-contract/src/management.ts # 表示DTO・限定操作の型（実行時依存なし）
   src/mainview/index.html  src/mainview/index.ts  src/mainview/index.css
   tests/management.test.ts # revision 採用規約の単体検証
   tests/backend.test.ts    # backend 直接の統合検証（実WS・既存ws・yamux）

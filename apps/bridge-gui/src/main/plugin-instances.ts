@@ -24,7 +24,7 @@ import type {
   TextInstanceChangedMessage,
   TextInstanceSnapshot,
   TextInstanceView,
-} from "../shared/plugin-instance.ts";
+} from "bridge-gui-contract/plugin-instance";
 import type { PluginMountManager } from "./plugin-mounts.ts";
 
 /**

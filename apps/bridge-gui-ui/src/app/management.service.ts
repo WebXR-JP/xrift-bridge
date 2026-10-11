@@ -2,8 +2,8 @@
  * 管理画面 RPC の Angular 向け薄い包み。
  *
  * DTO・操作・採用規約の再定義はしない。契約型（`ManagementRpc`・
- * `ManagementSnapshot`・`selectNewer`）は bridge-gui の共有型を相対
- * import で再利用する（スパイク段階の境界。循環が無いことを `tsc` で確かめる）。
+ * `ManagementSnapshot`・`selectNewer`）は `bridge-gui-contract` の公開
+ * subpath から再利用する（循環が無いことを `tsc` で確かめる）。
  * 子画面タグの配置は既存の所有表（`spikeCreate` 発行の DTO）とだけ結び付け、
  * 実プラグインの対応付けには触らない。
  */
@@ -13,9 +13,9 @@ import type {
   ManagementRpc,
   ManagementSnapshot,
   NgDebugProbeResult,
-} from "../../../bridge-gui/src/shared/management.ts";
-import { selectNewer } from "../../../bridge-gui/src/shared/management.ts";
-import { SPIKE_NAVIGATION_RULES_ATTRIBUTE } from "../../../bridge-gui/src/shared/plugin-spike.ts";
+} from "bridge-gui-contract/management";
+import { selectNewer } from "bridge-gui-contract/management";
+import { SPIKE_NAVIGATION_RULES_ATTRIBUTE } from "bridge-gui-contract/plugin-spike";
 import { buildNgDebugProbeResult } from "./ng-probe.ts";
 
 /**

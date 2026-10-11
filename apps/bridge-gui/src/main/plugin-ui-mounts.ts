@@ -34,14 +34,14 @@ import type {
   PluginUiMountPhase,
   PluginUiMountPlacement,
   TextInstanceSnapshot,
-} from "../shared/plugin-instance.ts";
+} from "bridge-gui-contract/plugin-instance";
 import {
   buildPluginBlankUrl,
   buildPluginDiagnosticUrl,
   buildPluginTextUrl,
   parsePluginMountId,
   PLUGIN_PENDING_TIMEOUT_MS,
-} from "../shared/plugin-instance.ts";
+} from "bridge-gui-contract/plugin-instance";
 import {
   PluginInstanceBinder,
   type DiagnosticPushSink,

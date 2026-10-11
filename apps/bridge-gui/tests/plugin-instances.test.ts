@@ -43,8 +43,8 @@ import type {
   TextInstanceChangedMessage,
   TextInstanceSnapshot,
   TextInstanceView,
-} from "../src/shared/plugin-instance.ts";
-import { selectNewerInstanceSnapshot } from "../src/shared/plugin-instance.ts";
+} from "bridge-gui-contract/plugin-instance";
+import { selectNewerInstanceSnapshot } from "bridge-gui-contract/plugin-instance";
 
 /** 送信に使うダミー本文。表示・記録に残らないことを確かめる目印である。 */
 const DUMMY_TEXT = "ダミー本文-表示に残さない-101";

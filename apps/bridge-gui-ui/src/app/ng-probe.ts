@@ -7,7 +7,7 @@
  *
  * @packageDocumentation
  */
-import type { NgDebugProbeResult } from "../../../bridge-gui/src/shared/management.ts";
+import type { NgDebugProbeResult } from "bridge-gui-contract/management";
 
 /** 観測口の応答に載せる入力。DOM 読取り済みの値だけを受ける。 */
 export interface NgProbeInput {

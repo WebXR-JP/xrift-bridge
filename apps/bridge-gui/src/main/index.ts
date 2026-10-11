@@ -1,6 +1,6 @@
 import Electrobun, { BrowserView, BrowserWindow, type ElectrobunEvent } from "electrobun/main";
 import { PRODUCTION_ORIGIN } from "bridge-server";
-import { parsePluginMountId } from "../shared/plugin-instance.ts";
+import { parsePluginMountId } from "bridge-gui-contract/plugin-instance";
 import { GuiBackend } from "./backend.ts";
 import { createManagementRpc } from "./rpc.ts";
 import { ElectrobunPluginUiChildView, createPluginUiChannelFactory } from "./instance-rpc.ts";

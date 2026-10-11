@@ -1,0 +1,33 @@
+{
+  "name": "bridge-gui-contract",
+  "version": "0.0.0",
+  "description": "GUI の表示 DTO・限定操作・純粋な微少ランタイムの契約。Angular UI・GUI main・vanilla 子画面が共有する。",
+  "license": "MIT",
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "exports": {
+    "./management": "./dist/management.mjs",
+    "./plugin-instance": "./dist/plugin-instance.mjs",
+    "./plugin-spike": "./dist/plugin-spike.mjs",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "vp pack",
+    "dev": "vp pack --watch",
+    "test": "vp test",
+    "test:types": "tsc --noEmit -p tsconfig.json",
+    "check": "vp check",
+    "prepublishOnly": "vp run build"
+  },
+  "dependencies": {
+    "bridge-app-core": "workspace:*",
+    "bridge-server": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}

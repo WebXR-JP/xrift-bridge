@@ -10,7 +10,6 @@
  *
  * @packageDocumentation
  */
-import type { RPCSchema } from "electrobun/rpc";
 import type { DiagnosticStats, TextSendResult, TextStats } from "bridge-app-core";
 
 /**
@@ -84,10 +83,20 @@ export interface DiagnosticInstanceChangedMessage {
   readonly snapshot: DiagnosticInstanceSnapshot;
 }
 
+// ADR: Electrobun の `RPCSchema<I>` は `{requests, messages}` に解決される
+// 構造型であり、`ElectrobunRPCSchema` 制約（`{bun, webview}`）も構造適合で
+// 満たせる。そのため契約ではこの素朴な構造型で表し、`electrobun/rpc` を
+// import しない（契約パッケージのビルドを `.hutch` に依存させない）。
+// 制約が構造型を拒否する場合は bridge-gui 側のアダプタで最小の型写像を行う。
+type RpcSchema<Requests, Messages> = {
+  requests: Requests;
+  messages: Messages;
+};
+
 /** テキスト子画面用 RPC の型。main・子画面の両方から参照する。 */
 export type TextInstanceRpc = {
-  bun: RPCSchema<{
-    requests: {
+  bun: RpcSchema<
+    {
       /** 束縛個体の状態取得。識別子の指定は受け付けない。読み取りは revision を進めない。 */
       getTextState: { params: {}; response: TextInstanceSnapshot };
       /**
@@ -95,34 +104,34 @@ export type TextInstanceRpc = {
        * 指定は受け付けない。main が束縛した個体の現割当てに委譲する。
        */
       sendText: { params: { text: string }; response: TextSendResult };
-    };
-    messages: {};
-  }>;
-  webview: RPCSchema<{
-    requests: {};
-    messages: {
+    },
+    {}
+  >;
+  webview: RpcSchema<
+    {},
+    {
       /** main からの状態 push。 */
       textStateChanged: TextInstanceChangedMessage;
-    };
-  }>;
+    }
+  >;
 };
 
 /** 診断子画面用 RPC の型。main・子画面の両方から参照する。 */
 export type DiagnosticInstanceRpc = {
-  bun: RPCSchema<{
-    requests: {
+  bun: RpcSchema<
+    {
       /** 束縛個体の状態取得。識別子の指定は受け付けない。読み取りは revision を進めない。 */
       getDiagnosticState: { params: {}; response: DiagnosticInstanceSnapshot };
-    };
-    messages: {};
-  }>;
-  webview: RPCSchema<{
-    requests: {};
-    messages: {
+    },
+    {}
+  >;
+  webview: RpcSchema<
+    {},
+    {
       /** main からの状態 push。 */
       diagnosticStateChanged: DiagnosticInstanceChangedMessage;
-    };
-  }>;
+    }
+  >;
 };
 
 /**

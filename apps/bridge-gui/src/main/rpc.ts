@@ -1,7 +1,14 @@
 import { BrowserView } from "electrobun/main";
-import type { ManagementRpc, OperationAck } from "../shared/management.ts";
-import type { PluginUiMountFailure, PluginUiMountPlacement } from "../shared/plugin-instance.ts";
-import type { PluginMountDto, SpikeMountSummary, SpikePushResult } from "../shared/plugin-spike.ts";
+import type { ManagementRpc, OperationAck } from "bridge-gui-contract/management";
+import type {
+  PluginUiMountFailure,
+  PluginUiMountPlacement,
+} from "bridge-gui-contract/plugin-instance";
+import type {
+  PluginMountDto,
+  SpikeMountSummary,
+  SpikePushResult,
+} from "bridge-gui-contract/plugin-spike";
 import type { GuiBackend } from "./backend.ts";
 
 /** Webview 側からの通知に対する main 側の振る舞い。 */

@@ -7,7 +7,6 @@
  *
  * @packageDocumentation
  */
-import type { RPCSchema } from "electrobun/rpc";
 
 /** 配置用の空ページ。タグの初期配置先であり、検証内容は持たない。 */
 export const SPIKE_BLANK_PATH = "views://plugin-host/blank.html";
@@ -91,25 +90,35 @@ export interface SpikePushResult {
   readonly revision: number;
 }
 
+// ADR: Electrobun の `RPCSchema<I>` は `{requests, messages}` に解決される
+// 構造型であり、`ElectrobunRPCSchema` 制約（`{bun, webview}`）も構造適合で
+// 満たせる。そのため契約ではこの素朴な構造型で表し、`electrobun/rpc` を
+// import しない（契約パッケージのビルドを `.hutch` に依存させない）。
+// 制約が構造型を拒否する場合は bridge-gui 側のアダプタで最小の型写像を行う。
+type RpcSchema<Requests, Messages> = {
+  requests: Requests;
+  messages: Messages;
+};
+
 /** マウント専用 RPC の型。main・子画面の両方から参照する。 */
 export type SpikeRpc = {
-  bun: RPCSchema<{
-    requests: {
+  bun: RpcSchema<
+    {
       /** 子画面の状態取得。識別子の照合に使う。 */
       getSpikeState: { params: { mountId: string }; response: SpikeSnapshot };
-    };
-    messages: {
+    },
+    {
       /** 子画面の初期 snapshot 採用通知。準備完了の判定に使う。 */
       spikeReady: SpikeReadyNotice;
-    };
-  }>;
-  webview: RPCSchema<{
-    requests: {};
-    messages: {
+    }
+  >;
+  webview: RpcSchema<
+    {},
+    {
       /** main からの状態 push。混線の有無を数える。 */
       spikeStateChanged: SpikePushMessage;
-    };
-  }>;
+    }
+  >;
 };
 
 /**
