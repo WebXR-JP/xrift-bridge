@@ -5,6 +5,20 @@ packages:
 
 catalogMode: prefer
 
+# ADR: 依存の postinstall/native ビルドの許可表。pnpm 12 の `allowBuilds`
+# （`onlyBuiltDependencies` 等の後継。`package.json` の `pnpm` 欄は読まれない）
+# で表す。Angular スパイク（`@angular/build` 経由）が持ち込む4件に限る。
+# いずれも `bridge-gui-ui` の dev 依存鎖（`ng:build:*` の実行に要る）であり、
+# 実行時依存には含めない。`esbuild` は実行形式の導入、残り3件は CLI 道具鎖の
+# native 解決に要る。列挙以外は既定拒否のままにし、むやみな全許可
+# （`dangerouslyAllowAllBuilds`）はしない。変更時は `pnpm install` の終了と
+# `ng:build:dev`／`ng:build:prod` の成功で確かめる。
+allowBuilds:
+  "@parcel/watcher": true
+  esbuild: true
+  lmdb: true
+  msgpackr-extract: true
+
 catalog:
   "@types/bun": 1.4.0
   "@types/node": ^24

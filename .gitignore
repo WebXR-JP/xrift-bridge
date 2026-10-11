@@ -10,6 +10,7 @@ lerna-debug.log*
 node_modules
 dist
 dist-ssr
+.angular
 *.local
 
 # dotenv environment variable files

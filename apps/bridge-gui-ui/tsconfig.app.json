@@ -1,0 +1,4 @@
+{
+  // ng の AOT 用。基本設定は `tsconfig.json` を継承する。
+  "extends": "./tsconfig.json"
+}

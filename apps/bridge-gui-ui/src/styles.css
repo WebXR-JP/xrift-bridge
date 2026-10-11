@@ -1,0 +1,12 @@
+* {
+  box-sizing: border-box;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif;
+  margin: 0;
+  padding: 0;
+  background: #f1f5f9;
+  color: #1e293b;
+  min-height: 100vh;
+}

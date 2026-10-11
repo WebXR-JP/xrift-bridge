@@ -22,14 +22,22 @@ XRift Bridge の管理画面。Electrobun 2.x＋Bun main を前提とする。
 ```sh
 # ルートで依存を入れる（初回・package.json 変更時）
 pnpm install
-# 上流をビルドしてから GUI を起動する（段2以降で backend が参照するため）
-vp run -r build
-# Hutch の生成物（.hutch/devkit）を用意する（初回・pin 変更時）
+# Hutch の生成物（.hutch/devkit）を用意する（初回・pin 変更時。
+# `electrobun/*` の型解決に要るため `vp run -r build` より先に行う）
 pnpm --filter bridge-gui gui:prepare
+# 上流の dist を作る（段2以降で backend が参照するため）
+vp run -r build
+# Angular 画面を使う場合のみ。ng 生成物を作る（dev 包装用。製品包装なら ng:build:prod）
+pnpm --filter bridge-gui-ui ng:build:dev
 ```
 
 `hutch` が `PATH` に無い環境では `export PATH="$HOME/.hutch/bin:$PATH"` を足すこと
 （`gui:prepare`・`gui:run`・`gui:build` は `hutch` 呼び出しのため）。
+
+順序を変えると devkit・上流 dist の未生成で `TS2307` になるため、
+`gui:run:ng` 等に入る前に上記を済ませること。
+fresh 直後でも `vp run -r build` が vp のキャッシュに救われて通る場合がある。
+失敗の再現確認はキャッシュ外（`--no-cache`）か `tsc` 直叩きで行うこと。
 
 `apps/bridge-gui/.hutch/`・`build/`・`artifacts/` は生成物のためコミット対象外である。
 
@@ -44,9 +52,27 @@ pnpm --filter bridge-gui gui:run    # 開発実行（単発。起動前に dev �
 pnpm --filter bridge-gui gui:dev    # 開発実行（監視付き再起動・再ビルド）
 pnpm --filter bridge-gui gui:build  # 配布用に包装（stable）
 
+# Angular スパイク画面（mainview のみ・opt-in。既定は vanilla のまま）
+pnpm --filter bridge-gui gui:run:ng        # Angular 開発生成物＋dev 包装で起動
+pnpm --filter bridge-gui gui:run:ng:debug  # 上記に開発観測（ngDebugProbe）を足す
+pnpm --filter bridge-gui gui:build:ng      # Angular 製品生成物＋stable 包装
+
 # ローカル開発ワールド（http://localhost:5173）から接続して確認する場合
 BRIDGE_GUI_DEV_ORIGINS=http://localhost:5173 pnpm --filter bridge-gui gui:run
 ```
+
+Angular スパイクの実体は `apps/bridge-gui-ui/`（UI 専用に TS 6.0 系を局所固定。
+契約型は `src/shared/*` の相対 import で再利用し、DTO の重複定義はしない）。
+AOT 生成物は `apps/bridge-gui/src/mainview-ng/dist/`（生成物のため無視）に作り、
+Hutch の `copy` で `views/mainview-ng/` に載せる。再帰 build に載せるのは型検査のみ。
+view の選択は `BRIDGE_GUI_VIEW=mainview-ng`（既定 `mainview`・未知値は既定に戻る）、
+開発観測は `BRIDGE_GUI_NG_DEBUG=1`（既定無効）である。
+ng スパイクの起動時間（main 起動→`viewReady` で測る）・配布物寸法の差分は
+未計測である（`ng:build:*` の wall を起動時間としない）。
+`ng:build:*` 実行時の `File '../bridge-gui/.hutch/devkit/api/browser/global.d.ts'
+not found in TypeScript compilation` は既知の非致命の警告である
+（終了符号 0 に影響しない。devkit 内の型宣言が ng の編集単位外にあるための表示であり、
+型検査は `build`（`tsc --noEmit`）で行う）。
 
 `gui:run` は起動前に `hutch electrobun build --env=dev` で dev バンドルを作り直す。
 `hutch electrobun run` 単体は既存バンドルを使い回すため、**ソース変更後に

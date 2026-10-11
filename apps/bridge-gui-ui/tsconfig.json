@@ -1,0 +1,33 @@
+{
+  // ADR: ルート catalog の TypeScript（7系）は Angular v22 の compiler-cli が
+  // 受け付けない（>=6.0 <6.1 のみ対応）ため、このパッケージだけ TS 6.0 系を
+  // 直接指定する（`catalog:` 不使用）。再帰 build に載せるのは型検査のみであり、
+  // Angular の AOT 成果物は opt-in の `ng:build:*` で作る。
+  // `tsconfig.app.json` は ng 用にこの設定を継承する。
+  "compilerOptions": {
+    "lib": ["ES2022", "DOM"],
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleDetection": "force",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    // ng の AOT は emit を伴うため、TS5096 を避ける再書込みを指定する。
+    // 型検査用の `build` は `--noEmit` 旗で上書きする。
+    "rewriteRelativeImportExtensions": true,
+    "verbatimModuleSyntax": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "types": ["node"],
+    "paths": {
+      // ADR: Electrobun の npm 配布物は view バンドル時に Hutch が解決するため、
+      // node_modules には存在しない。型検査と Angular のバンドル解決のために
+      // bridge-gui の devkit 配置へ写す（pin 変更時は配置を確認すること）。
+      "electrobun/view": ["../bridge-gui/.hutch/devkit/api/browser/index.ts"],
+      "electrobun/rpc": ["../bridge-gui/.hutch/devkit/api/sdks/main/entries/rpc.ts"]
+    }
+  },
+  "include": ["src/**/*", "tests/**/*"]
+}

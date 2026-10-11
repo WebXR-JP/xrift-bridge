@@ -1,0 +1,48 @@
+{
+  "$schema": "./node_modules/@angular/cli/lib/config/schema.json",
+  "version": 1,
+  "newProjectRoot": "projects",
+  "projects": {
+    "bridge-gui-ui": {
+      "projectType": "application",
+      "root": "",
+      "sourceRoot": "src",
+      "prefix": "app",
+      "architect": {
+        "build": {
+          "builder": "@angular/build:application",
+          "options": {
+            // ADR: 生成先は bridge-gui の view 素材置き場に直書きする。
+            // Hutch の `copy` は相対配置の安定ファイル名を要求するため、
+            // `outputHashing: none` で固定名（main.js 等）にし、再帰 build には混ぜず
+            // opt-in の `ng:build:*` だけで作る。独立 lockfile は持たない。
+            "outputPath": "../bridge-gui/src/mainview-ng/dist",
+            "index": "src/index.html",
+            "browser": "src/main.ts",
+            "tsConfig": "tsconfig.app.json",
+            "polyfills": [],
+            "styles": ["src/styles.css"],
+            "outputHashing": "none",
+            "assets": []
+          },
+          "configurations": {
+            "production": {
+              "budgets": [],
+              "outputHashing": "none",
+              "optimization": true,
+              "sourceMap": false,
+              "namedChunks": false,
+              "extractLicenses": false
+            },
+            "development": {
+              "optimization": false,
+              "extractLicenses": false,
+              "sourceMap": true
+            }
+          },
+          "defaultConfiguration": "production"
+        }
+      }
+    }
+  }
+}

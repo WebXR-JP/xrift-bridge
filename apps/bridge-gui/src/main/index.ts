@@ -12,7 +12,34 @@ import { ElectrobunMountChildView, createChannelFactory } from "./spike-rpc.ts";
  * 同梱ページだけを許可する遷移規則。全面拒否を先に置き、
  * 同梱の管理画面だけを後に許可する（後に一致した規則が勝つ）。
  */
-const NAVIGATION_RULES = JSON.stringify(["^*", "views://mainview/*"]);
+const NAVIGATION_RULES = JSON.stringify(["^*", "views://mainview/*", "views://mainview-ng/*"]);
+
+/**
+ * 管理画面の view 選択。既定は現状の vanilla 画面であり、Angular スパイクは
+ * 明示の opt-in（`BRIDGE_GUI_VIEW=mainview-ng`）でのみ開く。未知値は既定に戻す。
+ */
+function resolveGuiView(): "mainview" | "mainview-ng" {
+  if (process.env.BRIDGE_GUI_VIEW === "mainview-ng") {
+    return "mainview-ng";
+  }
+  if (process.env.BRIDGE_GUI_VIEW !== undefined && process.env.BRIDGE_GUI_VIEW !== "mainview") {
+    console.log(
+      `[bridge-gui] 未知の画面指定を無視し既定画面を開く: ${process.env.BRIDGE_GUI_VIEW}`,
+    );
+  }
+  return "mainview";
+}
+
+const guiView = resolveGuiView();
+
+/**
+ * Angular スパイクの開発観測の有効化。既定無効・明示 opt-in である。
+ *
+ * mainview-ng かつ `BRIDGE_GUI_NG_DEBUG=1` の場合だけ、文書読込み後に
+ * JS 実行標識を書き込み、開発専用口（`ngDebugProbe`）で観測して記録する。
+ * 待受 port（3100）の管理操作には混ぜない。
+ */
+const ngDebugEnabled = process.env.BRIDGE_GUI_NG_DEBUG === "1" && guiView === "mainview-ng";
 
 /**
  * 明示的な開発設定として追加する許可 `Origin`（カンマ区切り）。
@@ -177,7 +204,7 @@ void backendPromise.then((ready) => {
 
   const mainWindow = new BrowserWindow({
     title: "XRift Bridge",
-    url: "views://mainview/index.html",
+    url: `views://${guiView}/index.html`,
     frame: {
       width: 960,
       height: 640,
@@ -292,6 +319,23 @@ void backendPromise.then((ready) => {
 
   mainWindow.webview.on("dom-ready", () => {
     console.log("[bridge-gui] Webview の文書を読み込んだ");
+    if (ngDebugEnabled) {
+      // 開発観測は Angular の起動を待ってから行う。失敗しても起動を止めない。
+      void (async () => {
+        await new Promise((resolve) => setTimeout(resolve, 2000));
+        mainWindow.webview.executeJavascript(`window.__ngExecMark="ng-exec-ok";`);
+        await new Promise((resolve) => setTimeout(resolve, 500));
+        try {
+          const result = await rpc.request.ngDebugProbe({});
+          // 許可 DTO の要点だけを残す。
+          console.log(
+            `[bridge-gui] 開発口の観測結果: available=${result.available} hasNg=${result.hasNg} mounted=${result.componentMounted} getFn=${result.hasGetComponent} got=${result.resolvedComponent} revision=${result.revision} tags=${result.webviewTagCount} kept=${result.spikeTagKept} exec=${result.execMark} reason=${result.reason}`,
+          );
+        } catch (error: unknown) {
+          console.log(`[bridge-gui] 開発口の観測に失敗した: ${String(error)}`);
+        }
+      })();
+    }
   });
 
   console.log("[bridge-gui] 主処理を開始した");

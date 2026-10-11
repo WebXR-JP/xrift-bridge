@@ -13,7 +13,10 @@
     "gui:dev": "hutch run dev",
     "gui:build:dev": "hutch electrobun build --env=dev",
     "gui:run": "hutch electrobun build --env=dev && hutch electrobun run",
-    "gui:build": "hutch run build"
+    "gui:run:ng": "pnpm --filter bridge-gui-ui ng:build:dev && hutch electrobun build --env=dev && BRIDGE_GUI_VIEW=mainview-ng hutch electrobun run",
+    "gui:run:ng:debug": "pnpm --filter bridge-gui-ui ng:build:dev && hutch electrobun build --env=dev && BRIDGE_GUI_VIEW=mainview-ng BRIDGE_GUI_NG_DEBUG=1 hutch electrobun run",
+    "gui:build": "hutch run build",
+    "gui:build:ng": "pnpm --filter bridge-gui-ui ng:build:prod && hutch run build"
   },
   "dependencies": {
     "bridge-app-core": "workspace:*",

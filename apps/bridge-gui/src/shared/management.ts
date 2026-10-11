@@ -204,6 +204,44 @@ export interface StateChangedMessage {
   readonly snapshot: ManagementSnapshot;
 }
 
+/**
+ * 開発専用の Angular スパイク観測口の応答。
+ *
+ * mainview-ng の開発ビルドだけが有効応答を返し、製品ビルドでは無効応答に
+ * なる（`available` が偽）。既定の vanilla 画面は handle しない。
+ * 許可するのは可否・件数・改訂番号のみであり、比較コード本文・業務
+ * payload・テキスト本文は含めない。
+ */
+export interface NgDebugProbeResult {
+  /** 開発口として有効な場合に真。 */
+  readonly available: boolean;
+  /** 無効の場合の理由。定型文のみ。 */
+  readonly reason: string;
+  /** `globalThis.ng` が存在する場合に真。 */
+  readonly hasNg: boolean;
+  /** ルートコンポーネントが文書にある場合に真。 */
+  readonly componentMounted: boolean;
+  /**
+   * `ng.getComponent`（無ければ `ng.getOwningComponent`）が関数として
+   * 使える場合に真。存在確認ではなく呼べることが条件である。
+   */
+  readonly hasGetComponent: boolean;
+  /**
+   * ルート要素からコンポーネント実体が取得できた場合に真。
+   *
+   * 有無だけを見て、実体・injector は返さない。
+   */
+  readonly resolvedComponent: boolean;
+  /** 採用中の表示状態の改訂番号。未取得なら `null`。 */
+  readonly revision: number | null;
+  /** 文書にある `electrobun-webview` 要素の数。 */
+  readonly webviewTagCount: number;
+  /** 配置した子画面タグが文書に残っている場合に真。 */
+  readonly spikeTagKept: boolean;
+  /** main の JS 実行標識を検出した場合に真。 */
+  readonly execMark: boolean;
+}
+
 /** 限定操作の受付応答。後続の状態は `stateChanged` で受け取る。 */
 export interface OperationAck {
   /** 受け付けた場合に真。 */
@@ -304,7 +342,14 @@ export type ManagementRpc = {
     };
   }>;
   webview: RPCSchema<{
-    requests: {};
+    requests: {
+      /**
+       * 開発専用の Angular スパイク観測口。mainview-ng の開発ビルドだけが
+       * 有効応答を返し、製品ビルドでは無効応答になる。既定の vanilla 画面は
+       * handle しない。main は明示の opt-in（`BRIDGE_GUI_NG_DEBUG=1`）でのみ呼ぶ。
+       */
+      ngDebugProbe: { params: {}; response: NgDebugProbeResult };
+    };
     messages: {
       /** main からの状態 push。 */
       stateChanged: StateChangedMessage;

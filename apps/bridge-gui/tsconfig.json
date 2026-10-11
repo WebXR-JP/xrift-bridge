@@ -26,5 +26,7 @@
     }
   },
   "include": ["src/**/*", "tests/**/*", "hutch.config.ts", "electrobun.config.ts"],
-  "exclude": ["node_modules", ".hutch", "build", "artifacts", "dist"]
+  // Angular の事前生成物（`src/mainview-ng/dist`）は Hutch の `copy` 素材であり、
+  // 型検査の対象外とする。
+  "exclude": ["node_modules", ".hutch", "build", "artifacts", "dist", "src/mainview-ng/dist"]
 }
