@@ -23,7 +23,7 @@ export interface ManagementRpcHooks {
  * Webview へ関数や生オブジェクトを渡さない。引数・ID・終了中状態の検証は
  * バックエンド側で行い、型付き RPC を実行時検証とみなさない。
  * ログには revision 番号と操作名だけを残し、比較コード本文や
- * 業務 payload を残さない。
+ * 業務 payload・テキスト本文を残さない。
  *
  * @param backend - 表示状態の提供元と限定操作の実行先。
  * @param hooks - Webview 通知に対する後処理。
@@ -45,6 +45,10 @@ export function createManagementRpc(backend: GuiBackend, hooks: ManagementRpcHoo
         rejectPairing: ({ requestId }) => backend.rejectPairing({ requestId }),
         disconnectConnection: ({ connectionId }) => backend.disconnectConnection({ connectionId }),
         assignDiagnostics: ({ localSessionId }) => backend.assignDiagnostics({ localSessionId }),
+        assignText: () => backend.assignText(),
+        sendText: ({ localSessionId, instanceId, text }) =>
+          backend.sendText({ localSessionId, instanceId, text }),
+        unassignText: () => backend.unassignText(),
         quit: () => {
           hooks.onQuitRequested();
           return { ok: true as const };

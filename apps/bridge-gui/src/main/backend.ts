@@ -15,6 +15,7 @@ import {
   type AcceptanceInfo,
   type ApprovalResult,
   type BridgeServer,
+  type ManagementEvent,
   type RejectionResult,
   type Unsubscribe,
 } from "bridge-server";
@@ -22,9 +23,15 @@ import {
   createBridgeAppCore,
   DIAGNOSTIC_PORT_ID,
   diagnosticPlugin,
+  TEXT_PORT_ID,
+  TEXT_SESSION_ID,
+  textPlugin,
   type BridgeAppCore,
   type DiagnosticStats,
   type PluginInstanceHandle,
+  type TextPluginOperations,
+  type TextPluginState,
+  type TextSendResult,
 } from "bridge-app-core";
 import type {
   AdmissionState,
@@ -34,6 +41,7 @@ import type {
   OperationAck,
   PairingViewResult,
   StateChangedMessage,
+  TextDisplayState,
 } from "../shared/management.ts";
 
 /** 既定の待ち受けポート。 */
@@ -103,6 +111,12 @@ export class GuiBackend {
   private readonly listeners = new Set<(message: StateChangedMessage) => void>();
   /** 生成した診断インスタンスの handle。表示と合わせて保持する。 */
   private readonly diagnosticHandles = new Map<string, PluginInstanceHandle<DiagnosticStats>>();
+  /** 生成したテキストインスタンスの handle。同時に一つのみ持つ。 */
+  private textHandle: PluginInstanceHandle<TextPluginState, TextPluginOperations> | null = null;
+  /** テキスト割当て対象の生存セッションのローカル識別子。未割当てなら null。 */
+  private textLocalSessionId: string | null = null;
+  /** テキスト状態購読の解除口。未購読なら null。 */
+  private textStateUnsubscribe: Unsubscribe | null = null;
   private revision = 0;
   private cached: ManagementSnapshot | null = null;
   private notifyScheduled = false;
@@ -146,15 +160,16 @@ export class GuiBackend {
    *
    * 基盤の購読を先に core 側で確定してから、後続の管理通知を
    * バックエンド側で受ける。購読前の既存セッションは core が
-   * 一覧で初期走査するため、取りこぼさない。
+   * 一覧で初期走査するため、取りこぼさない。管理通知の配送順は
+   * 購読順であるため、終了通知では core の失効処理が先に済んでいる。
    *
    * @param server - 起動したブリッジ。
    */
   private attach(server: BridgeServer): void {
     this.server = server;
     this.core = createBridgeAppCore(server);
-    this.managementUnsubscribe = server.onManagementEvent(() => {
-      this.requestNotify();
+    this.managementUnsubscribe = server.onManagementEvent((event) => {
+      this.handleManagementEvent(event);
     });
     this.status = "ready";
     this.requestNotify();
@@ -375,16 +390,23 @@ export class GuiBackend {
    * 開始通知での自動割当てはしない。恒久採用（自動割当て・統計表示の
    * 扱い）は別判断とし、ここでは明示操作だけを提供する。
    * 失敗時は生成分を回収し、半端なインスタンスを残さない。
+   * 論理名がテキスト表示用のセッションは対象外にする（テキスト割当てと排他）。
    *
    * @param params - 割り当てる生存セッションのローカル識別子。
    * @returns 確定した割当ての表示状態。
    * @throws `RangeError` — 識別子が空・文字列でない、不明・不適合・
-   * 二重割当ての場合。
+   * 二重割当て・テキスト表示用の場合。
    * @throws `Error` — 終了中・起動失敗の場合。
    */
   assignDiagnostics(params: { localSessionId: unknown }): AssignmentSummary {
-    const { core } = this.operable();
+    const { core, server } = this.operable();
     const localSessionId = assertId(params.localSessionId, "localSessionId");
+    const info = server
+      .listSessions()
+      .find((candidate) => candidate.localSessionId === localSessionId);
+    if (info !== undefined && info.sessionId === TEXT_SESSION_ID) {
+      throw new RangeError("テキスト表示用のセッションには診断を割り当てない。");
+    }
     const handle = core.createInstance(diagnosticPlugin);
     try {
       core.assign(localSessionId, handle.instanceId, DIAGNOSTIC_PORT_ID);
@@ -401,6 +423,230 @@ export class GuiBackend {
     this.diagnosticHandles.set(handle.instanceId, handle);
     this.requestNotify();
     return { localSessionId, instanceId: handle.instanceId, portId: DIAGNOSTIC_PORT_ID };
+  }
+
+  /**
+   * 固定テキスト表示の明示割当て。引数は取らない。
+   *
+   * テキストインスタンスを生成し、論理名がテキスト表示用で未割当ての
+   * 生存セッションが全接続を通じて一件だけある場合に割り当てる。
+   * 先着順・一件目・Origin 推測による選択はしない。失敗時は生成分を
+   * 回収し、半端なインスタンスを残さない。
+   *
+   * @returns 確定した割当ての表示状態。
+   * @throws `RangeError` — 候補ゼロ・複数・割当て中の再要求の場合。
+   * @throws `Error` — 終了中・起動失敗の場合。
+   */
+  assignText(): AssignmentSummary {
+    const { core, server } = this.operable();
+    if (this.textHandle !== null || this.textLocalSessionId !== null) {
+      throw new RangeError("テキストは既に割当て済みである。");
+    }
+    // ADR: core の割当て表を先に読む。既存の割当て済みセッションは候補から
+    // 外し、一対一検査と合わせる（診断など他用途の割当てと混ぜない）。
+    const assigned = new Set(core.listAssignments().map((assignment) => assignment.localSessionId));
+    const candidates = server
+      .listSessions()
+      .filter(
+        (info) =>
+          !assigned.has(info.localSessionId) &&
+          info.sessionId === TEXT_SESSION_ID &&
+          info.kind === "reliable" &&
+          info.direction === "bidirectional" &&
+          server.getSession(info.localSessionId)?.isAlive === true,
+      );
+    if (candidates.length === 0) {
+      throw new RangeError("テキスト割当ての候補が無い。");
+    }
+    if (candidates.length > 1) {
+      throw new RangeError("テキスト割当ての候補が複数ある。");
+    }
+    const target = candidates[0];
+    if (target === undefined) {
+      throw new RangeError("テキスト割当ての候補が無い。");
+    }
+    const handle = core.createInstance(textPlugin);
+    try {
+      core.assign(target.localSessionId, handle.instanceId, TEXT_PORT_ID);
+    } catch (error) {
+      // 割当てに失敗した Session は残さず、生成したインスタンスだけを片付ける。
+      try {
+        core.removeInstance(handle.instanceId);
+      } catch {
+        // 片付けの失敗は元の失敗を優先し、ここでは無視する。
+      }
+      throw error;
+    }
+    const operations = handle.getOperations?.();
+    if (operations === undefined) {
+      try {
+        core.removeInstance(handle.instanceId);
+      } catch {
+        // 片付けの失敗は無視する。
+      }
+      throw new RangeError("テキストの操作口が無い。");
+    }
+    this.textHandle = handle;
+    this.textLocalSessionId = target.localSessionId;
+    try {
+      // ADR: 状態変化は既存の通知予約経路へ結線する。購読者の例外は
+      // プラグイン側で隔離されるため、ここでは予約だけを行う。
+      this.textStateUnsubscribe = operations.onStateChanged(() => {
+        this.requestNotify();
+      });
+    } catch (error) {
+      this.textHandle = null;
+      this.textLocalSessionId = null;
+      try {
+        core.removeInstance(handle.instanceId);
+      } catch {
+        // 片付けの失敗は元の失敗を優先し、ここでは無視する。
+      }
+      throw error;
+    }
+    this.requestNotify();
+    return {
+      localSessionId: target.localSessionId,
+      instanceId: handle.instanceId,
+      portId: TEXT_PORT_ID,
+    };
+  }
+
+  /**
+   * 固定テキストの送信。画面が認識している割当て識別子を含める。
+   *
+   * 現在の割当てと `localSessionId`・`instanceId` を照合し、一致しなければ
+   * 拒否する。古い画面の要求を新しい割当てへ転送しない。本文の検証は
+   * プラグインが行い、ここでは文字列かだけを検査する。本文は送信時のみ
+   * 扱い、ログ・snapshot に残さない。
+   *
+   * 状態の更新通知は購読経路（`operations.onStateChanged`→`requestNotify`）
+   * が担うため、ここでは追加の通知予約をしない。
+   *
+   * @param params - 現在の割当て識別子と送信する本文。
+   * @returns 反映確認または結果不明。送信処理の失敗は `Promise` の拒否で表す。
+   * @throws `RangeError` — 識別子・本文の型が不正、未割当て・不一致の場合（同期的）。
+   * @throws `Error` — 終了中・起動失敗の場合（同期的）。
+   */
+  sendText(params: {
+    localSessionId: unknown;
+    instanceId: unknown;
+    text: unknown;
+  }): Promise<TextSendResult> {
+    this.operable();
+    const localSessionId = assertId(params.localSessionId, "localSessionId");
+    const instanceId = assertId(params.instanceId, "instanceId");
+    if (typeof params.text !== "string") {
+      throw new RangeError("text は文字列であること。");
+    }
+    const handle = this.textHandle;
+    const assignedId = this.textLocalSessionId;
+    if (handle === null || assignedId === null) {
+      throw new RangeError("テキストは割当てられていない。");
+    }
+    if (localSessionId !== assignedId || instanceId !== handle.instanceId) {
+      throw new RangeError("現在の割当てと識別子が一致しない。");
+    }
+    const operations = handle.getOperations?.();
+    if (operations === undefined) {
+      throw new RangeError("テキストの操作口が無い。");
+    }
+    return operations.sendText(params.text, localSessionId);
+  }
+
+  /**
+   * 固定テキストの明示解除。割当て表示を消し、生成分を回収する。
+   *
+   * 購読解除と表示の消去を先に行ってから基盤を片付ける。対象セッションの
+   * 中断は基盤の解除規約に従う。失効済み（終了通知で回収済み）の場合は
+   * 解除を省略し、生成分の回収だけを行う。
+   *
+   * @returns 受付応答。後続の状態は `stateChanged` で受け取る。
+   * @throws `RangeError` — 未割当ての場合。
+   * @throws `Error` — 終了中・起動失敗の場合。
+   */
+  unassignText(): OperationAck {
+    const { core } = this.operable();
+    const handle = this.textHandle;
+    const localSessionId = this.textLocalSessionId;
+    if (handle === null || localSessionId === null) {
+      throw new RangeError("テキストは割当てられていない。");
+    }
+    this.detachTextSubscription();
+    this.textHandle = null;
+    this.textLocalSessionId = null;
+    const assigned = core
+      .listAssignments()
+      .some((assignment) => assignment.localSessionId === localSessionId);
+    if (assigned) {
+      try {
+        core.unassign(localSessionId);
+      } catch {
+        // 失効競合の失敗は回収を止めない。
+      }
+    }
+    try {
+      core.removeInstance(handle.instanceId);
+    } catch {
+      // 回収の失敗は無視する。
+    }
+    this.requestNotify();
+    return { ok: true };
+  }
+
+  /**
+   * 管理通知を処理する。テキスト割当て対象の終了では core の失効後に
+   * 生成分を回収し、その後の通知予約は既存経路にまとめる。
+   *
+   * プラグインの操作口は失効時に購読を解除するため、後始末を
+   * プラグインの `onEnd` 到達には依存しない（管理通知で駆動する）。
+   *
+   * @param event - サーバーの管理通知。
+   */
+  private handleManagementEvent(event: ManagementEvent): void {
+    if (
+      event.kind === "session-ended" &&
+      event.session.localSessionId === this.textLocalSessionId
+    ) {
+      this.reclaimText();
+    }
+    this.requestNotify();
+  }
+
+  /**
+   * 終了したテキスト割当ての生成分を回収する。
+   *
+   * 購読解除と表示の消去を先に行ってから基盤の生成分を片付ける。
+   * core の割当て失効は購読順で先に済んでいるため、ここでは問わない。
+   * 回収後は再承認・新規セッション・新規の明示割当てを要求し、
+   * 旧操作口・未完了要求・本文を引き継がない。
+   */
+  private reclaimText(): void {
+    const handle = this.textHandle;
+    this.detachTextSubscription();
+    this.textHandle = null;
+    this.textLocalSessionId = null;
+    if (handle !== null && this.core !== null) {
+      try {
+        this.core.removeInstance(handle.instanceId);
+      } catch {
+        // 回収の失敗は通知を止めない。
+      }
+    }
+  }
+
+  /** テキスト状態の購読を外す。未購読なら何もしない。 */
+  private detachTextSubscription(): void {
+    const unsubscribe = this.textStateUnsubscribe;
+    this.textStateUnsubscribe = null;
+    if (unsubscribe === null) {
+      return;
+    }
+    try {
+      unsubscribe();
+    } catch {
+      // 購読解除の失敗は後始末を止めない。
+    }
   }
 
   /**
@@ -447,6 +693,9 @@ export class GuiBackend {
   private dispose(): void {
     this.disposed = true;
     this.notifyScheduled = false;
+    this.detachTextSubscription();
+    this.textHandle = null;
+    this.textLocalSessionId = null;
     if (this.managementUnsubscribe !== null) {
       try {
         this.managementUnsubscribe();
@@ -502,6 +751,49 @@ export class GuiBackend {
                 portId: assignment.portId,
               })),
       },
+      text: this.buildTextState(),
+    };
+  }
+
+  /**
+   * 固定テキスト表示の状態を組み立てる。本文は含めない。
+   *
+   * 未割当てなら識別子は `null`・統計は零値である。handle 取得の失敗時は
+   * 未割当てとして扱い、表示の組み立てを壊さない。
+   */
+  private buildTextState(): TextDisplayState {
+    const handle = this.textHandle;
+    const localSessionId = this.textLocalSessionId;
+    if (handle === null || localSessionId === null) {
+      return {
+        localSessionId: null,
+        instanceId: null,
+        canSend: false,
+        pendingId: null,
+        lastResult: null,
+        stats: { attempts: 0, acknowledged: 0, unknown: 0 },
+      };
+    }
+    let state: TextPluginState;
+    try {
+      state = handle.getState();
+    } catch {
+      return {
+        localSessionId: null,
+        instanceId: null,
+        canSend: false,
+        pendingId: null,
+        lastResult: null,
+        stats: { attempts: 0, acknowledged: 0, unknown: 0 },
+      };
+    }
+    return {
+      localSessionId,
+      instanceId: handle.instanceId,
+      canSend: state.canSend,
+      pendingId: state.pendingId,
+      lastResult: state.lastResult,
+      stats: state.stats,
     };
   }
 }

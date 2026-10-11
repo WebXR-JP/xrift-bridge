@@ -13,6 +13,7 @@ import type {
   ConnectionPhase,
   RejectionResult,
 } from "bridge-server";
+import type { TextSendResult, TextStats } from "bridge-app-core";
 
 /** GUI バックエンドの起動状態。 */
 export type BackendStatus =
@@ -138,10 +139,33 @@ export interface PluginAssignmentState {
 }
 
 /**
+ * 固定テキスト表示の状態。
+ *
+ * 割当ての有無は識別子で表す。両方が `null` なら未割当て、両方あれば
+ * 割当て中であり、片方だけの状態は作らない。本文は含めない（送信時のみ
+ * 扱い、snapshot・ログに残さない）。
+ */
+export interface TextDisplayState {
+  /** 割当て中の生存セッションのローカル識別子。未割当てなら `null`。 */
+  readonly localSessionId: string | null;
+  /** 割当て中のテキストインスタンスの識別子。未割当てなら `null`。 */
+  readonly instanceId: string | null;
+  /** 割当てがあり実行中でなければ真。 */
+  readonly canSend: boolean;
+  /** 実行中の要求の相関識別子。待機がなければ `null`。 */
+  readonly pendingId: string | null;
+  /** 直近の決着。未送信なら `null`。 */
+  readonly lastResult: TextSendResult | null;
+  /** インスタンス単位の統計。未割当てなら零値である。 */
+  readonly stats: TextStats;
+}
+
+/**
  * 管理画面の表示スナップショット。
  *
  * 起動状態・endpoint・受付状態／残時間・コードを除く保留一覧・接続一覧と
- * 認可段階・生存セッション一覧・インスタンス識別情報と接続口・割当て状態を持つ。
+ * 認可段階・生存セッション一覧・インスタンス識別情報と接続口・割当て状態・
+ * 固定テキスト表示の状態を持つ。テキスト本文は含めない。
  */
 export interface ManagementSnapshot {
   /** 単調増加の改訂番号。新しいときだけ採用する。 */
@@ -160,6 +184,8 @@ export interface ManagementSnapshot {
   readonly sessions: readonly SessionSummary[];
   /** インスタンス／割当て状態。 */
   readonly plugins: PluginAssignmentState;
+  /** 固定テキスト表示の状態。本文は含めない。 */
+  readonly text: TextDisplayState;
 }
 
 /** main→Webview の状態通知。最新の全状態を送る唯一の通知である。 */
@@ -200,8 +226,34 @@ export type ManagementRpc = {
       /**
        * スパイク専用の診断割当て。reliable Session ごとに診断インスタンスを
        * 1つ生成し `"diagnostic"` 接続口へ割り当てる。
+       *
+       * 論理名がテキスト表示用のセッションは対象外である。
        */
       assignDiagnostics: { params: { localSessionId: string }; response: AssignmentSummary };
+      /**
+       * 固定テキスト表示の明示割当て。引数は取らない。
+       *
+       * 論理名がテキスト表示用で未割当ての生存セッションが全接続を通じて
+       * 一件だけある場合に、テキストインスタンスを生成して割り当てる。
+       * 候補ゼロ・複数・割当て中の再要求は理由付きで拒否する。
+       */
+      assignText: { params: {}; response: AssignmentSummary };
+      /**
+       * 固定テキストの送信。画面が認識している割当て識別子を含める。
+       *
+       * 現在の割当てと一致しなければ拒否し、古い画面の要求を新しい割当てへ
+       * 転送しない。本文は送信時のみ扱い、snapshot・ログに残さない。
+       */
+      sendText: {
+        params: { localSessionId: string; instanceId: string; text: string };
+        response: TextSendResult;
+      };
+      /**
+       * 固定テキストの明示解除。割当て表示を消し、生成分を回収する。
+       *
+       * 対象セッションの中断は基盤の解除規約に従う。未割当てなら拒否する。
+       */
+      unassignText: { params: {}; response: OperationAck };
       /** アプリ終了を要求する。後始末完了後に終了する。 */
       quit: { params: {}; response: OperationAck };
     };
