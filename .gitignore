@@ -42,6 +42,13 @@ apm_modules/
 # XRift CLI local metadata
 .xrift/
 
+# Electrobun / Hutch（apps/bridge-gui の生成物。コミット対象外）
+.hutch/
+.cottontail-tmp/
+build/
+artifacts/
+*.tsbuildinfo
+
 # Python
 __pycache__/
 *.pyc

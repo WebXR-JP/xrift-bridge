@@ -189,6 +189,9 @@ settings:
 
 catalogs:
   default:
+    '@types/bun':
+      specifier: 1.4.0
+      version: 1.4.0
     '@types/node':
       specifier: ^24
       version: 24.19.1
@@ -249,6 +252,34 @@ importers:
       ws:
         specifier: 'catalog:'
         version: 8.22.0
+
+  apps/bridge-gui:
+    dependencies:
+      bridge-app-core:
+        specifier: workspace:*
+        version: link:../../packages/bridge-app-core
+      bridge-protocol:
+        specifier: workspace:*
+        version: link:../../packages/bridge-protocol
+      bridge-server:
+        specifier: workspace:*
+        version: link:../../packages/bridge-server
+    devDependencies:
+      '@types/bun':
+        specifier: 'catalog:'
+        version: 1.4.0
+      '@types/node':
+        specifier: 'catalog:'
+        version: 24.19.1
+      typescript:
+        specifier: 'catalog:'
+        version: 7.0.2
+      vite-plus:
+        specifier: 'catalog:'
+        version: 1.0.0(@types/node@24.19.1)(@vitest/ui@5.0.1)(happy-dom@20.14.5)(jiti@2.7.0)(typescript@7.0.2)(yaml@2.9.1)
+      world-client:
+        specifier: workspace:*
+        version: link:../../packages/world-client
 
   apps/diagnostic-world:
     dependencies:
@@ -1015,6 +1046,9 @@ packages:
   '@types/babel__traverse@7.28.0':
     resolution: {integrity: sha512-8PvcXf70gTDZBgt9ptxJ8elBeBjcLOAcOtoO/mPJjtji1+CdGbHgm77om1GrsPxsiE+uXIpNSK64UYaIwQXd4Q==}
 
+  '@types/bun@1.4.0':
+    resolution: {integrity: sha512-K+lZULY23vRgK/CfTjFIV+tyifaNdSMlPh9j+6mQ/cLfpOznLyAuzgV/JQysyECpkBQLVMSyvjlr2fBUSA9wFQ==}
+
   '@types/chai@5.2.3':
     resolution: {integrity: sha512-Mw558oeA9fFbv65/y4mHtXDs9bPnFMZAL/jxdPFUpOHHIXX91mcgEHbS5Lahr+pwZFR8A7GQleRWeI6cGFC2UA==}
 
@@ -1567,6 +1601,9 @@ packages:
 
   buffer@6.0.3:
     resolution: {integrity: sha512-FTiCpNxtwiZZHEZbcbTIcZjERVICn9yq/pDFkTl95/AxzD1naBctN7YO68riM/gLSDY7sdrMby8hofADYuuqOA==}
+
+  bun-types@1.4.0:
+    resolution: {integrity: sha512-iIKw23BspnQQYd3prITOBxeUsxBHnwzX6YJfGMuNOZzeNcMmVqzIIVGRm1l69ogaPQmb4wB6BN8mA5bE9YuC5Q==}
 
   camera-controls@3.1.2:
     resolution: {integrity: sha512-xkxfpG2ECZ6Ww5/9+kf4mfg1VEYAoe9aDSY+IwF0UEs7qEzwy0aVRfs2grImIECs/PoBtWFrh7RXsQkwG922JA==}
@@ -2839,6 +2876,10 @@ snapshots:
     dependencies:
       '@babel/types': 7.29.8
 
+  '@types/bun@1.4.0':
+    dependencies:
+      bun-types: 1.4.0
+
   '@types/chai@5.2.3':
     dependencies:
       '@types/deep-eql': 4.0.2
@@ -3260,6 +3301,10 @@ snapshots:
     dependencies:
       base64-js: 1.5.1
       ieee754: 1.2.1
+
+  bun-types@1.4.0:
+    dependencies:
+      '@types/node': 24.19.1
 
   camera-controls@3.1.2(three@0.183.2):
     dependencies:

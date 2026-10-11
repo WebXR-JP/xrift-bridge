@@ -13,4 +13,18 @@ export default defineConfig({
   run: {
     cache: true,
   },
+  test: {
+    // vitest の defaultExclude に Hutch の生成物ディレクトリを加えたもの。
+    // .hutch/devkit 配下には Electrobun SDK の __tests__（bun:test 前提）が
+    // 含まれ、workspace 直下の `vp test` の探索に混ざるため除外する。
+    exclude: [
+      "**/node_modules/**",
+      "**/dist/**",
+      "**/cypress/**",
+      "**/.{idea,git,cache,output,temp}/**",
+      "**/{karma,rollup,webpack,vite,vitest,jest,ava,babel,nyc,cypress,tsup,build}.config.*",
+      "**/.hutch/**",
+      "**/.cottontail-tmp/**",
+    ],
+  },
 });

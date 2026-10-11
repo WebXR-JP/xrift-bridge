@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width" />
+    <title>XRift Bridge 管理画面</title>
+    <link rel="stylesheet" href="index.css" />
+  </head>
+  <body>
+    <main class="container">
+      <h1>XRift Bridge 管理画面</h1>
+      <p class="subtitle">受付・照合・接続の管理</p>
+
+      <section class="card">
+        <h2>状態</h2>
+        <dl>
+          <div>
+            <dt>改訂番号</dt>
+            <dd id="revision">未取得</dd>
+          </div>
+          <div>
+            <dt>起動状態</dt>
+            <dd id="backend">未取得</dd>
+          </div>
+          <div>
+            <dt>公開先</dt>
+            <dd id="endpoint">未取得</dd>
+          </div>
+          <div>
+            <dt>受付</dt>
+            <dd id="admission">未取得</dd>
+          </div>
+          <div>
+            <dt>保留</dt>
+            <dd id="pending">未取得</dd>
+          </div>
+          <div>
+            <dt>接続</dt>
+            <dd id="connections">未取得</dd>
+          </div>
+          <div>
+            <dt>生存セッション</dt>
+            <dd id="sessions">未取得</dd>
+          </div>
+          <div>
+            <dt>割当て</dt>
+            <dd id="plugins">未取得</dd>
+          </div>
+        </dl>
+      </section>
+
+      <section class="card">
+        <h2>受付</h2>
+        <div class="row">
+          <button type="button" data-action="open-acceptance">受付を開く</button>
+          <button type="button" data-action="close-acceptance">受付を閉じる</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>保留（照合待ち）</h2>
+        <ul id="pending-list" class="entries"></ul>
+      </section>
+
+      <section class="card">
+        <h2>接続</h2>
+        <ul id="connection-list" class="entries"></ul>
+      </section>
+
+      <section class="card">
+        <h2>生存セッション</h2>
+        <ul id="session-list" class="entries"></ul>
+      </section>
+
+      <section class="card">
+        <h2>終了</h2>
+        <div class="row">
+          <button type="button" data-action="quit">アプリを終了する</button>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>受信記録</h2>
+        <ul id="event-log"></ul>
+      </section>
+    </main>
+    <script src="index.js" type="module"></script>
+  </body>
+</html>

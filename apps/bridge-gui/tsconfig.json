@@ -1,0 +1,30 @@
+{
+  // ADR: ./.hutch/devkit/tsconfig.json を extends しない。devkit 側の
+  // "baseUrl" が TypeScript 7 で廃止され、継承すると TS5102 になるためである。
+  // 必要最小限の解決先だけを paths に写す（Electrobun 2.0.2 時点の配置）。
+  // pin を上げたら `hutch electrobun prepare` 後に配置を確認すること。
+  "compilerOptions": {
+    "lib": ["ESNext", "DOM"],
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleDetection": "force",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "noEmit": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "types": ["node", "bun"],
+    "paths": {
+      "electrobun": ["./.hutch/devkit/api/sdks/main/index.ts"],
+      "electrobun/main": ["./.hutch/devkit/api/sdks/main/index.ts"],
+      "electrobun/rpc": ["./.hutch/devkit/api/sdks/main/entries/rpc.ts"],
+      "electrobun/view": ["./.hutch/devkit/api/browser/index.ts"]
+    }
+  },
+  "include": ["src/**/*", "tests/**/*", "hutch.config.ts", "electrobun.config.ts"],
+  "exclude": ["node_modules", ".hutch", "build", "artifacts", "dist"]
+}
