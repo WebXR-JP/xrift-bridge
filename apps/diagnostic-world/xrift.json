@@ -2,7 +2,7 @@
   "world": {
     "distDir": "./dist",
     "title": "XRift Bridge 診断ワールド",
-    "description": "ローカルブリッジへの接続・認証・echo・ping を診断する開発検証用ワールドです",
+    "description": "ローカルブリッジへの接続・認証・echo・ping・テキスト表示を診断する開発検証用ワールドです",
     "thumbnailPath": "thumbnail.png",
     "buildCommand": "npm run build",
     "ignore": [

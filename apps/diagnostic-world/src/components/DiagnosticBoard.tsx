@@ -7,8 +7,10 @@
  * の表示→取消・切断の操作だけを持つ。新しい Canvas・Physics・XRiftProvider は
  * 生成しない。DOM 要素の探索・追加・変更もしない（表示用 canvas は文書に
  * 追加しない分離物である）。診断の通信・集計は `DiagnosticSession` を共用し、
- * UI 層に通信を持たない。比較コード・診断状態を `useInstanceState` 等で
- * 他利用者へ同期しない。
+ * UI 層に通信を持たない。テキスト受信（`TextReceiver`）はこの盤だけが所有し、
+ * 認可済み管理口から専用セッション（論理名 `text`）を開いて直近本文を隣の
+ * 表示板（`TextBoard`）に出す。開発 DOM パネル側では生成しない。比較コード・
+ * 診断状態を `useInstanceState` 等で他利用者へ同期しない。
  *
  * @packageDocumentation
  */
@@ -20,6 +22,8 @@ import { formatDiagnosticLines } from "../diagnostic/display.ts";
 import { DEFAULT_PORT, buildEndpoint, parsePortInput } from "../diagnostic/endpoint.ts";
 import type { DiagnosticEnv } from "../diagnostic/session.ts";
 import { useDiagnosticSession } from "../diagnostic/useDiagnosticSession.ts";
+import { useTextReceiver } from "../text/useTextReceiver.ts";
+import { TextBoard } from "./TextBoard.tsx";
 
 /** 操作盤の入力。 */
 export interface DiagnosticBoardProps {
@@ -195,6 +199,9 @@ export function DiagnosticBoard(props: DiagnosticBoardProps): React.JSX.Element 
     env: props.env,
     build: props.build,
   });
+  // ADR: テキスト受信は3D盤側だけが所有する。認可済み管理口から専用セッションを
+  // 開き、切断・再接続では本文を消す。開発 DOM パネル側では生成しない。
+  const { snapshot: textSnapshot } = useTextReceiver({ session, snapshot });
 
   const phase = snapshot?.phase ?? null;
   const lines = useMemo<readonly string[]>(
@@ -256,89 +263,92 @@ export function DiagnosticBoard(props: DiagnosticBoardProps): React.JSX.Element 
   const cancelText = busy ? "接続試行を取消" : "切断";
 
   return (
-    <group position={[BOARD_POSITION[0], BOARD_POSITION[1], BOARD_POSITION[2]]}>
-      <mesh>
-        <boxGeometry args={[3.6, 3.1, 0.1]} />
-        <meshStandardMaterial color="#23262c" />
-      </mesh>
-      <mesh position={[-1.6, 1.4, 0.06]}>
-        <sphereGeometry args={[0.07, 16, 16]} />
-        <meshStandardMaterial color={phaseColor(phase)} />
-      </mesh>
-      <StatusPlane lines={lines} />
-      <Interactable
-        id="diag-connect"
-        onInteract={handleConnect}
-        interactionText="接続開始（比較コード表示）"
-        enabled={ready && !busy && !connected}
-      >
-        <group position={[BUTTONS_X[0], -1.25, 0.06]}>
-          <mesh>
-            <boxGeometry args={[0.62, 0.3, 0.08]} />
-            <meshStandardMaterial color="#e8e8e8" />
-          </mesh>
-          <ButtonLabel text="接続" background="#e8e8e8" />
-        </group>
-      </Interactable>
-      <TextInput
-        id="diag-port-input"
-        placeholder="ポート番号を入力"
-        value={String(port)}
-        maxLength={5}
-        onSubmit={handlePortSubmit}
-        interactionText="ポート番号を変更"
-        disabled={!ready || busy || connected}
-      >
-        <group position={[BUTTONS_X[1], -1.25, 0.06]}>
-          <mesh>
-            <boxGeometry args={[0.62, 0.3, 0.08]} />
-            <meshStandardMaterial color="#ffd43b" />
-          </mesh>
-          <ButtonLabel text="変更" background="#ffd43b" />
-        </group>
-      </TextInput>
-      <Interactable
-        id="diag-echo"
-        onInteract={handleEcho}
-        interactionText="echo 往復"
-        enabled={operable}
-      >
-        <group position={[BUTTONS_X[2], -1.25, 0.06]}>
-          <mesh>
-            <boxGeometry args={[0.62, 0.3, 0.08]} />
-            <meshStandardMaterial color="#4dabf7" />
-          </mesh>
-          <ButtonLabel text="echo" background="#4dabf7" />
-        </group>
-      </Interactable>
-      <Interactable
-        id="diag-ping"
-        onInteract={handlePing}
-        interactionText="ping"
-        enabled={operable}
-      >
-        <group position={[BUTTONS_X[3], -1.25, 0.06]}>
-          <mesh>
-            <boxGeometry args={[0.62, 0.3, 0.08]} />
-            <meshStandardMaterial color="#69db7c" />
-          </mesh>
-          <ButtonLabel text="ping" background="#69db7c" />
-        </group>
-      </Interactable>
-      <Interactable
-        id="diag-disconnect"
-        onInteract={handleDisconnect}
-        interactionText={cancelText}
-        enabled={ready && (busy || connected)}
-      >
-        <group position={[BUTTONS_X[4], -1.25, 0.06]}>
-          <mesh>
-            <boxGeometry args={[0.62, 0.3, 0.08]} />
-            <meshStandardMaterial color="#ff6b6b" />
-          </mesh>
-          <ButtonLabel text={cancelLabel} background="#ff6b6b" />
-        </group>
-      </Interactable>
-    </group>
+    <>
+      <group position={[BOARD_POSITION[0], BOARD_POSITION[1], BOARD_POSITION[2]]}>
+        <mesh>
+          <boxGeometry args={[3.6, 3.1, 0.1]} />
+          <meshStandardMaterial color="#23262c" />
+        </mesh>
+        <mesh position={[-1.6, 1.4, 0.06]}>
+          <sphereGeometry args={[0.07, 16, 16]} />
+          <meshStandardMaterial color={phaseColor(phase)} />
+        </mesh>
+        <StatusPlane lines={lines} />
+        <Interactable
+          id="diag-connect"
+          onInteract={handleConnect}
+          interactionText="接続開始（比較コード表示）"
+          enabled={ready && !busy && !connected}
+        >
+          <group position={[BUTTONS_X[0], -1.25, 0.06]}>
+            <mesh>
+              <boxGeometry args={[0.62, 0.3, 0.08]} />
+              <meshStandardMaterial color="#e8e8e8" />
+            </mesh>
+            <ButtonLabel text="接続" background="#e8e8e8" />
+          </group>
+        </Interactable>
+        <TextInput
+          id="diag-port-input"
+          placeholder="ポート番号を入力"
+          value={String(port)}
+          maxLength={5}
+          onSubmit={handlePortSubmit}
+          interactionText="ポート番号を変更"
+          disabled={!ready || busy || connected}
+        >
+          <group position={[BUTTONS_X[1], -1.25, 0.06]}>
+            <mesh>
+              <boxGeometry args={[0.62, 0.3, 0.08]} />
+              <meshStandardMaterial color="#ffd43b" />
+            </mesh>
+            <ButtonLabel text="変更" background="#ffd43b" />
+          </group>
+        </TextInput>
+        <Interactable
+          id="diag-echo"
+          onInteract={handleEcho}
+          interactionText="echo 往復"
+          enabled={operable}
+        >
+          <group position={[BUTTONS_X[2], -1.25, 0.06]}>
+            <mesh>
+              <boxGeometry args={[0.62, 0.3, 0.08]} />
+              <meshStandardMaterial color="#4dabf7" />
+            </mesh>
+            <ButtonLabel text="echo" background="#4dabf7" />
+          </group>
+        </Interactable>
+        <Interactable
+          id="diag-ping"
+          onInteract={handlePing}
+          interactionText="ping"
+          enabled={operable}
+        >
+          <group position={[BUTTONS_X[3], -1.25, 0.06]}>
+            <mesh>
+              <boxGeometry args={[0.62, 0.3, 0.08]} />
+              <meshStandardMaterial color="#69db7c" />
+            </mesh>
+            <ButtonLabel text="ping" background="#69db7c" />
+          </group>
+        </Interactable>
+        <Interactable
+          id="diag-disconnect"
+          onInteract={handleDisconnect}
+          interactionText={cancelText}
+          enabled={ready && (busy || connected)}
+        >
+          <group position={[BUTTONS_X[4], -1.25, 0.06]}>
+            <mesh>
+              <boxGeometry args={[0.62, 0.3, 0.08]} />
+              <meshStandardMaterial color="#ff6b6b" />
+            </mesh>
+            <ButtonLabel text={cancelLabel} background="#ff6b6b" />
+          </group>
+        </Interactable>
+      </group>
+      <TextBoard snapshot={textSnapshot} />
+    </>
   );
 }

@@ -19,6 +19,7 @@
     "@react-three/rapier": "^2.2.0",
     "@react-three/uikit": "^1.0.64",
     "@xrift/world-components": "^0.53.0",
+    "bridge-app-core": "workspace:*",
     "react": "~19.2.4",
     "react-dom": "~19.2.4",
     "three": "^0.183.1",

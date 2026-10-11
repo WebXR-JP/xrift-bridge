@@ -358,6 +358,23 @@ export class DiagnosticSession {
   }
 
   /**
+   * 認可済みのセッション管理口を返す。テキスト専用セッションの生成だけに使う。
+   *
+   * 所有権は移転しない。呼び出し側は `close` しないこと。テキスト受信の生成は
+   * 3D盤側だけが行い、開発 DOM パネル側では呼ばない。認可前・切断後・破棄済みは
+   * `null` を返す。
+   *
+   * @returns 認可中で生存している場合の管理口。それ以外は `null`。
+   */
+  getAuthorizedProvider(): SessionProvider | null {
+    if (this.disposed) return null;
+    if (this.phase !== "authorized") return null;
+    const provider = this.provider;
+    if (provider === null || !provider.isAlive) return null;
+    return provider;
+  }
+
+  /**
    * 診断の写しを購読する。戻り値で解除できる。
    *
    * @param listener - 写しを受け取る購読者。

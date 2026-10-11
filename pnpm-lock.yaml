@@ -301,6 +301,9 @@ importers:
       '@xrift/world-components':
         specifier: ^0.53.0
         version: 0.53.0(@react-three/drei@10.7.9(@react-three/fiber@9.8.1(@types/react@19.3.0)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(three@0.183.2))(@types/react@19.3.0)(@types/three@0.183.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(three@0.183.2))(@react-three/fiber@9.8.1(@types/react@19.3.0)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(three@0.183.2))(@react-three/rapier@2.2.0(@react-three/fiber@9.8.1(@types/react@19.3.0)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(three@0.183.2))(react@19.2.8)(three@0.183.2))(@react-three/uikit@1.0.76(@react-three/fiber@9.8.1(@types/react@19.3.0)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(three@0.183.2))(@types/react@19.3.0)(react@19.2.8)(three@0.183.2)(use-sync-external-store@1.7.0(react@19.2.8)))(hls.js@1.7.3)(react@19.2.8)(three@0.183.2)
+      bridge-app-core:
+        specifier: workspace:*
+        version: link:../../packages/bridge-app-core
       react:
         specifier: ~19.2.4
         version: 19.2.8
