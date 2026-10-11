@@ -2,7 +2,14 @@ import Electrobun, { BrowserView, BrowserWindow, type ElectrobunEvent } from "el
 import { PRODUCTION_ORIGIN } from "bridge-server";
 import { parsePluginMountId } from "bridge-gui-contract/plugin-instance";
 import { GuiBackend } from "./backend.ts";
+import {
+  DEV_CONSOLE_OPT_IN_ENV,
+  shouldStartDevConsole,
+  startDevConsole,
+  type DevConsole,
+} from "./dev-console.ts";
 import { createManagementRpc } from "./rpc.ts";
+import type { PluginUiOperations, SpikeMountOperations } from "./rpc.ts";
 import { ElectrobunPluginUiChildView, createPluginUiChannelFactory } from "./instance-rpc.ts";
 import { PluginMountManager } from "./plugin-mounts.ts";
 import { PluginUiCoordinator } from "./plugin-ui-mounts.ts";
@@ -61,6 +68,10 @@ const backendOptions =
 const backendPromise: Promise<GuiBackend> = GuiBackend.create(backendOptions);
 // 終了手順の共有。二度目以降は同じ終了を待つ（冪等）。
 let shutdownTask: Promise<void> | null = null;
+// 開発専用の AI 操作・観測口（loopback 接続口）。有効条件（三つ）を
+// 満たすときだけ起動し、終了処理で必ず閉じる。stable は環境変数を
+// 設定しても開かない。
+let devConsole: DevConsole | null = null;
 // 段0スパイクの所有表。窓の生成後に結び付け、終了処理で破棄する。
 let spikeMounts: PluginMountManager | null = null;
 // 実プラグイン子画面の対応付け。窓の生成後に結び付け、終了処理で破棄する。
@@ -80,6 +91,11 @@ function shutdown(): Promise<void> {
   if (shutdownTask === null) {
     shutdownTask = (async () => {
       try {
+        // 開発接続口を先に閉じ、新規の外部操作を止める。
+        if (devConsole !== null) {
+          await devConsole.close();
+          devConsole = null;
+        }
         // 子画面の所有表を先に破棄し、BrowserView・購読を残さない。
         spikeMounts?.resetAll("終了");
         spikeMounts = null;
@@ -159,6 +175,27 @@ void backendPromise.then((ready) => {
   /** 要求の到達回数。Webview 側の到達証明用に数える（内容は残さない）。 */
   let snapshotRequestCount = 0;
 
+  // 段0スパイクの操作口。所有表は窓の生成後に結び付けるため、
+  // 到達時点では必ず存在する（RPC 到達は窓の生成より後である）。
+  // 開発接続口と共有するため、RPC 定義の前に束ねる。
+  const spikeOps: SpikeMountOperations = {
+    createSpikeMount: () => spikeMounts?.createMount() ?? failSpike(),
+    destroySpikeMount: (mountId: unknown) => spikeMounts?.destroyMount(mountId) ?? failSpike(),
+    pushSpikeMount: (mountId: unknown) => spikeMounts?.pushMount(mountId) ?? failSpike(),
+    listSpikeMounts: () => spikeMounts?.listMounts() ?? [],
+    resetSpikeMounts: () => spikeMounts?.resetAll("管理画面の要求") ?? { ok: true as const },
+  };
+  // 実プラグイン子画面の配置操作口。読み取りは管理が無ければ空とし、
+  // 書込み（再試行）は結線の不備として拒否する。開発接続口と共有する。
+  const pluginUiOps: PluginUiOperations = {
+    syncPluginUi: () => {
+      pluginUi?.syncNow();
+    },
+    listPluginUiMounts: () => pluginUi?.listPlacements() ?? [],
+    listPluginUiFailures: () => pluginUi?.listFailures() ?? [],
+    retryPluginUiMounts: () => pluginUi?.retryFailed() ?? failPluginUi(),
+  };
+
   const rpc = createManagementRpc(
     ready,
     {
@@ -178,26 +215,23 @@ void backendPromise.then((ready) => {
         quitAfterShutdown();
       },
     },
-    // 段0スパイクの操作口。所有表は窓の生成後に結び付けるため、
-    // 到達時点では必ず存在する（RPC 到達は窓の生成より後である）。
-    {
-      createSpikeMount: () => spikeMounts?.createMount() ?? failSpike(),
-      destroySpikeMount: (mountId) => spikeMounts?.destroyMount(mountId) ?? failSpike(),
-      pushSpikeMount: (mountId) => spikeMounts?.pushMount(mountId) ?? failSpike(),
-      listSpikeMounts: () => spikeMounts?.listMounts() ?? [],
-      resetSpikeMounts: () => spikeMounts?.resetAll("管理画面の要求") ?? { ok: true as const },
-    },
-    // 実プラグイン子画面の配置操作口。読み取りは管理が無ければ空とし、
-    // 書込み（再試行）は結線の不備として拒否する。
-    {
-      syncPluginUi: () => {
-        pluginUi?.syncNow();
-      },
-      listPluginUiMounts: () => pluginUi?.listPlacements() ?? [],
-      listPluginUiFailures: () => pluginUi?.listFailures() ?? [],
-      retryPluginUiMounts: () => pluginUi?.retryFailed() ?? failPluginUi(),
-    },
+    spikeOps,
+    pluginUiOps,
   );
+
+  // 開発専用の AI 操作・観測口。有効条件（三つ）を満たすときだけ
+  // loopback に開き、終了処理で閉じる。許可操作は既存操作への委譲であり、
+  // DOM 反映の観測は限定 Webview RPC（`ngDevObserve`）で行う。
+  if (shouldStartDevConsole()) {
+    devConsole = startDevConsole(ready, spikeOps, pluginUiOps, {
+      observeDom: (revision) => rpc.request.ngDevObserve({ revision }),
+    });
+    console.log(
+      `[bridge-gui] 開発口を開始した: host=127.0.0.1 port=${devConsole.port} token=${devConsole.token}`,
+    );
+  } else if (process.env[DEV_CONSOLE_OPT_IN_ENV] === "1") {
+    console.log("[bridge-gui] 開発口を開かない（開発ビルドではない）。");
+  }
 
   // バックエンドの状態変化を Webview へ送る購読は、対応付けの用意後に
   // 登録する。対応付けの追随を先に行い、配置の現在値を載せて送る。

@@ -241,6 +241,59 @@ export interface NgDebugProbeResult {
   readonly execMark: boolean;
 }
 
+/**
+ * 開発専用の Angular 段階観測（DOM 反映）の要素単位の記録。
+ *
+ * 固定要素キー・矩形・表示/disabled だけを持ち、入力値・本文は
+ * 含めない。矩形は表示上の確認用であり、画素の取得ではない。
+ */
+export interface NgDevObserveElement {
+  /** 固定の要素キー（観測対象表のいずれか）。 */
+  readonly key: string;
+  /** 対応する要素が文書にある場合に真。 */
+  readonly present: boolean;
+  /** 表示されている（寸法があり隠されていない）場合に真。 */
+  readonly visible: boolean;
+  /** 無効化されている入力要素を含む場合に真。 */
+  readonly disabled: boolean;
+  /** 要素の矩形（丸めた整数）。不在・測定不能なら `null`。 */
+  readonly rect: {
+    readonly x: number;
+    readonly y: number;
+    readonly width: number;
+    readonly height: number;
+  } | null;
+}
+
+/**
+ * 開発専用の Angular 段階観測（DOM 反映）の応答。
+ *
+ * RPC 成功や rAF を描画完了とは呼ばず、この DTO の到達を DOM 反映の
+ * 観測とする。許可するのは固定要素キー・矩形・表示/disabled・
+ * `document.hasFocus()`・activeElement キーに限り、入力値・本文・
+ * 実体・injector は含めない。
+ */
+export interface NgDevObserveResult {
+  /** 開発口として有効な場合に真。 */
+  readonly available: boolean;
+  /** 無効の場合の理由。定型文のみ。 */
+  readonly reason: string;
+  /** Angular が実際に採用した revision。観測不能時（`available:false`）は `null`。 */
+  readonly adoptedRevision: number | null;
+  /** 文書が焦点を持っている場合に真。 */
+  readonly focus: boolean;
+  /** 焦点要素の固定キー。表外・不在なら `null`。 */
+  readonly activeKey: string | null;
+  /** 固定要素表の順の要素単位の記録。 */
+  readonly elements: readonly NgDevObserveElement[];
+  /** `globalThis.ng` が存在する場合に真（補助観測）。 */
+  readonly hasNg: boolean;
+  /** ルートコンポーネントが文書にある場合に真（補助観測）。 */
+  readonly componentMounted: boolean;
+  /** ルート要素からコンポーネント実体が取得できた場合に真（有無のみ）。 */
+  readonly resolvedComponent: boolean;
+}
+
 /** 限定操作の受付応答。後続の状態は `stateChanged` で受け取る。 */
 export interface OperationAck {
   /** 受け付けた場合に真。 */
@@ -358,6 +411,13 @@ export type ManagementRpc = {
        * handle しない。main は明示の opt-in（`BRIDGE_GUI_NG_DEBUG=1`）でのみ呼ぶ。
        */
       ngDebugProbe: { params: {}; response: NgDebugProbeResult };
+      /**
+       * 開発専用の Angular 段階観測（DOM 反映）。mainview-ng の開発ビルドだけが
+       * 有効応答を返し、製品ビルドでは無効応答になる。固定要素キー・矩形・
+       * 表示/disabled・焦点だけを返し、入力値・本文は含めない。開発接続口
+       * （loopback）が操作実行後の段階観測として呼ぶ。
+       */
+      ngDevObserve: { params: { revision: number }; response: NgDevObserveResult };
     },
     {
       /** main からの状態 push。 */

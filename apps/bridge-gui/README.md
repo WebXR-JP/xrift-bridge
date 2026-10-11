@@ -75,6 +75,51 @@ not found in TypeScript compilation` は既知の非致命の警告である
 （終了符号 0 に影響しない。devkit 内の型宣言が ng の編集単位外にあるための表示であり、
 型検査は `build`（`tsc --noEmit`）で行う）。
 
+## 開発専用の AI 操作・観測口（`BRIDGE_GUI_DEV_CONSOLE=1`）
+
+AI からの自動操作用の loopback 接続口。Bun main 上で完結し、別プロセスは要らない。
+経路は AI → loopback 接続口 → Bun main → 限定 Webview RPC → 共通操作サービス →
+既存管理 RPC → backend である。契約の正本は `bridge-gui-contract/dev-console`
+（有効条件・認証・許可操作・段階観測・制限値）である。
+
+- 有効条件は三つ: 開発ビルド かつ 明示 opt-in（`BRIDGE_GUI_DEV_CONSOLE=1`）かつ
+  隔離実行。**stable は環境変数を設定しても待受を開かない**。
+  開発ビルドの判定は包装時チャンネルで行う（dev 包装の `Resources/version.json` が
+  `"channel":"dev"`、stable 包装の `Resources/metadata.json` が `"channel":"stable"`。
+  devkit の `BuildConfig`（`.hutch/devkit/api/sdks/main/core/BuildConfig.ts`）も
+  同じ `channel` を読む）。不明時は閉じたままにする。
+  隔離実行は構造で保つ（`127.0.0.1` 束縛・実行ごとの乱数 token・`Origin`／`Host`
+  制限・CORS 無効・終了時の閉鎖）。
+- 待受は `127.0.0.1` の空きポート自動選択（既存の待受 port 3100 とは別）であり、
+  起動時に `port` と実行ごとの乱数 `token` を標準出力に記録する。
+- 要求は `POST /dev/op`（本文は JSON の `{ op, params?, correlationId? }`）と
+  `GET /dev/status` のみである。認証は `Authorization: Bearer <token>`、
+  `Host` は `127.0.0.1` 自身、`Origin` は非ブラウザ（頭なし・空・`null`）か
+  待受自身の起点だけを通す。応答に `Access-Control-Allow-Origin` は載せない。
+  本文上限は 64 KiB、操作1件の期限は 10 秒（超過時は `504` の定型応答）、DOM 観測の待ち上限は 5 秒である。
+- 許可操作は固定 allowlist のみである: `getSnapshot`・受付の有効/無効・
+  `getPairingView`・承認/取り下げ・接続切断・診断割当て・テキスト割当て/送信/解除・
+  段0スパイク操作・再試行。アプリ終了（`quit`）・任意 JS・任意関数名・DOM 全文・
+  実体/injector 取得口は持たない。`ng.*` は可否・件数等の補助観測のみである。
+- 応答は段階を分けて返す: 操作受付（`acceptedAt`）／業務結果の要約／snapshot 採用
+  （`snapshotRevision`）／Angular の DOM 反映（`dom`。`ngDevObserve` の到達を観測と
+  し、RPC 成功や rAF を描画完了とは呼ばない）／native 画素観測（`native`。
+  Webview 単体の取得は未対応の定型で返し、後続単位に委ねる）。
+  DOM 反映の観測は固定要素キー・矩形・表示/disabled・`document.hasFocus()`・
+  activeElement キーに限る。比較コード取得の要約は有無だけに落とし、取得からの
+  自動承認はしない（承認は独立操作として呼ぶ）。
+- 秘密（比較コード本文・業務 payload・テキスト本文）をログ・生成物・応答に残さない。
+  `token` は実行時の標準出力にだけ記録し、終了処理（`GuiBackend.close()` と同じ
+  終了経路）で待受を必ず閉じる。
+
+```sh
+pnpm --filter bridge-gui gui:run:ng:console  # dev 包装＋ng 画面＋開発口で起動
+# 起動記録の port・token を見て curl 等で叩く（例: 受付の無効化）
+curl -s -H "Authorization: Bearer <token>" -H 'Content-Type: application/json' \
+  -d '{"op":"disableAcceptance","correlationId":"probe-1"}' \
+  http://127.0.0.1:<port>/dev/op
+```
+
 `gui:run` は起動前に `hutch electrobun build --env=dev` で dev バンドルを作り直す。
 `hutch electrobun run` 単体は既存バンドルを使い回すため、**ソース変更後に
 `hutch electrobun run` だけを実行すると古い画面が動く**（実測で踏んだ罠である）。

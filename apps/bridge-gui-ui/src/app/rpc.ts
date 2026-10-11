@@ -15,6 +15,7 @@ import type {
   ManagementRpc,
   ManagementSnapshot,
   NgDebugProbeResult,
+  NgDevObserveResult,
   OperationAck,
   PairingViewResult,
   StateChangedMessage,
@@ -40,12 +41,18 @@ export class ManagementRpcClient {
   // 置かない。
   private probeHandler!: () => NgDebugProbeResult;
 
+  // ADR: 段階観測（`ngDevObserve`）も `ngDebugProbe` と同じく生成時に
+  // 要求される。登録はサービスの生成と同期的に行い、未登録での呼び出しは
+  // 起きない想定であり、代替応答は置かない。
+  private devObserveHandler!: (params: { revision: number }) => NgDevObserveResult;
+
   private readonly stateHandlers = new Set<StateChangedHandler>();
 
   private readonly rpc = Electroview.defineRPC<ManagementRpc>({
     handlers: {
       requests: {
         ngDebugProbe: () => this.probeHandler(),
+        ngDevObserve: (params) => this.devObserveHandler(params),
       },
       messages: {
         stateChanged: (message) => {
@@ -72,6 +79,15 @@ export class ManagementRpcClient {
    */
   setProbeHandler(handler: () => NgDebugProbeResult): void {
     this.probeHandler = handler;
+  }
+
+  /**
+   * 開発専用の段階観測（DOM 反映）の応答処理を登録する。状態サービスが生成時に呼ぶ。
+   *
+   * @param handler - 観測応答を組み立てる処理。要求の改訂番号は相関用であり、採用判断は呼び出し側が行う。
+   */
+  setDevObserveHandler(handler: (params: { revision: number }) => NgDevObserveResult): void {
+    this.devObserveHandler = handler;
   }
 
   /**

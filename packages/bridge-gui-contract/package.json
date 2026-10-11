@@ -8,6 +8,7 @@
   ],
   "type": "module",
   "exports": {
+    "./dev-console": "./dist/dev-console.mjs",
     "./management": "./dist/management.mjs",
     "./plugin-instance": "./dist/plugin-instance.mjs",
     "./plugin-spike": "./dist/plugin-spike.mjs",

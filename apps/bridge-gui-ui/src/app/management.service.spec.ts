@@ -19,6 +19,7 @@ function prepareRpcStub() {
   const noSpikes: readonly SpikeMountSummary[] = [];
   const client = {
     setProbeHandler: vi.fn(),
+    setDevObserveHandler: vi.fn(),
     onStateChanged: vi.fn((handler: StateChangedHandler): (() => void) => {
       pushHandler = handler;
       return () => {};
@@ -477,6 +478,28 @@ describe("子画面タグの照合", () => {
       expect(service.isSpikeTagKept()).toBe(true);
     } finally {
       hosts.dispose();
+    }
+  });
+});
+
+describe("段階観測の秘密の非含有", () => {
+  it("入力値・本文が文書にあっても応答に載らない", () => {
+    const secret = "ひみつの本文041003";
+    const host = document.createElement("div");
+    const field = document.createElement("input");
+    field.value = secret;
+    const text = document.createElement("p");
+    text.textContent = secret;
+    host.append(field, text);
+    document.body.append(host);
+    try {
+      const { service } = prepareService();
+      const observed = service.buildDevObservation();
+      const dumped = JSON.stringify(observed);
+      expect(dumped).not.toContain(secret);
+      expect(dumped).not.toContain("041003");
+    } finally {
+      host.remove();
     }
   });
 });

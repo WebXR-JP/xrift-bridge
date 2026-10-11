@@ -17,6 +17,7 @@ import { Injectable, isDevMode, signal } from "@angular/core";
 import type {
   ManagementSnapshot,
   NgDebugProbeResult,
+  NgDevObserveResult,
   PairingViewResult,
 } from "bridge-gui-contract/management";
 import { selectNewer } from "bridge-gui-contract/management";
@@ -26,6 +27,8 @@ import { SPIKE_NAVIGATION_RULES_ATTRIBUTE } from "bridge-gui-contract/plugin-spi
 import type { SpikeMountSummary } from "bridge-gui-contract/plugin-spike";
 import { ManagementRpcClient } from "./rpc.ts";
 import { buildNgDebugProbeResult } from "./ng-probe.ts";
+import { buildNgDevObserveResult, DEV_OBSERVE_TARGETS } from "./dev-observe.ts";
+import type { DevObserveElementInput } from "./dev-observe.ts";
 
 /**
  * main の JS 実行標識の合言葉。本文・payload ではなく到達確認用の固定値である。
@@ -104,6 +107,7 @@ export class ManagementService {
 
   constructor(private readonly rpc: ManagementRpcClient) {
     this.rpc.setProbeHandler(() => this.buildProbe());
+    this.rpc.setDevObserveHandler(() => this.buildDevObservation());
     this.rpc.onStateChanged(({ revision, snapshot }) => {
       // push の到達自体を記録する。採用規約で無視される場合も到達は残る。
       this.pushRevision.set(revision);
@@ -234,6 +238,101 @@ export class ManagementService {
       hasGetComponent: component.hasGetComponent,
       resolvedComponent: component.resolvedComponent,
       getFailed: component.getFailed,
+    });
+  }
+
+  /**
+   * 固定要素表の1要素を観測する。入力値・本文は読まない。
+   *
+   * 測定の失敗は不在・非表示として扱い、観測自体は止めない。
+   *
+   * @param key - 固定要素キー。
+   * @param selector - 文書内の Angular 要素の選択子。
+   * @returns 許可項目だけの要素観測。
+   */
+  private readObserveElement(key: string, selector: string): DevObserveElementInput {
+    const element = document.querySelector(selector);
+    if (element === null) {
+      return { key, present: false, visible: false, disabled: false, rect: null };
+    }
+    let rect: DevObserveElementInput["rect"] = null;
+    let visible = false;
+    try {
+      const box = element.getBoundingClientRect();
+      rect = {
+        x: Math.round(box.x),
+        y: Math.round(box.y),
+        width: Math.round(box.width),
+        height: Math.round(box.height),
+      };
+      const style = getComputedStyle(element);
+      visible =
+        rect.width > 0 &&
+        rect.height > 0 &&
+        style.display !== "none" &&
+        style.visibility !== "hidden";
+    } catch {
+      // 測定不能なら不在に準じて扱う（観測自体は続ける）。
+      rect = null;
+      visible = false;
+    }
+    let disabled = false;
+    try {
+      disabled = element.querySelector(":disabled") !== null;
+    } catch {
+      // 選択子の評価に失敗しても観測自体は続ける。
+      disabled = false;
+    }
+    return { key, present: true, visible, disabled, rect };
+  }
+
+  /**
+   * 焦点要素の固定キーを求める。表外・不在なら `null` とする。
+   *
+   * 要素名・識別子・入力値は返さず、固定表に載るキーだけを返す。
+   *
+   * @returns 焦点要素の固定キー。表外・不在なら `null`。
+   */
+  private readActiveKey(): string | null {
+    const active = document.activeElement;
+    if (active === null || active === document.body) {
+      return null;
+    }
+    try {
+      for (const target of DEV_OBSERVE_TARGETS) {
+        if (active.closest(target.selector) !== null) {
+          return target.key;
+        }
+      }
+    } catch {
+      // 照合の失敗は表外として扱う。
+    }
+    return null;
+  }
+
+  /**
+   * 開発専用の段階観測（DOM 反映）の応答を組み立てる。許可 DTO だけを返す。
+   *
+   * 要求の改訂番号との照合は呼び出し側（開発接続口）が行い、ここでは
+   * 採用中の改訂番号を載せるだけである。RPC 成功を描画完了とは呼ばず、
+   * この応答の到達を DOM 反映の観測とする。
+   *
+   * @returns 固定要素キー・矩形・表示/disabled・焦点だけの観測応答。
+   */
+  buildDevObservation(): NgDevObserveResult {
+    const ng = (globalThis as unknown as Record<string, unknown>)["ng"];
+    const component = this.readComponentProbe();
+    return buildNgDevObserveResult({
+      devMode: isDevMode(),
+      hasNg: ng !== undefined,
+      componentMounted: document.querySelector("app-root") !== null,
+      resolvedComponent: component.resolvedComponent,
+      adoptedRevision: this.current()?.revision ?? null,
+      focus: document.hasFocus(),
+      activeKey: this.readActiveKey(),
+      elements: DEV_OBSERVE_TARGETS.map((target) =>
+        this.readObserveElement(target.key, target.selector),
+      ),
     });
   }
 
