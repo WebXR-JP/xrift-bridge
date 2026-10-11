@@ -70,7 +70,6 @@ async function connectApproved(server: BridgeServer): Promise<SessionProvider> {
   const request = createConnectionRequest({
     endpoint: server.endpoint,
     origin: TEST_ORIGIN,
-    timeoutMs: 10_000,
   });
   // 先に待つ pairingInfo が拒否した場合も sessionProvider 側の扱いを確定する。
   void request.sessionProvider.catch(() => {});
@@ -160,7 +159,7 @@ function isPong(payload: unknown, id: string): boolean {
 
 test("実セッション経由で診断プラグインがechoとpingに応答する", async () => {
   const server = await startServer();
-  server.openAcceptance();
+  server.enableAcceptance();
   const 診断 = attachDiagnostic(server);
   const core = cores[0];
   if (core === undefined) throw new Error("基盤がない。");
@@ -198,7 +197,7 @@ test("実セッション経由で診断プラグインがechoとpingに応答す
 
 test("セッション終了で割当てが外れ次のセッションを割当て直せる", async () => {
   const server = await startServer();
-  server.openAcceptance();
+  server.enableAcceptance();
   const 診断 = attachDiagnostic(server);
   const core = cores[0];
   if (core === undefined) throw new Error("基盤がない。");

@@ -47,15 +47,15 @@ XRift とローカルブリッジの接続を診断するワールド（開発�
 # 1) ブリッジ（明示開発モードで開発 Origin を許可）
 vp run bridge-cli#build
 node apps/bridge-cli/dist/index.mjs --dev --origin http://localhost:5173
-# ブリッジの対話命令で受付を開く
-#   accept open
+# ブリッジの対話命令で受付を有効化
+#   accept enable
 
 # 2) 診断ワールド（http://localhost:5173 固定。競合時は失敗し退避しない）
 vp run diagnostic-world#dev
 ```
 
 ブラウザで `http://localhost:5173` を開き、パネルで接続を開始するとワールド画面に比較コードが表示される。ブリッジの `pending` 表示と照合し、ブリッジ側で `approve <requestId> <code>` を入力して承認する。
-接続待機は診断用に 120 秒。期限切れ・拒否・切断後は新規に接続を開始すること（再接続の自動承認はしない）。
+保留は承認・拒否・切断まで残る。拒否・切断後は新規に接続を開始すること（再接続の自動承認はしない）。
 
 ## 検証
 

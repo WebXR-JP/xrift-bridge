@@ -270,8 +270,8 @@ async function authorizeCollected(
   socket.send(pairingStartMessage());
   const pending = await collector.waitForType("pairing_pending");
   if (pending.message.type !== "pairing_pending") throw new Error("保留通知ではない。");
-  expect(pending.message.expiresInMs).toBeGreaterThan(0);
-  expect(Number.isInteger(pending.message.expiresInMs)).toBe(true);
+  // `pairing_pending` は `v`・`type`・`requestId`・`code` のみを持ち、期限を持たない。
+  expect(Object.keys(pending.message).sort()).toEqual(["code", "requestId", "type", "v"]);
   const pendingRequestId = pending.message.requestId;
   const pendingCode = pending.message.code;
   const listed = server.listPending().find((item) => item.requestId === pendingRequestId);
@@ -432,27 +432,27 @@ function waitSessionEnd(
 
 // ---------- 受付・ペアリングの基本 ----------
 
-test("起動時は受付が閉じていてupgradeを拒否し開くと接続できる", async () => {
+test("起動時は受付が無効でupgradeを拒否し有効にすると接続できる", async () => {
   const server = await startServer();
-  expect(server.getAcceptance().state).toBe("closed");
+  expect(server.getAcceptance().enabled).toBe(false);
   expect(server.listPending()).toEqual([]);
   await expect(openRaw(server.endpoint, DEV_ORIGIN)).rejects.toThrow();
   expect(server.getStats().upgradeRejected).toBe(1);
   expect(server.getStats().rejectionsByReason["ACCEPTANCE_CLOSED"]).toBe(1);
 
-  const info = server.openAcceptance();
-  expect(info.state).toBe("open");
-  expect(server.getAcceptance().state).toBe("open");
+  const info = server.enableAcceptance();
+  expect(info.enabled).toBe(true);
+  expect(server.getAcceptance().enabled).toBe(true);
   const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
   socket.send(pairingStartMessage());
   const pending = await collector.waitForType("pairing_pending");
   expect(pending.message.type).toBe("pairing_pending");
 });
 
-test("受付開後のpairing_pending通知と承認後にauth_okが返る", async () => {
+test("受付有効後のpairing_pending通知と承認後にauth_okが返る", async () => {
   const captured = capture();
   const server = await startServer({}, captured);
-  server.openAcceptance();
+  server.enableAcceptance();
   const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
   socket.send(pairingStartMessage());
   const pending = await collector.waitForType("pairing_pending");
@@ -474,8 +474,8 @@ test("受付開後のpairing_pending通知と承認後にauth_okが返る", asyn
   expect(ok.message.requestId).toBe(pending.message.requestId);
   expect(typeof ok.message.connectionId).toBe("string");
 
-  // 承認成功だけでは受付は閉じない。
-  expect(server.getAcceptance().state).toBe("open");
+  // 承認成功だけでは受付は無効にならない。
+  expect(server.getAcceptance().enabled).toBe(true);
   expect(server.getStats().pairingSuccess).toBe(1);
 
   // 比較コードがログに出ていない。
@@ -485,7 +485,7 @@ test("受付開後のpairing_pending通知と承認後にauth_okが返る", asyn
 
 test("認可前のcreate_session・dataは拒否し業務状態を変えない", async () => {
   const server = await startServer();
-  server.openAcceptance();
+  server.enableAcceptance();
   const cases: Array<{ name: string; build: (connectionId: string) => string; code: string }> = [
     {
       name: "create_session",
@@ -530,7 +530,7 @@ test("認可前のcreate_session・dataは拒否し業務状態を変えない",
 
 test("認可前のbinaryは境界違反で終了する", async () => {
   const server = await startServer();
-  server.openAcceptance();
+  server.enableAcceptance();
   const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
   const closed = collector.waitClose();
   socket.send(new Uint8Array([1, 2, 3]));
@@ -543,7 +543,7 @@ test("認可前のbinaryは境界違反で終了する", async () => {
 
 test("認証前のJSON不正・版不一致・逆方向メッセージは1回で終了する", async () => {
   const server = await startServer();
-  server.openAcceptance();
+  server.enableAcceptance();
   const inputs: Array<{ name: string; raw: string; code: string }> = [
     { name: "json", raw: "not json", code: "INVALID_JSON" },
     {
@@ -583,7 +583,7 @@ test("認証前のJSON不正・版不一致・逆方向メッセージは1回で
 
 test("2回目の開始はDUPLICATE_PAIRING_STARTで終了し再通知しない", async () => {
   const server = await startServer();
-  server.openAcceptance();
+  server.enableAcceptance();
   const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
   const closed = collector.waitClose();
   socket.send(pairingStartMessage());
@@ -595,24 +595,24 @@ test("2回目の開始はDUPLICATE_PAIRING_STARTで終了し再通知しない",
   expect(error.message.type).toBe("error");
   const result = await closed;
   expect(result.code).toBe(1008);
-  // コード再生成・再通知・期限延長をしない。保留は終わっている。
+  // コード再生成・再通知をしない。保留は終わっている。
   expect(server.listPending()).toHaveLength(0);
   expect(server.approvePairing(firstRequestId, pending.message.code).status).toBe("NOT_PENDING");
 });
 
-test("開始待ちは短縮期限でPAIRING_START_TIMEOUTになり切断する", async () => {
-  const server = await startServer({ limits: { pairingStartTimeoutMs: 150 } });
-  server.openAcceptance();
-  const { collector } = await openCollected(server.endpoint, DEV_ORIGIN);
-  const error = await collector.waitForErrorCode("PAIRING_START_TIMEOUT");
-  expect(error.message.type).toBe("error");
-  if (error.message.type === "error") {
-    expect(error.message.requestId).toBeUndefined();
-    expect(error.message.connectionId).toBeUndefined();
-  }
-  const result = await collector.waitClose();
-  expect(result.code).toBe(1008);
-  await waitForCondition(() => server.getConnectionCount() === 0);
+test("開始待ちは時間で終了せず開始メッセージを待ち続ける", async () => {
+  const server = await startServer();
+  server.enableAcceptance();
+  const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
+  // 旧 `pairingStartTimeoutMs` 相当の時間を過ぎても開始待ちは残る。
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  expect(server.getConnectionCount()).toBe(1);
+  expect(server.listConnections()[0]?.phase).toBe("awaiting_start");
+  // 遅れて届いた開始メッセージは通常どおり受理される。
+  socket.send(pairingStartMessage());
+  const pending = await collector.waitForType("pairing_pending");
+  expect(pending.message.type).toBe("pairing_pending");
+  expect(server.listConnections()[0]?.phase).toBe("pending");
 });
 
 // ---------- 上限・レート ----------
@@ -621,7 +621,7 @@ test("全接続数・未認可数・保留数の上限を同時に踏める（�
   const server = await startServer({
     limits: { maxPairingRequestsPerOrigin: 20, maxPairingRequestsTotal: 20 },
   });
-  server.openAcceptance();
+  server.enableAcceptance();
   // 6件を認可し、2件を開始待ちで保持する。全8・未認可2が満杯になる。
   const authorized: Array<{ socket: WebSocket; collector: TextCollector; mux: ClientMux }> = [];
   for (let index = 0; index < 6; index += 1) {
@@ -671,7 +671,7 @@ test("保留超過は実際に踏みPENDING_FULLで終了する", async () => {
   const server = await startServer({
     limits: { maxPendingPairings: 1, maxUnauthorizedConnections: 2 },
   });
-  server.openAcceptance();
+  server.enableAcceptance();
   const first = await openCollected(server.endpoint, DEV_ORIGIN);
   const second = await openCollected(server.endpoint, DEV_ORIGIN);
   const secondClosed = second.collector.waitClose();
@@ -700,7 +700,7 @@ test("受付レート超過は429で拒否し履歴に追加しない", async ()
       maxConnections: 8,
     },
   });
-  server.openAcceptance();
+  server.enableAcceptance();
   await openRaw(server.endpoint, DEV_ORIGIN);
   await openRaw(server.endpoint, DEV_ORIGIN);
   // Origin 別の上限（2）を超える。
@@ -748,7 +748,7 @@ test("HTTP状態は403・429・503を使い分ける", async () => {
       maxConnections: 8,
     },
   });
-  limited.openAcceptance();
+  limited.enableAcceptance();
   await openRaw(limited.endpoint, DEV_ORIGIN);
   const limitedResponse = await readStatus(limited.port, build(limited.port, DEV_ORIGIN));
   expect(limitedResponse).toContain("429");
@@ -757,7 +757,7 @@ test("HTTP状態は403・429・503を使い分ける", async () => {
   const full = await startServer({
     limits: { maxConnections: 1, maxUnauthorizedConnections: 1, maxPendingPairings: 1 },
   });
-  full.openAcceptance();
+  full.enableAcceptance();
   await openRaw(full.endpoint, DEV_ORIGIN);
   const fullResponse = await readStatus(full.port, build(full.port, DEV_ORIGIN));
   expect(fullResponse).toContain("503");
@@ -767,7 +767,7 @@ test("HTTP状態は403・429・503を使い分ける", async () => {
 
 test("拒否・取消で保留が失効し認可済みに影響しない", async () => {
   const server = await startServer();
-  server.openAcceptance();
+  server.enableAcceptance();
   const target = await openCollected(server.endpoint, DEV_ORIGIN);
   target.socket.send(pairingStartMessage());
   const pending = await target.collector.waitForType("pairing_pending");
@@ -806,7 +806,7 @@ test("拒否・取消で保留が失効し認可済みに影響しない", async
 
 test("切断で保留が失効し承認は未保留になる", async () => {
   const server = await startServer();
-  server.openAcceptance();
+  server.enableAcceptance();
   const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
   socket.send(pairingStartMessage());
   const pending = await collector.waitForType("pairing_pending");
@@ -818,28 +818,26 @@ test("切断で保留が失効し承認は未保留になる", async () => {
   });
 });
 
-test("承認期限の到達で保留が失効し二度目の承認は未保留になる", async () => {
-  const server = await startServer({ limits: { pairingApprovalTimeoutMs: 250 } });
-  server.openAcceptance();
+test("保留は時間で失効せず遅れて承認できる", async () => {
+  const server = await startServer();
+  server.enableAcceptance();
   const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
-  const closed = collector.waitClose();
   socket.send(pairingStartMessage());
   const pending = await collector.waitForType("pairing_pending");
   if (pending.message.type !== "pairing_pending") throw new Error("保留通知ではない。");
-  const error = await collector.waitForErrorCode("PAIRING_EXPIRED");
-  if (error.message.type !== "error") throw new Error("明示エラーではない。");
-  expect(error.message.requestId).toBe(pending.message.requestId);
-  expect(await closed).toMatchObject({ code: 1008 });
-  expect(server.listPending()).toHaveLength(0);
-  expect(server.approvePairing(pending.message.requestId, pending.message.code)).toEqual({
-    status: "NOT_PENDING",
-  });
-  expect(server.getStats().rejectionsByReason["PAIRING_EXPIRED"]).toBeGreaterThanOrEqual(1);
+  // 旧 `pairingApprovalTimeoutMs` 相当の時間を過ぎても保留は残り、切断されない。
+  await new Promise((resolve) => setTimeout(resolve, 300));
+  expect(server.listPending()).toHaveLength(1);
+  const listed = server.listPending()[0];
+  if (listed === undefined) throw new Error("保留がない。");
+  expect(server.approvePairing(listed.requestId, listed.code).status).toBe("APPROVED");
+  const ok = await collector.waitForType("auth_ok");
+  expect(ok.message.type).toBe("auth_ok");
 });
 
 test("二重承認は2回目が未保留になりコード不一致は保留を残す", async () => {
   const server = await startServer();
-  server.openAcceptance();
+  server.enableAcceptance();
   const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
   socket.send(pairingStartMessage());
   const pending = await collector.waitForType("pairing_pending");
@@ -867,7 +865,7 @@ test("二重承認は2回目が未保留になりコード不一致は保留を�
 
 test("再起動で保留と認可は失効する", async () => {
   const first = await startServer();
-  first.openAcceptance();
+  first.enableAcceptance();
   const opened = await openCollected(first.endpoint, DEV_ORIGIN);
   opened.socket.send(pairingStartMessage());
   const pending = await opened.collector.waitForType("pairing_pending");
@@ -882,17 +880,17 @@ test("再起動で保留と認可は失効する", async () => {
   const second = await startServer();
   expect(second.listPending()).toHaveLength(0);
   expect(second.getConnectionCount()).toBe(0);
-  expect(second.getAcceptance().state).toBe("closed");
+  expect(second.getAcceptance().enabled).toBe(false);
   // 前世代の要求 ID・コードは使えない。
-  second.openAcceptance();
+  second.enableAcceptance();
   expect(second.approvePairing(oldRequestId, oldCode)).toEqual({ status: "NOT_PENDING" });
 });
 
-// ---------- 受付クローズの drain ----------
+// ---------- 受付無効化の drain ----------
 
-test("受付クローズで開始待ち・承認待ちが終了し認可済みは維持される", async () => {
+test("受付無効化で開始待ち・承認待ちが終了し認可済みは維持される", async () => {
   const server = await startServer();
-  server.openAcceptance();
+  server.enableAcceptance();
   const keeper = await openCollected(server.endpoint, DEV_ORIGIN);
   // 先に認可して未認可枠を空けておく。
   const keeperAuth = await authorizeAndMux(server, keeper.socket, keeper.collector);
@@ -906,8 +904,8 @@ test("受付クローズで開始待ち・承認待ちが終了し認可済み�
   if (pending.message.type !== "pairing_pending") throw new Error("保留通知ではない。");
   const pendingClosed = pendingConn.collector.waitClose();
 
-  server.closeAcceptance();
-  expect(server.getAcceptance().state).toBe("closed");
+  server.disableAcceptance();
+  expect(server.getAcceptance().enabled).toBe(false);
 
   const awaitingError = await awaiting.collector.waitForErrorCode("ACCEPTANCE_CLOSED");
   expect(awaitingError.message.type).toBe("error");
@@ -942,8 +940,8 @@ test("受付クローズで開始待ち・承認待ちが終了し認可済み�
       (payload as Record<string, unknown>)["往復"] === "drain-keep-1",
   );
 
-  // 閉の冪等性。二度目の close でも認可済みは残る。
-  server.closeAcceptance();
+  // 無効の冪等性。二度目の disable でも認可済みは残る。
+  server.disableAcceptance();
   const second = await keeperAuth.mux.conn.createSession({
     sessionId: "drain-keep2",
     kind: "reliable",
@@ -960,19 +958,39 @@ test("受付クローズで開始待ち・承認待ちが終了し認可済み�
   stopResponding();
 });
 
-test("受付の自動クローズでも開始待ちは失効する", async () => {
-  const server = await startServer({ limits: { acceptanceDurationMs: 250 } });
-  server.openAcceptance();
-  const { collector } = await openCollected(server.endpoint, DEV_ORIGIN);
+test("再有効化しても旧要求は復活せず新規作成できる", async () => {
+  const server = await startServer();
+  server.enableAcceptance();
+  const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
+  socket.send(pairingStartMessage());
+  const pending = await collector.waitForType("pairing_pending");
+  if (pending.message.type !== "pairing_pending") throw new Error("保留通知ではない。");
+  const oldRequestId = pending.message.requestId;
+  const oldCode = pending.message.code;
   const closed = collector.waitClose();
-  const error = await collector.waitForErrorCode("ACCEPTANCE_CLOSED");
-  expect(error.message.type).toBe("error");
+
+  server.disableAcceptance();
+  // 無効化で旧要求は終わり、接続も閉じる。
+  await collector.waitForErrorCode("ACCEPTANCE_CLOSED");
   expect(await closed).toMatchObject({ code: 1008 });
-  expect(server.getAcceptance().state).toBe("closed");
   expect(server.listPending()).toHaveLength(0);
+
+  server.enableAcceptance();
+  // 旧要求は復活しない。
+  expect(server.approvePairing(oldRequestId, oldCode)).toEqual({ status: "NOT_PENDING" });
+  // 新世代では新規作成ができる。
+  const retry = await openCollected(server.endpoint, DEV_ORIGIN);
+  retry.socket.send(pairingStartMessage());
+  const second = await retry.collector.waitForType("pairing_pending");
+  if (second.message.type !== "pairing_pending") throw new Error("保留通知ではない。");
+  expect(second.message.requestId).not.toBe(oldRequestId);
+  const secondRequestId = second.message.requestId;
+  const listed = server.listPending().find((item) => item.requestId === secondRequestId);
+  if (listed === undefined) throw new Error("保留がない。");
+  expect(server.approvePairing(listed.requestId, listed.code).status).toBe("APPROVED");
 });
 
-test("管理イベントで保留の増減と受付の開閉が分かる", async () => {
+test("管理イベントで保留の増減と受付の切替が分かる", async () => {
   const server = await startServer();
   const events: Array<{ kind: string; requestId?: string }> = [];
   const unsubscribe = server.onManagementEvent((event) => {
@@ -982,7 +1000,7 @@ test("管理イベントで保留の増減と受付の開閉が分かる", async
       events.push({ kind: event.kind });
     }
   });
-  server.openAcceptance();
+  server.enableAcceptance();
   const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
   socket.send(pairingStartMessage());
   const pending = await collector.waitForType("pairing_pending");
@@ -992,9 +1010,119 @@ test("管理イベントで保留の増減と受付の開閉が分かる", async
   if (listed === undefined) throw new Error("保留がない。");
   server.approvePairing(listed.requestId, listed.code);
   await waitForCondition(() => events.some((event) => event.kind === "pending-ended"));
-  server.closeAcceptance();
+  server.disableAcceptance();
   expect(events.map((event) => event.kind)).toContain("acceptance-changed");
   unsubscribe();
+});
+
+test("受付の有効化と無効化は冪等で遷移時だけ通知する", async () => {
+  const server = await startServer();
+  const changed: boolean[] = [];
+  const unsubscribe = server.onManagementEvent((event) => {
+    if (event.kind === "acceptance-changed") {
+      changed.push(event.enabled);
+    }
+  });
+  expect(server.getAcceptance()).toEqual({ enabled: false });
+  expect(server.enableAcceptance()).toEqual({ enabled: true });
+  // 有効中の再有効化は状態も通知も動かさない。
+  expect(server.enableAcceptance()).toEqual({ enabled: true });
+  expect(server.disableAcceptance()).toEqual({ enabled: false });
+  // 無効中の再無効化は通知を送らない。
+  expect(server.disableAcceptance()).toEqual({ enabled: false });
+  expect(server.enableAcceptance()).toEqual({ enabled: true });
+  expect(changed).toEqual([true, false, true]);
+  unsubscribe();
+});
+
+test("時計を大きく進めても受付と未認可接続は自動終了しない", async () => {
+  let wallNow = 1_000_000;
+  let monoNow = 5_000;
+  const server = await startServer({
+    clock: {
+      now: () => wallNow,
+      monotonic: () => monoNow,
+    },
+  });
+  server.enableAcceptance();
+  const awaiting = await openCollected(server.endpoint, DEV_ORIGIN);
+  const pendingConn = await openCollected(server.endpoint, DEV_ORIGIN);
+  pendingConn.socket.send(pairingStartMessage());
+  const pending = await pendingConn.collector.waitForType("pairing_pending");
+  if (pending.message.type !== "pairing_pending") throw new Error("保留通知ではない。");
+  // 壁時計・単調時計の双方を大きく進めても、受付も未認可接続も終わらない。
+  wallNow += 10_000_000;
+  monoNow += 10_000_000;
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  expect(server.getAcceptance().enabled).toBe(true);
+  expect(server.getConnectionCount()).toBe(2);
+  expect(server.listPending()).toHaveLength(1);
+  expect(
+    server
+      .listConnections()
+      .map((item) => item.phase)
+      .sort(),
+  ).toEqual(["awaiting_start", "pending"]);
+  // 保留は承認できる。
+  const listed = server.listPending()[0];
+  if (listed === undefined) throw new Error("保留がない。");
+  expect(server.approvePairing(listed.requestId, listed.code).status).toBe("APPROVED");
+  const ok = await pendingConn.collector.waitForType("auth_ok");
+  expect(ok.message.type).toBe("auth_ok");
+  void awaiting;
+});
+
+test("切断で保留が除去され保留枠が回復する", async () => {
+  const server = await startServer({
+    limits: { maxPendingPairings: 1, maxUnauthorizedConnections: 2 },
+  });
+  server.enableAcceptance();
+  const first = await openCollected(server.endpoint, DEV_ORIGIN);
+  first.socket.send(pairingStartMessage());
+  await first.collector.waitForType("pairing_pending");
+  expect(server.listPending()).toHaveLength(1);
+  // 保留枠が満杯のため2件目は拒否される。
+  const second = await openCollected(server.endpoint, DEV_ORIGIN);
+  const secondClosed = second.collector.waitClose();
+  second.socket.send(pairingStartMessage());
+  await second.collector.waitForErrorCode("PENDING_FULL");
+  await secondClosed;
+  // 1件目が切断すると保留が除去され枠が回復する。
+  first.socket.terminate();
+  await waitForCondition(() => server.listPending().length === 0);
+  await waitForCondition(() => server.getConnectionCount() === 0);
+  const third = await openCollected(server.endpoint, DEV_ORIGIN);
+  third.socket.send(pairingStartMessage());
+  const retry = await third.collector.waitForType("pairing_pending");
+  expect(retry.message.type).toBe("pairing_pending");
+  expect(server.listPending()).toHaveLength(1);
+});
+
+test("同時 upgrade は上限内で全件登録され予約漏れがない", async () => {
+  const server = await startServer({
+    limits: {
+      maxConnections: 4,
+      maxUnauthorizedConnections: 4,
+      maxPendingPairings: 4,
+      maxPairingRequestsPerOrigin: 100,
+      maxPairingRequestsTotal: 100,
+    },
+  });
+  server.enableAcceptance();
+  const opened = await Promise.all(
+    [0, 1, 2, 3].map(() => openCollected(server.endpoint, DEV_ORIGIN)),
+  );
+  expect(server.getConnectionCount()).toBe(4);
+  // 上限を超える同時 upgrade は拒否される。
+  await expect(openRaw(server.endpoint, DEV_ORIGIN)).rejects.toThrow();
+  for (const item of opened) {
+    item.socket.terminate();
+  }
+  await waitForCondition(() => server.getConnectionCount() === 0);
+  // 予約漏れが残っていれば上限拒否が続く。回復後は再接続できる。
+  const retry = await openCollected(server.endpoint, DEV_ORIGIN);
+  void retry;
+  expect(server.getConnectionCount()).toBe(1);
 });
 
 // ---------- 既存の検証 ----------
@@ -1055,7 +1183,7 @@ test("ポート競合時は探索せず失敗する", async () => {
 
 test("maxConnections は未認証接続も含めて上限拒否し切断後に枠が回復する", async () => {
   const server = await startServer({ limits: { maxConnections: 2 } });
-  server.openAcceptance();
+  server.enableAcceptance();
   const first = await openRaw(server.endpoint, DEV_ORIGIN);
   const second = await openRaw(server.endpoint, DEV_ORIGIN);
   await expect(openRaw(server.endpoint, DEV_ORIGIN)).rejects.toThrow();
@@ -1071,24 +1199,23 @@ test("maxConnections は未認証接続も含めて上限拒否し切断後に�
   await waitForCondition(() => server.getConnectionCount() === 0);
 });
 
-test("handshake 未到達の予約は有限時間で回収され枠が回復する", async () => {
-  // verify 通過後に `connection` へ到達しない handshake 失敗でも、予約が
-  // 恒久に残らず有限時間で回収されることを確かめる。通常経路の消費と
-  // 同時 upgrade の上限保証は従来どおりである。
+test("handshake 未到達でも予約は漏れず枠が即時に回復する", async () => {
+  // verify 通過後に `connection` へ到達しない handshake 失敗でも、予約は
+  // `done(true)` の同期区間の `finally` で即時に回収され、枠が浸食されない。
+  // 同時 upgrade の上限保証は維持する。
   const server = await startServer({
     limits: {
       maxConnections: 1,
       maxUnauthorizedConnections: 1,
       maxPendingPairings: 1,
-      pairingStartTimeoutMs: 60,
       maxPairingRequestsPerOrigin: 1000,
       maxPairingRequestsTotal: 1000,
     },
   });
-  server.openAcceptance();
+  server.enableAcceptance();
   const key = "dGhlIHNhbXBsZSBub25jZQ==";
   // upgrade 要求バイトと RST を続けて送り、`connection` 到達前の失敗経路
-  // （予約だけが残る）を誘発する。読み取りは行わない。
+  // （予約だけが残りうる）を誘発する。読み取りは行わない。
   const poison = async (): Promise<void> => {
     const socket = connect(server.port, "127.0.0.1", () => {
       socket.write(
@@ -1100,20 +1227,9 @@ test("handshake 未到達の予約は有限時間で回収され枠が回復す�
   };
   await poison();
   await poison();
-  // 予約の回収（有限時間）を待って通常の接続が通ることを確かめる。
-  // 予約漏れが残っていれば上限拒否で失敗し続ける。
-  const waitForOpen = async (): Promise<WebSocket> => {
-    const deadline = Date.now() + 3_000;
-    for (;;) {
-      try {
-        return await openRaw(server.endpoint, DEV_ORIGIN);
-      } catch {
-        if (Date.now() >= deadline) throw new Error("回復後の接続を観測できない。");
-        await new Promise((resolve) => setTimeout(resolve, 20));
-      }
-    }
-  };
-  const opened = await waitForOpen();
+  // 回収は同期的であり、待ち時間なく通常の接続が通る。
+  // 予約漏れが残っていれば上限拒否で失敗する。
+  const opened = await openRaw(server.endpoint, DEV_ORIGIN);
   const collector = new TextCollector(opened);
   const auth = await authorizeAndMux(server, opened, collector);
   expect(auth.connectionId).not.toBe("");
@@ -1126,7 +1242,7 @@ test("handshake 未到達の予約は有限時間で回収され枠が回復す�
 
 test("指定接続だけを切断し他接続は維持する", async () => {
   const server = await startServer();
-  server.openAcceptance();
+  server.enableAcceptance();
   const firstOpened = await openCollected(server.endpoint, DEV_ORIGIN);
   await authorizeAndMux(server, firstOpened.socket, firstOpened.collector);
   const secondOpened = await openCollected(server.endpoint, DEV_ORIGIN);
@@ -1168,7 +1284,7 @@ test("指定接続だけを切断し他接続は維持する", async () => {
 
 test("運用切断は 1008・固定 reason で未認証接続も切れる", async () => {
   const server = await startServer();
-  server.openAcceptance();
+  server.enableAcceptance();
   const { collector } = await openCollected(server.endpoint, DEV_ORIGIN);
   await waitForCondition(() => server.listConnections().length === 1);
   const listed = server.listConnections();
@@ -1207,7 +1323,7 @@ test("運用切断は 1008・固定 reason で未認証接続も切れる", asyn
 
 test("同一WSでmux→Session往復しlatest反映と応答器の往復が通る", async () => {
   const server = await startServer();
-  server.openAcceptance();
+  server.enableAcceptance();
   const stopResponding = attachEchoResponder(server);
   try {
     const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
@@ -1259,7 +1375,7 @@ test("同一WSでmux→Session往復しlatest反映と応答器の往復が通�
 
 test("旧診断形状も一般payloadとして往復し他Sessionは継続する", async () => {
   const server = await startServer();
-  server.openAcceptance();
+  server.enableAcceptance();
   // サーバ側に既定の応答はなく payload の解釈はしないため、診断の旧形状
   // （`id` 無し）でも中断せず、応答器がそのまま返す。形状の厳密さの保証は
   // app-core の診断プラグイン側に寄せる。
@@ -1306,7 +1422,7 @@ test("旧診断形状も一般payloadとして往復し他Sessionは継続する
 
 test("auth_ok直後のbinaryを失わず処理する", async () => {
   const server = await startServer();
-  server.openAcceptance();
+  server.enableAcceptance();
   const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
   socket.send(pairingStartMessage());
   const pending = await collector.waitForType("pairing_pending");
@@ -1339,7 +1455,7 @@ test("auth_ok直後のbinaryを失わず処理する", async () => {
 
 test("mux移行後のtextは境界違反で終了する", async () => {
   const server = await startServer();
-  server.openAcceptance();
+  server.enableAcceptance();
   const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
   await authorizeAndMux(server, socket, collector);
   const closed = collector.waitClose();
@@ -1354,7 +1470,7 @@ test("mux移行後のtextは境界違反で終了する", async () => {
 
 test("Session中断時に他Sessionは継続する", async () => {
   const server = await startServer();
-  server.openAcceptance();
+  server.enableAcceptance();
   const stopResponding = attachEchoResponder(server);
   try {
     const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
@@ -1392,7 +1508,7 @@ test("Session中断時に他Sessionは継続する", async () => {
 
 test("WS closeで全終了し認可は失効する", async () => {
   const server = await startServer();
-  server.openAcceptance();
+  server.enableAcceptance();
   const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
   const auth = await authorizeAndMux(server, socket, collector);
   await auth.mux.conn.createSession({
@@ -1409,7 +1525,7 @@ test("WS closeで全終了し認可は失効する", async () => {
 
 test("運用切断はmux接続を即時1008で閉じ他接続は維持する", async () => {
   const server = await startServer();
-  server.openAcceptance();
+  server.enableAcceptance();
   const first = await openCollected(server.endpoint, DEV_ORIGIN);
   const firstAuth = await authorizeAndMux(server, first.socket, first.collector);
   const second = await openCollected(server.endpoint, DEV_ORIGIN);
@@ -1446,7 +1562,7 @@ test("再接続再承認で業務再開しlatestMailboxは維持される", asyn
   const server = await startServer({
     limits: { maxConnections: 2, maxUnauthorizedConnections: 2, maxPendingPairings: 2 },
   });
-  server.openAcceptance();
+  server.enableAcceptance();
   const first = await openCollected(server.endpoint, DEV_ORIGIN);
   const firstAuth = await authorizeAndMux(server, first.socket, first.collector);
   const latest1 = await firstAuth.mux.conn.createSession({
@@ -1497,7 +1613,7 @@ test("再接続再承認で業務再開しlatestMailboxは維持される", asyn
 
 test("受信上限の超過はclose 1009で通知する", async () => {
   const server = await startServer({ limits: { maxWebSocketMessageBytes: 256 } });
-  server.openAcceptance();
+  server.enableAcceptance();
   const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
   const closed = collector.waitClose();
   socket.send(
@@ -1510,7 +1626,7 @@ test("受信上限の超過はclose 1009で通知する", async () => {
 
 test("latestは受信箱に最新値を残す", async () => {
   const server = await startServer();
-  server.openAcceptance();
+  server.enableAcceptance();
   const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
   const auth = await authorizeAndMux(server, socket, collector);
   const latest = await auth.mux.conn.createSession({
@@ -1530,7 +1646,7 @@ test("latestは受信箱に最新値を残す", async () => {
 
 test("同名Sessionの二重作成は拒否し既存は継続する", async () => {
   const server = await startServer();
-  server.openAcceptance();
+  server.enableAcceptance();
   const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
   const auth = await authorizeAndMux(server, socket, collector);
   await auth.mux.conn.createSession({

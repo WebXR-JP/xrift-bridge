@@ -438,7 +438,7 @@ function sleep(ms: number): Promise<void> {
 
 test("未認可の接続ではセッションが公開されない", async () => {
   const server = await startServer();
-  server.openAcceptance();
+  server.enableAcceptance();
   expect(server.listSessions()).toEqual([]);
   expect(server.getSession("session-1")).toBeUndefined();
   const { socket } = await openCollected(server.endpoint, DEV_ORIGIN);
@@ -453,7 +453,7 @@ test("未認可の接続ではセッションが公開されない", async () =>
 
 test("承認だけでは公開されず作成で開始通知と一覧が整合する", async () => {
   const server = await startServer();
-  server.openAcceptance();
+  server.enableAcceptance();
   const management = collectManagement(server);
   const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
   const auth = await authorizeAndMux(server, socket, collector);
@@ -501,7 +501,7 @@ test("承認だけでは公開されず作成で開始通知と一覧が整合�
 
 test("latestセッションも公開される", async () => {
   const server = await startServer();
-  server.openAcceptance();
+  server.enableAcceptance();
   const management = collectManagement(server);
   const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
   const auth = await authorizeAndMux(server, socket, collector);
@@ -527,7 +527,7 @@ test("latestセッションも公開される", async () => {
 
 test("購読後の取得で初期同期でき識別子で重複を除ける", async () => {
   const server = await startServer();
-  server.openAcceptance();
+  server.enableAcceptance();
   const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
   const auth = await authorizeAndMux(server, socket, collector);
   await auth.mux.conn.createSession({
@@ -556,7 +556,7 @@ test("購読後の取得で初期同期でき識別子で重複を除ける", as
 
 test("セッション終了の通知は一度だけ出す", async () => {
   const server = await startServer();
-  server.openAcceptance();
+  server.enableAcceptance();
   const management = collectManagement(server);
   const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
   const auth = await authorizeAndMux(server, socket, collector);
@@ -590,7 +590,7 @@ test("セッション終了の通知は一度だけ出す", async () => {
 
 test("終了後に同名で再作成すると別識別子になる", async () => {
   const server = await startServer();
-  server.openAcceptance();
+  server.enableAcceptance();
   const management = collectManagement(server);
   const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
   void collector;
@@ -638,7 +638,7 @@ test("終了後に同名で再作成すると別識別子になる", async () =>
 
 test("別接続の同名セッションを混同しない", async () => {
   const server = await startServer();
-  server.openAcceptance();
+  server.enableAcceptance();
   const management = collectManagement(server);
   const firstOpened = await openCollected(server.endpoint, DEV_ORIGIN);
   const firstAuth = await authorizeAndMux(server, firstOpened.socket, firstOpened.collector);
@@ -682,7 +682,7 @@ test("別接続の同名セッションを混同しない", async () => {
 
 test("対象接続の切断で全セッションが即時に失効する", async () => {
   const server = await startServer();
-  server.openAcceptance();
+  server.enableAcceptance();
   const management = collectManagement(server);
   const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
   const auth = await authorizeAndMux(server, socket, collector);
@@ -723,7 +723,7 @@ test("対象接続の切断で全セッションが即時に失効する", async
 
 test("FINだけでは終了通知を出さず全体終了で出す", async () => {
   const server = await startServer();
-  server.openAcceptance();
+  server.enableAcceptance();
   const management = collectManagement(server);
   const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
   void collector;
@@ -766,7 +766,7 @@ test("FINだけでは終了通知を出さず全体終了で出す", async () =>
 
 test("購読者の例外を隔離し通知中の切断でも順序が壊れない", async () => {
   const server = await startServer();
-  server.openAcceptance();
+  server.enableAcceptance();
   const recorded: ManagementEvent[] = [];
   // 例外を投げる購読者がいても後続へ届く。
   const unsubscribeThrower = server.onManagementEvent(() => {
@@ -818,7 +818,7 @@ test("購読者の例外を隔離し通知中の切断でも順序が壊れな�
 
 test("getSessionは生存中のみ返し終了後はundefinedになる", async () => {
   const server = await startServer();
-  server.openAcceptance();
+  server.enableAcceptance();
   const management = collectManagement(server);
   const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
   void collector;

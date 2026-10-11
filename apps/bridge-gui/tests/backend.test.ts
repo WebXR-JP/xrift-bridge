@@ -87,7 +87,6 @@ async function receivePairing(backend: GuiBackend): Promise<{
   const request = createConnectionRequest({
     endpoint: endpoint.url,
     origin: TEST_ORIGIN,
-    timeoutMs: 10_000,
   });
   void request.sessionProvider.catch(() => {});
   const pairing = await request.pairingInfo;
@@ -156,7 +155,7 @@ function wrongCodeOf(code: string): string {
 
 test("受付から承認・診断往復・切断・再接続まで通る", async () => {
   const backend = await startBackend();
-  backend.openAcceptance();
+  backend.enableAcceptance();
   expect(backend.getSnapshot().admission.accepting).toBe(true);
 
   const first = await receivePairing(backend);
@@ -166,7 +165,7 @@ test("受付から承認・診断往復・切断・再接続まで通る", async
   expect(backend.getSnapshot().sessions).toHaveLength(0);
   await expectPendingProvider({ sessionProvider: first.sessionProvider });
 
-  // 表示用の取得は承認しない。コード・整形・期限が照合に使える。
+  // 表示用の取得は承認しない。コード・整形が照合に使える。
   const shown = backend.getPairingView({ requestId: first.requestId });
   expect(shown.available).toBe(true);
   if (!shown.available) throw new Error("比較コード表示を取得できない。");
@@ -174,7 +173,7 @@ test("受付から承認・診断往復・切断・再接続まで通る", async
   expect(typeof shown.code).toBe("string");
   expect(shown.displayCode).toBe(formatPairingCode(first.code));
 
-  // 誤ったコードでは承認しない。期限・承認可否は server が決める。
+  // 誤ったコードでは承認しない。承認可否は server が決める。
   expect(
     backend.approvePairing({ requestId: first.requestId, code: wrongCodeOf(first.code) }).status,
   ).toBe("CODE_MISMATCH");
@@ -251,7 +250,7 @@ test("受付から承認・診断往復・切断・再接続まで通る", async
 
 test("未割当ての reliable にデータを送ると中断される", async () => {
   const backend = await startBackend();
-  backend.openAcceptance();
+  backend.enableAcceptance();
   const pairing = await receivePairing(backend);
   expect(backend.approvePairing({ requestId: pairing.requestId, code: pairing.code }).status).toBe(
     "APPROVED",
@@ -297,7 +296,7 @@ test("不正な引数と終了中の操作を拒否する", async () => {
   await backend.close();
   expect(backend.getSnapshot().backend).toBe("stopping");
   // 終了中は新規操作を拒否し、読み取りは続ける。
-  expect(() => backend.openAcceptance()).toThrowError(Error);
+  expect(() => backend.enableAcceptance()).toThrowError(Error);
   expect(() => backend.assignDiagnostics({ localSessionId: "無い" })).toThrowError(Error);
   expect(backend.getSnapshot().sessions).toHaveLength(0);
 });

@@ -233,7 +233,7 @@ function readPayload(value: Record<string, unknown>): unknown {
 }
 
 /**
- * 受信した生データ（文字列または未知値）を v0.3 メッセージとして検証する。
+ * 受信した生データ（文字列または未知値）を v0.4 メッセージとして検証する。
  *
  * @param raw - WebSocket 受信値。文字列は JSON として構文解析する。
  * @returns 検証済みのメッセージ。
@@ -264,17 +264,12 @@ export function parseBridgeMessage(raw: unknown): BridgeMessage {
       } satisfies PairingStartMessage;
     }
     case "pairing_pending": {
-      assertOnlyKeys(
-        value,
-        new Set(["v", "type", "requestId", "code", "expiresAt", "expiresInMs"]),
-      );
+      assertOnlyKeys(value, new Set(["v", "type", "requestId", "code"]));
       return {
         v,
         type: "pairing_pending",
         requestId: readPairingRequestId(value, "requestId"),
         code: readPairingCode(value, "code"),
-        expiresAt: readCount(value, "expiresAt"),
-        expiresInMs: readPositiveCount(value, "expiresInMs"),
       } satisfies PairingPendingMessage;
     }
     case "auth_ok": {
@@ -358,44 +353,10 @@ export function parseBridgeMessage(raw: unknown): BridgeMessage {
   }
 }
 
-/** 累積付与などの件数を 0 以上の安全な整数として読む。 */
-function readCount(value: Record<string, unknown>, field: string): number {
-  const raw: unknown = value[field];
-  if (
-    typeof raw !== "number" ||
-    !Number.isInteger(raw) ||
-    raw < 0 ||
-    raw > Number.MAX_SAFE_INTEGER
-  ) {
-    throw new ProtocolError(
-      "INVALID_MESSAGE",
-      `フィールド \`${field}\` は 0 以上の安全な整数であること。`,
-    );
-  }
-  return raw;
-}
-
-/** 残り時間などの件数を正の安全な整数として読む。 */
-function readPositiveCount(value: Record<string, unknown>, field: string): number {
-  const raw: unknown = value[field];
-  if (
-    typeof raw !== "number" ||
-    !Number.isInteger(raw) ||
-    raw <= 0 ||
-    raw > Number.MAX_SAFE_INTEGER
-  ) {
-    throw new ProtocolError(
-      "INVALID_MESSAGE",
-      `フィールド \`${field}\` は正の安全な整数であること。`,
-    );
-  }
-  return raw;
-}
-
 /**
  * 送信メッセージを wire 形式の文字列へ変換する。
  *
- * @param message - 送信する v0.3 メッセージ。
+ * @param message - 送信する v0.4 メッセージ。
  * @returns JSON 文字列。`payload` 等は JSON 値であることが前提。
  */
 export function stringifyBridgeMessage(message: BridgeMessage): string {

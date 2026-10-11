@@ -17,8 +17,6 @@ function validPairingPending(): Record<string, unknown> {
     type: "pairing_pending",
     requestId: "pair-1",
     code: "000123",
-    expiresAt: 1700000000000,
-    expiresInMs: 120000,
   };
 }
 
@@ -173,7 +171,7 @@ test("削除済み種別を未知種別として拒否する", () => {
 });
 
 test("版不一致・未知種別・JSON 異常を拒否する", () => {
-  expect(PROTOCOL_VERSION).toBe("0.3.0");
+  expect(PROTOCOL_VERSION).toBe("0.4.0");
   const cases: Array<{ raw: unknown; code: ProtocolError["code"] }> = [
     { raw: { ...validReliableData(), v: "9.9.9" }, code: "VERSION_MISMATCH" },
     // 対応版以外は版判定で拒否する。
@@ -329,17 +327,12 @@ test("pairing_pending の不正値を拒否する", () => {
     { ...validPairingPending(), code: "12345a" },
     { ...validPairingPending(), code: "１２３４５６" },
     { ...validPairingPending(), code: "" },
-    // expiresAt は 0 以上の安全な整数。
-    { ...validPairingPending(), expiresAt: undefined },
-    { ...validPairingPending(), expiresAt: -1 },
-    { ...validPairingPending(), expiresAt: 1.5 },
-    { ...validPairingPending(), expiresAt: "1700000000000" },
-    // expiresInMs は正の安全な整数。
-    { ...validPairingPending(), expiresInMs: undefined },
-    { ...validPairingPending(), expiresInMs: 0 },
-    { ...validPairingPending(), expiresInMs: -1 },
-    { ...validPairingPending(), expiresInMs: 1.5 },
-    { ...validPairingPending(), expiresInMs: "120000" },
+    // 旧期限フィールドは未知フィールドとして拒否する（pending は時間で失効しない）。
+    { ...validPairingPending(), expiresAt: 1700000000000 },
+    { ...validPairingPending(), expiresInMs: 120000 },
+    { ...validPairingPending(), expiresAt: 1700000000000, expiresInMs: 120000 },
+    // 許可キー外・未知のキーは黙って受理しない。
+    { ...validPairingPending(), unknownField: "extra" },
   ];
   for (const raw of bad) {
     const error = parseError(raw);
@@ -469,8 +462,6 @@ test("ペアリング往復が変換できる", () => {
     type: "pairing_pending",
     requestId: "pair-1",
     code: "000123",
-    expiresAt: 1700000000000,
-    expiresInMs: 120000,
   };
   expect(parseBridgeMessage(stringifyBridgeMessage(pending))).toEqual(pending);
 });

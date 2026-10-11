@@ -69,7 +69,6 @@ async function approveConnection(backend: GuiBackend): Promise<SessionProvider> 
   const request = createConnectionRequest({
     endpoint: endpoint.url,
     origin: TEST_ORIGIN,
-    timeoutMs: 10_000,
   });
   void request.sessionProvider.catch(() => {});
   const pairing = await request.pairingInfo;
@@ -137,7 +136,7 @@ function assignedLocalSessionId(backend: GuiBackend): string {
 
 test("候補が無いときはテキスト割当てを拒否する", async () => {
   const backend = await startBackend();
-  backend.openAcceptance();
+  backend.enableAcceptance();
   // セッション自体が無い場合。
   expect(() => backend.assignText()).toThrowError(RangeError);
   // テキスト表示用以外のセッションだけの場合。
@@ -150,7 +149,7 @@ test("候補が無いときはテキスト割当てを拒否する", async () =>
 
 test("候補が一件のときは割り当てて表示に反映する", async () => {
   const backend = await startBackend();
-  backend.openAcceptance();
+  backend.enableAcceptance();
   const provider = await approveConnection(backend);
   await createSessions(backend, provider, [TEXT_SESSION_ID]);
 
@@ -171,7 +170,7 @@ test("候補が一件のときは割り当てて表示に反映する", async ()
 
 test("候補が複数のときはテキスト割当てを拒否する", async () => {
   const backend = await startBackend();
-  backend.openAcceptance();
+  backend.enableAcceptance();
   // 全接続を通じて一件だけを許すため、別接続で同名を作る。
   const first = await approveConnection(backend);
   await createSessions(backend, first, [TEXT_SESSION_ID]);
@@ -187,7 +186,7 @@ test("候補が複数のときはテキスト割当てを拒否する", async ()
 
 test("正常な送信は反映確認で決着し表示が進む", async () => {
   const backend = await startBackend();
-  backend.openAcceptance();
+  backend.enableAcceptance();
   const provider = await approveConnection(backend);
   const [session] = await createSessions(backend, provider, [TEXT_SESSION_ID]);
   if (session === undefined) throw new Error("テキスト用セッションが無い。");
@@ -228,7 +227,7 @@ test("正常な送信は反映確認で決着し表示が進む", async () => {
 
 test("識別子が一致しない送信と不正な本文は拒否する", async () => {
   const backend = await startBackend();
-  backend.openAcceptance();
+  backend.enableAcceptance();
   const provider = await approveConnection(backend);
   const [session] = await createSessions(backend, provider, [TEXT_SESSION_ID]);
   if (session === undefined) throw new Error("テキスト用セッションが無い。");
@@ -272,7 +271,7 @@ test("識別子が一致しない送信と不正な本文は拒否する", async
 
 test("切断後は割当てが失効し再承認と再割当てが必要になる", async () => {
   const backend = await startBackend();
-  backend.openAcceptance();
+  backend.enableAcceptance();
   const provider = await approveConnection(backend);
   const [session] = await createSessions(backend, provider, [TEXT_SESSION_ID]);
   if (session === undefined) throw new Error("テキスト用セッションが無い。");
@@ -331,7 +330,7 @@ test("切断後は割当てが失効し再承認と再割当てが必要にな�
 
 test("明示解除は割当て表示を消して送信できなくする", async () => {
   const backend = await startBackend();
-  backend.openAcceptance();
+  backend.enableAcceptance();
   const provider = await approveConnection(backend);
   await createSessions(backend, provider, [TEXT_SESSION_ID]);
   const assignment = backend.assignText();
@@ -354,7 +353,7 @@ test("明示解除は割当て表示を消して送信できなくする", async
 
 test("診断とテキストは互いを対象外にする", async () => {
   const backend = await startBackend();
-  backend.openAcceptance();
+  backend.enableAcceptance();
   const provider = await approveConnection(backend);
   await createSessions(backend, provider, [TEXT_SESSION_ID, "other"]);
   const sessions = backend.getSnapshot().sessions;

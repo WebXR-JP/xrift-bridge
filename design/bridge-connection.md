@@ -74,7 +74,7 @@ flowchart LR
     end
     W -->|"pairing_start で開始"| P["ブリッジが比較コード発行<br/>両画面に表示"]
     P -->|"利用者がローカルで承認"| A
-    U -->|"受付の開閉・承認・拒否"| P
+    U -->|"受付の有効化・無効化・承認・拒否"| P
     A -->|"切断で認可失効、再接続は再承認"| W
 ```
 
@@ -96,7 +96,7 @@ flowchart LR
 
 - 本節は接続承認方式の設計判断と既定値を記す。形状・境界検証・数値・状態遷移の詳細は正本（`packages/bridge-protocol/src/messages.ts`・`packages/bridge-protocol/src/validate.ts`・`packages/bridge-server/src/config.ts`・`packages/bridge-server/src/pairing.ts`・`packages/bridge-server/src/server.ts`・`packages/world-client/src/client.ts`・各テスト）に置く。
 - 比較コードを発行するのはブリッジ（信頼側 PC）であり、ワールド側は生成しない。
-- 未認可の接続要求の通知は受付モードを設け、ローカルで受付を開いている間だけ通知・承認を受け付ける。
+- 未認可の接続要求の通知は受付の有効／無効の切り替えで管理し、有効な間だけ通知・承認を受け付ける。起動時は無効であり、自動で有効化・無効化しない。
 
 - **要求**: ワールド側で接続を開始し、ワールド UI と PC（ブリッジ）の両方に同じ比較コードを表示し、人間が PC 側で承認する。現状は CLI、長期的には GUI のポップアップ通知を想定する。
 - **採用方式**: ワールドから開始し、ブリッジが比較コードを発行して両画面に表示し、人間がブリッジ側で承認したその接続だけを認可する。接続前のループバック・接続先一致・`Origin` 完全一致の検証は維持する。具体的な検証内容は `packages/bridge-server/src/verify.ts` と[プロトコル](protocol.md)を正本とする。
@@ -105,15 +105,15 @@ flowchart LR
 - **設計既定値**: 下記の値は設計既定値であり、意味・単位と正本への参照が分かる形に留める。
   - **権限範囲**: 認可済み接続が行えるのは `data` の送受信である。診断の意味づけ（echo／ping 相当）は `data` の payload 内の `op` で行い、wire に業務 requestId は載せない。認可はその接続だけに属し、切断で失効し、再接続は再承認である。任意の将来コマンドやローカル操作の包括承認ではなく、権限拡張は別途判断する。
   - **比較コード**: 数字6桁（`000000`〜`999999`）である。内部は6文字の文字列として先頭ゼロを保持し、表示は `123 456` のように区切る。ブリッジが暗号学的乱数で生成する。生存中の保留要求との重複を全 `Origin` を通じて検出して再生成し、最大16回で生成できなければその要求を失敗終了する。同じ要求のコードは変更せず、再発行操作は設けない。コードとは別に、再利用しない要求 ID を設ける。
-  - **期限（二段階）**: 接続から開始メッセージまで10秒、比較コード発行から承認まで120秒である。保留の実際の絶対期限は「コード発行＋120秒」と「受付終了時刻」の早い方である。通信・一覧表示・重複開始メッセージで延長せず、開始メッセージは接続につき1回である。開始待ちと承認待ちの制限値は `packages/bridge-server/src/config.ts` の `pairingStartTimeoutMs`・`pairingApprovalTimeoutMs` を正本とする。
-  - **上限・受付レート**: 全接続数は8である。未認可接続数（開始待ち＋承認待ち）は2（全8の内数であり、認可済みを追い出さない）、同時保留数（承認待ち）は2である。`Origin` 別受付レートは直近60秒に5回、全 `Origin` 合計は直近60秒に10回である。レートは受付の開閉でリセットしない。超過は保留せず拒否し、拒否ごとの通知は出さず `status` に集計を表示する。
-  - **受付モード**: 起動時は閉である。ローカル操作で開き、120秒で自動クローズする。開いている間の再操作は期限を更新せず現在の残時間を表示する。手動／自動クローズで開始待ち・承認待ちをすべて終了する（認可済み接続には影響しない）。閉じている間の新規要求は原則 WebSocket upgrade 時に拒否し、保留・通知しない。承認成功だけでは閉じない。
-  - **CLI 操作**: `accept open`／`accept close`／`pending`／`approve <requestId> <6桁コード>`／`reject <requestId>` とする。`approve` は要求 ID と比較コードの両方を指定し、ID・コード・期限・接続の生存・受付状態を照合してその要求だけ承認する。`pending` は要求 ID・`Origin`・区切り付きコード・残時間を表示する。`status` に受付状態・終了時刻・各接続数・拒否集計を追加する。既存の `connections|list`・`disconnect`・`quit|exit` は維持する。承認操作はローカル管理境界だけに置き、ワールド向け WebSocket には公開しない。
+  - **期限なし（無期限保持）**: 開始待ち・承認待ちに時限はなく、保留は手動の承認・拒否か切断まで残る。通信・一覧表示・重複開始メッセージで状態は変わらず、開始メッセージは接続につき1回である。時計を進めても自動終了しない。
+  - **上限・受付レート**: 全接続数は8である。未認可接続数（開始待ち＋承認待ち）は2（全8の内数であり、認可済みを追い出さない）、同時保留数（承認待ち）は2である。`Origin` 別受付レートは直近60秒に5回、全 `Origin` 合計は直近60秒に10回である。レート履歴は受付の有効化・無効化でリセットしない。超過は保留せず拒否し、拒否ごとの通知は出さず `status` に集計を表示する。
+  - **受付の有効／無効**: 起動時は無効である。手動の `enable`／`disable` だけで切り替え、自動クローズ・期限・残時間表示は無い。無効化時は開始待ち・承認待ちの未認可接続をその場で終了・切断する（認可済み接続には影響しない）。再有効化しても終了済みの要求は復活しない。無効な間の新規要求は原則 WebSocket upgrade 時に拒否し、保留・通知しない。承認成功だけでは無効化しない。状態取得は `getAcceptance`（`AcceptanceInfo = { enabled: boolean }`）、切り替え時は `acceptance-changed { enabled: boolean }` を通知する（遷移時のみ）。
+  - **CLI 操作**: `accept enable`／`accept disable`／`pending`／`approve <requestId> <6桁コード>`／`reject <requestId>` とする。`approve` は要求 ID と比較コードの両方を指定し、ID・コード・接続の生存・受付状態を照合してその要求だけ承認する。`pending` は要求 ID・`Origin`・区切り付きコードを表示する（期限・残時間は出さない）。`status` に受付状態（`acceptance=enabled|disabled`）・各接続数・拒否集計を追加する。既存の `connections|list`・`disconnect`・`quit|exit` は維持する。承認操作はローカル管理境界だけに置き、ワールド向け WebSocket には公開しない。
   - **再接続**: 切断・ワールド切替・ブリッジ再起動後に認可を継承しない（再承認が必要である）。
-- **数値・正本の扱い**: 上記の期限・上限・レート・受付時間の正本は `packages/bridge-server/src/config.ts` の `DEFAULT_LIMITS` とする。コード6桁などの共有形式は `packages/bridge-protocol` の定義・検証（`PAIRING_CODE_LENGTH`・`isPairingCode`・`formatPairingCode`）を正本とし、CLI とクライアントで独自定義しない。設定検証で「保留数 ≤ 未認可数 ≤ 全接続数」等の関係を保証する。
+- **数値・正本の扱い**: 上記の上限・レート等の正本は `packages/bridge-server/src/config.ts` の `DEFAULT_LIMITS` とする。`acceptanceDurationMs`・`pairingApprovalTimeoutMs`・`pairingStartTimeoutMs` は持たない。コード6桁などの共有形式は `packages/bridge-protocol` の定義・検証（`PAIRING_CODE_LENGTH`・`isPairingCode`・`formatPairingCode`）を正本とし、CLI とクライアントで独自定義しない。設定検証で「保留数 ≤ 未認可数 ≤ 全接続数」等の関係を保証する。
 - **信頼境界の限界（重要）**: `Origin` は「そのワールド」の識別に使えない。同一文書・同一実行基盤のため隔離できないことは[信頼境界](#信頼境界)の判断を維持する。同一実行基盤の悪意あるコードは別接続を開いてコードを UI に表示し得る。コード一致は UI に表示された要求との対応確認であり、ワールドの真正性の証明ではない。よって「OTP 認証」ではなく「承認対象を人間が照合するための比較コード」である。
 - **認証前通信の原則**: 認証前はデータ・ローカル情報を送受信しない。ペアリングに限定した制御通信（`pairing_start`・`pairing_pending`・認証前エラー）を例外として明記する。
-- **DoS・通知疲労**: 接続単位の試行上限・接続数上限（具体値は `packages/bridge-server/src/config.ts` の `DEFAULT_LIMITS`・実装・テストを正本とする）だけでは不足する。`Origin` 別の受付レート、未認証接続数・保留数の別上限、保留の絶対期限、応答しない相手の有限時間での強制終了を要する。通知は受付モード中のみとする。
+- **DoS・通知疲労**: 接続単位の試行上限・接続数上限（具体値は `packages/bridge-server/src/config.ts` の `DEFAULT_LIMITS`・実装・テストを正本とする）だけでは不足する。`Origin` 別の受付レート、未認証接続数・保留数の別上限、手動切断を要する。保留に期限はなく、無期限の未認可接続が枠を占有し得るため、上限・受付レート・手動切断で管理する。レート履歴は受付の有効化・無効化でリセットしない。通知は受付有効中のみとする。
 - **本方式で採らない選択肢（参考）**:
 
   | 選択肢                                   | 今採用しない理由                                   |
@@ -122,7 +122,7 @@ flowchart LR
   | ワールド発行コードを唯一の承認キーにする | 選択値・重複・取り違えの問題がある                 |
 
 - **GUI への道筋**: ブリッジ内部に「保留一覧・状態通知・承認・拒否」の管理境界を作り、CLI と将来の GUI をその利用者にする。承認 API をワールド用 WebSocket に公開しない。通知クリックだけで自動承認しない。アプリ層の責務・割当て・GUI 境界は[ブリッジアプリ](bridge-app.md)を正本とする。
-- **パッケージ分割**: サーバーコアを Node 向けライブラリ `packages/bridge-server` として切り出し、`apps/bridge-cli` と将来の GUI は管理境界 API（`BridgeServer` の openAcceptance/listPending/approvePairing/rejectPairing/onManagementEvent/listConnections/disconnectConnection/getStats 等）の利用者にする。サーバー管理境界は生存セッションの公開（一覧・取得・イベント）を含む。詳細は[ブリッジアプリ](bridge-app.md)を正本とし、ここでは複製しない。GUI は同一プロセスで直接 import する想定である（実行基盤は[ブリッジアプリ](bridge-app.md)を正本とする）。`packages/*` から `apps/*` を参照しない。
+- **パッケージ分割**: サーバーコアを Node 向けライブラリ `packages/bridge-server` として切り出し、`apps/bridge-cli` と将来の GUI は管理境界 API（`BridgeServer` の enableAcceptance/disableAcceptance/getAcceptance/listPending/approvePairing/rejectPairing/onManagementEvent/listConnections/disconnectConnection/getStats 等）の利用者にする。サーバー管理境界は生存セッションの公開（一覧・取得・イベント）を含む。詳細は[ブリッジアプリ](bridge-app.md)を正本とし、ここでは複製しない。GUI は同一プロセスで直接 import する想定である（実行基盤は[ブリッジアプリ](bridge-app.md)を正本とする）。`packages/*` から `apps/*` を参照しない。
 
   | 選択肢                                     | 今採用しない理由                                                                              |
   | ------------------------------------------ | --------------------------------------------------------------------------------------------- |

@@ -49,7 +49,7 @@
 - 項目ごとの合否と判定観点を、版と識別子付きで残す。
 - 成功と失敗のどちらも残す。
 - 設計判断の変更が必要になった場合は観測で補完せず、設計へ戻す。
-- 残存リスク: GUI の表示層（mainview の描画・入力検証・revision 採用・残時間減算）と RPC 層は自動試験の対象外であり、backend の試験と目視・合成クリック検証に依存している。
+- 残存リスク: GUI の表示層（mainview の描画・入力検証・revision 採用）と RPC 層は自動試験の対象外であり、backend の試験と目視・合成クリック検証に依存している。
 
 ## Electrobun スパイクの記録（段5〜6・2026-10-11 実施済み）
 
@@ -195,7 +195,7 @@ Webview は起動するが窓は無い条件であり、可視時の値は未確
 
 - 環境・対象: ローカル macOS Apple Silicon、実施日 2026-10-11、対象コミット `a1ea5a8`。Electrobun 2.0.2／Bun main の開発実行である。
 - 方法: 画面操作は合成クリック（cliclick）と画面撮影（screencapture）、判定はアプリの記録で行った。ワールド側はビルド済み `world-client` を Node で駆動し、`origin` に `https://app.xrift.net` を指定した。画面の窓は (0,33)・960x832 に配置した。
-- 流れと結果: 画面で受付を開く（`acceptance_opened`）→ ワールド接続で保留を発行する（`pairing_pending`。要求識別子と照合符号はダミー記載）→ 画面の保留行に照合符号を入力して承認する（`pairing_approved`／承認の結果 `status=APPROVED`）→ ワールド側で `AUTHORIZED` と専用セッション（論理名 `diag-1`）を生成する → 画面で診断を割り当てる（`localSessionId=session-2`・`instanceId=instance-1`）→ ワールドから `{op:"ping"}` を送り `{op:"pong"}` を受けた（PONG）。
+- 流れと結果: 画面で受付を開く（`acceptance_opened`）→ ワールド接続で保留を発行する（`pairing_pending`。要求識別子と照合符号はダミー記載）→ 画面の保留行に照合符号を入力して承認する（`pairing_approved`／承認の結果 `status=APPROVED`）→ ワールド側で `AUTHORIZED` と専用セッション（論理名 `diag-1`）を生成する → 画面で診断を割り当てる（`localSessionId=session-2`・`instanceId=instance-1`）→ ワールドから `{op:"ping"}` を送り `{op:"pong"}` を受けた（PONG）。（注記：受付トグル化に伴い現行の記録名は `acceptance_enabled`）
 - 観測: ワールド駆動側は応答受信後に終了するため接続が切れ、最終表示は接続0・セッション0である。切断は想定どおりであり、再接続には再承認が要る。割当て表示は実体1・割当て0で残った。試作の `assignDiagnostics` はセッション終了時に個体を回収しておらず、固定文側は回収済みである。
 - 未確認・対象外: 実ホスト・実閲覧器での目視、可視窓条件での記憶域の再測定、文面送信用画面の往復は扱わない（続く段で対応）。
 - 操作環境の備考: 合成クリックと画面収録には、起動元バイナリへの macOS のアクセシビリティと画面収録の許可が要った。`hutch electrobun run` 単体は既存の開発束を使い回すため、源泉変更後は開発ビルド（`gui:run` か `gui:build:dev`）が要る。
@@ -207,10 +207,10 @@ MVP第1段（セッション公開＋診断移設）の実施結果を記録す�
 - 環境・対象: ローカル macOS Apple Silicon、対象コミット `a0faaa6`。
 - ビルド: `vp run -r build` 成功。
 - テスト・型検査: `vp test`（ルート）で 291 合格／31 ファイル。`vp run -r test:types` で 4 パッケージ成功。
-- 統合スモーク（3/3 回・各 15 項目 PASS）: ビルド済み `apps/bridge-cli` を実プロセス起動 × `packages/world-client` を Node の `origin` 指定で実行し、実 WebSocket・yamux で往復した。流れは `accept open` → ワールド起点 `pairing_start` → 比較コード受信 → CLI 標準入力で `approve <requestId> <code>` → `auth_ok` → reliable Session 生成 → `{op:"echo"}` の同形返送と `{op:"ping"}` → `{op:"pong"}` → CLI `status` に `diagnosticEcho`・`diagnosticPing` が反映 → 切断で認可済み接続が消える → 再接続で新しい要求 ID・新しい比較コードと再承認が必要（承認前に `sessionProvider` は未解決＝認可を継承しない）。
+- 統合スモーク（3/3 回・各 15 項目 PASS）: ビルド済み `apps/bridge-cli` を実プロセス起動 × `packages/world-client` を Node の `origin` 指定で実行し、実 WebSocket・yamux で往復した。流れは `accept open` → ワールド起点 `pairing_start` → 比較コード受信 → CLI 標準入力で `approve <requestId> <code>` → `auth_ok` → reliable Session 生成 → `{op:"echo"}` の同形返送と `{op:"ping"}` → `{op:"pong"}` → CLI `status` に `diagnosticEcho`・`diagnosticPing` が反映 → 切断で認可済み接続が消える → 再接続で新しい要求 ID・新しい比較コードと再承認が必要（承認前に `sessionProvider` は未解決＝認可を継承しない）。（注記：受付トグル化に伴い現行の対話命令は `accept enable`／`accept disable`）
 - 応答の出所: echo／ping 応答を生成するのは `packages/bridge-app-core/src/plugins/diagnostic.ts` のみであり、`packages/bridge-server/src` に診断参照は無い（`diagnostic-handler.ts` は削除済み）。`status` の診断項目は `server.getStats()` ではなく CLI の `startDiagnostics()` 由来である。
 - 契約の実測: `getStats()` のキーから診断項目が消えていること、reliable Session にサーバ側の既定応答が無いこと、認可前・切替中はセッションが公開されないこと、session 終了で一覧・取得から外れ終了通知が一度だけであることを確認した。
-- 制限・未再現（失敗側の記録）: `packages/bridge-server/tests/server.test.ts` の「受付の自動クローズでも開始待ちは失効する」（実タイマー系）が負荷時に間欠失敗するとの報告があったが、41 回の再現試行で未再現であり、本変更の経路（セッション公開・診断・管理購読）と非交差と確認した。解消の主張はしない。
+- 制限・未再現（失敗側の記録）: `packages/bridge-server/tests/server.test.ts` の「受付の自動クローズでも開始待ちは失効する」（実タイマー系）が負荷時に間欠失敗するとの報告があったが、41 回の再現試行で未再現であり、本変更の経路（セッション公開・診断・管理購読）と非交差と確認した。解消の主張はしない。（注記：当該テストは受付トグル化に伴い撤去済み）
 - 未計測（第1段の対象外）: `apps/bridge-gui`（Electrobun）そのもの、実 GUI→実ワールドの往復、native↔webview の RPC、埋込み UI、パッケージング／配布サイズ・常駐メモリは未計測である。`design/bridge-app.md`「基盤の観測」の該当項目は未計測である。
 
 ## GUI 自動検証（段5: 固定文面の送信往復）

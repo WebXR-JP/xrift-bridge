@@ -107,8 +107,8 @@ export function createManagementRpc(
             pluginMountFailures: pluginUi.listPluginUiFailures(),
           };
         },
-        openAcceptance: () => backend.openAcceptance(),
-        closeAcceptance: () => backend.closeAcceptance(),
+        enableAcceptance: () => backend.enableAcceptance(),
+        disableAcceptance: () => backend.disableAcceptance(),
         getPairingView: ({ requestId }) => backend.getPairingView({ requestId }),
         approvePairing: ({ requestId, code }) => backend.approvePairing({ requestId, code }),
         rejectPairing: ({ requestId }) => backend.rejectPairing({ requestId }),

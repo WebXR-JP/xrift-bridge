@@ -1,17 +1,14 @@
 /**
- * 比較コード方式の保留管理・受付モード・受付レート。
+ * 比較コード方式の保留管理・受付トグル・受付レート。
  *
  * ブリッジ（信頼側 PC）が比較コードを発行し、ワールド画面と PC の両方に
  * 表示して人間が照合する。コード一致は UI に表示された要求との対応確認で
  * あり、ワールドの真正性の証明ではない（「OTP 認証」ではない）。
  * 詳しい設計判断は `design/bridge-connection.md` の候補節を見る。
  *
- * 期限の実判定は単調時計で行い、`expiresAt`（壁時計）は表示用に留める。
- * 壁時計の変更や遅延タイマーで期限が延びないよう、すべての入口
- * （`create`・`get`・`list`・`approve`・`reject`・`remove`・`sweep`・`size`と
- * 受付の `open`・`get`・`isOpen`・`snapshot`）で期限を再判定する。タイマーは掃除の
- * きっかけに過ぎない。受付クローズは世代で不可逆に失効させ、開き直しても
- * 旧世代は復活しない。
+ * 受付は有効/無効の2状態のトグルであり、時間での自動失効を持たない。
+ * 保留中の要求も時間で失効せず、手動の承認/拒否か切断、または受付の無効化
+ * まで生存する。無効化で終わった要求は、再有効化しても復活しない。
  *
  * 比較コードの扱い: この記録器自体はコードを保持するが、構造化ログ・URL・
  * 永続保存に出す経路は作らない。呼び出し側（サーバ・CLI）もコードを
@@ -47,129 +44,72 @@ export function generatePairingCode(): PairingCode {
 }
 
 /**
- * 受付の開閉状態。
+ * 受付の公開状態。有効/無効の2状態だけを持ち、残時間・終了時刻は持たない。
  */
-export type AcceptanceState = "open" | "closed";
-
-/**
- * 受付の世代つきスナップショット。`create` が単調期限・表示期限・世代を
- * 一括で取得するための原子的な読み取りである。
- */
-export interface AcceptanceSnapshot {
-  /** `open()` のたびに加算される世代。閉じても戻らない。 */
-  readonly generation: number;
-  /** 受付終了（単調時計）。期限の正本。 */
-  readonly monotonicDeadline: number;
-  /** 受付終了（壁時計ミリ秒・表示用）。 */
-  readonly wallDeadline: number;
+export interface AcceptanceInfo {
+  /** 受付が有効であれば真。 */
+  readonly enabled: boolean;
 }
 
 /**
- * 受付の公開状態。終了時刻は表示用、残時間は単調時計で算出する。
- */
-export interface AcceptanceStatus {
-  /** 受付が開いていれば `open`、閉じていれば `closed`。 */
-  readonly state: AcceptanceState;
-  /** 受付終了時刻（壁時計ミリ秒・表示用）。閉じていれば `null`。 */
-  readonly endsAt: number | null;
-  /** 受付の残時間（ミリ秒・単調時計で算出）。開いていれば正の整数（切り上げ）、閉じていれば `0`。 */
-  readonly remainingMs: number;
-}
-
-/**
- * 受付操作の条件。
- */
-export interface AcceptanceControllerOptions {
-  /** 検証済みの制限値（`resolveLimits` 済み）。`acceptanceDurationMs` を使う。 */
-  readonly limits: BridgeLimits;
-  /** 時刻の取得口。省略時は既定時計を使う。 */
-  readonly clock?: Clock;
-}
-
-/**
- * ペアリング要求の受付モード。
+ * ペアリング要求の受付トグル。
  *
- * 起動時は閉であり、ローカル操作で開くと `acceptanceDurationMs` で自動クローズ
- * する。開いている間の再操作は期限を更新せず現状を返す。`open()` のたびに
- * 新しい受付世代を開始する。
+ * 起動時は無効であり、ローカル操作で有効/無効を切り替える。タイマーを持たず、
+ * 時間経過では状態も保留も変わらない。再操作は冪等であり、状態が変わらない
+ * 場合は世代も通知も動かさない。有効化のたびに新しい受付世代を開始する
+ * （世代 ID を加算する）。
  *
- * 手動 `close()`・自動タイマー・入口で検出した期限切れのいずれでも、当該世代の
- * 保留は不可逆に失効する（論理的な終了は `close()` が戻るまでに成立させる。
- * 物理切断・WebSocket 操作はこのモジュールでは行わず、サーバ側の drain が担う）。
- * 開閉でレート履歴と要求 ID 採番は初期化しない。終了対象の保留を生存させる
- * 意味ではない。
+ * 無効化では当該世代の保留を不可逆に失効させる（論理的な終了は `disable()` が
+ * 戻るまでに成立させる。物理切断・WebSocket 操作はこのモジュールでは行わず、
+ * サーバ側の drain が担う）。開閉でレート履歴と要求 ID 採番は初期化しない。
+ * 終了対象の保留を生存させる意味ではない。
  */
 export class AcceptanceController {
-  private readonly limits: BridgeLimits;
-  private readonly clock: Clock;
-  private openFlag = false;
-  private deadlineMono: number | null = null;
-  private endWall: number | null = null;
-  private timer: ReturnType<typeof setTimeout> | null = null;
+  private enabledFlag = false;
   private generation = 0;
   private readonly closeListeners = new Set<() => void>();
 
   /**
-   * @param options - 制限値と時刻の取得口。
-   */
-  constructor(options: AcceptanceControllerOptions) {
-    this.limits = options.limits;
-    this.clock = options.clock ?? systemClock;
-  }
-
-  /**
-   * 受付を開く。既に開いていれば期限を更新せず現状を返す。
+   * 受付を有効にする。既に有効であれば何も変えず現状を返す。
    *
-   * 閉じていた場合は新しい世代を開始する（世代 ID を加算する）。
+   * 無効から有効への遷移時のみ新しい世代を開始する（世代 ID を加算する）。
    *
-   * @returns 開いた後（または既に開いていた場合）の状態。
+   * @returns 有効化後（または既に有効だった場合）の状態。
    */
-  open(): AcceptanceStatus {
-    this.refresh();
-    if (this.openFlag) {
-      // 再操作で延長しない。
-      return this.status();
+  enable(): AcceptanceInfo {
+    if (this.enabledFlag) {
+      return { enabled: true };
     }
-    const monotonicNow = this.clock.monotonic();
-    const wallNow = this.clock.now();
     this.generation += 1;
-    this.openFlag = true;
-    this.deadlineMono = monotonicNow + this.limits.acceptanceDurationMs;
-    this.endWall = wallNow + this.limits.acceptanceDurationMs;
-    this.armTimer();
-    return this.status();
+    this.enabledFlag = true;
+    return { enabled: true };
   }
 
   /**
-   * 受付を閉じる。当該世代の保留は不可逆に失効する。
+   * 受付を無効にする。当該世代の保留は不可逆に失効する。
    *
    * 論理的な終了はこの呼び出しが戻るまでに成立させる（登録済みの
    * `onClose` 通知を同期的に送出する）。物理切断は待たないし行わない。
-   * レート履歴と要求 ID 採番は初期化しない。
+   * 既に無効であれば通知を送らず現状を返す。レート履歴と要求 ID 採番は
+   * 初期化しない。
    *
-   * @returns 閉じた後の状態。
+   * @returns 無効化後の状態。
    */
-  close(): AcceptanceStatus {
-    this.disarm();
-    if (this.openFlag) {
-      this.openFlag = false;
-      this.deadlineMono = null;
-      this.endWall = null;
+  disable(): AcceptanceInfo {
+    if (this.enabledFlag) {
+      this.enabledFlag = false;
       this.notifyClosed();
-    } else {
-      this.deadlineMono = null;
-      this.endWall = null;
     }
-    return this.status();
+    return { enabled: false };
   }
 
   /**
-   * 受付クローズの通知を受け取る。WebSocket 操作を持たせないこと。
+   * 受付無効化の通知を受け取る。WebSocket 操作を持たせないこと。
    *
-   * 通知は手動 `close()`・自動タイマー・入口で検出した期限切れのいずれでも
-   * 同期的に送出する。失効の成立のみを保証し、物理切断の drain はサーバが担う。
+   * 通知は有効から無効への遷移時にだけ同期的に送出する。失効の成立のみを
+   * 保証し、物理切断の drain はサーバが担う。
    *
-   * @param listener - 閉遷移時に同期的に呼ぶ処理。例外を投げないこと。
+   * @param listener - 無効遷移時に同期的に呼ぶ処理。例外を投げないこと。
    * @returns 登録解除関数。
    */
   onClose(listener: () => void): () => void {
@@ -180,119 +120,40 @@ export class AcceptanceController {
   }
 
   /**
-   * 現在の受付世代。`open()` のたびに加算され、閉じても戻らない。
-   *
-   * 遅延タイマーに依らず単調時計で再判定してから返す。
-   *
-   * @returns 受付世代（未開なら `0`）。
-   */
-  getGeneration(): number {
-    this.refresh();
-    return this.generation;
-  }
-
-  /**
-   * 単調期限・表示期限・世代を一つのスナップショットとして取得する。
-   *
-   * 遅延タイマーに依らず単調時計で再判定してから読み取る。閉じていれば
-   * `null` を返し、`null` 期限のフォールバック（発行＋既定秒など）は行わない。
-   *
-   * @returns 開いていれば世代つき期限、閉じていれば `null`。
-   */
-  snapshot(): AcceptanceSnapshot | null {
-    this.refresh();
-    if (!this.openFlag || this.deadlineMono === null || this.endWall === null) {
-      return null;
-    }
-    return {
-      generation: this.generation,
-      monotonicDeadline: this.deadlineMono,
-      wallDeadline: this.endWall,
-    };
-  }
-
-  /**
-   * 現在の受付状態。遅延タイマーに依らず単調時計で再判定する。
+   * 現在の受付状態。
    *
    * @returns 現在の状態。
    */
-  get(): AcceptanceStatus {
-    this.refresh();
-    return this.status();
+  get(): AcceptanceInfo {
+    return { enabled: this.enabledFlag };
   }
 
   /**
-   * 受付が開いているか。遅延タイマーに依らず単調時計で再判定する。
+   * 受付が有効か。
    *
-   * @returns 開いていれば真。
+   * @returns 有効であれば真。
    */
-  isOpen(): boolean {
-    this.refresh();
-    return this.openFlag;
+  isEnabled(): boolean {
+    return this.enabledFlag;
   }
 
   /**
-   * 保留期限の算出に使う受付終了（単調時計）。閉じていれば `null`。
+   * 有効時の受付世代を原子的に取得する。
    *
-   * @returns 受付終了の単調時刻、または `null`。
-   */
-  getMonotonicDeadline(): number | null {
-    this.refresh();
-    return this.openFlag ? this.deadlineMono : null;
-  }
-
-  /**
-   * 保留期限の表示に使う受付終了（壁時計）。閉じていれば `null`。
+   * `create` が開始時と登録直前の世代一致を確認するための内部読み取りであり、
+   * 公開 API には世代を出さない。無効であれば `null` を返す。
    *
-   * @returns 受付終了の壁時計、または `null`。
+   * @returns 有効であれば世代、無効であれば `null`。
    */
-  getWallDeadline(): number | null {
-    this.refresh();
-    return this.openFlag ? this.endWall : null;
-  }
-
-  /**
-   * 自動クローズのタイマーを仕掛ける。期限の正本は単調時計の再判定であり、
-   * タイマーは掃除のきっかけに過ぎない。
-   */
-  private armTimer(): void {
-    this.disarm();
-    this.timer = setTimeout(() => {
-      this.timer = null;
-      this.refresh();
-    }, this.limits.acceptanceDurationMs);
-    // ADR: 長い受付時間が試験や待機の終了を妨げないよう、タイマーで
-    // イベントループを保持しない。期限の正本は `refresh` の再判定である。
-    this.timer.unref?.();
-  }
-
-  private disarm(): void {
-    if (this.timer !== null) {
-      clearTimeout(this.timer);
-      this.timer = null;
+  snapshot(): { readonly generation: number } | null {
+    if (!this.enabledFlag) {
+      return null;
     }
+    return { generation: this.generation };
   }
 
   /**
-   * 期限を再判定する。遅延タイマーや時計変更で延長されない。
-   *
-   * 開から閉への遷移を検出したら `onClose` 通知を同期的に送出する。
-   */
-  private refresh(): void {
-    if (!this.openFlag || this.deadlineMono === null) {
-      return;
-    }
-    if (this.clock.monotonic() >= this.deadlineMono) {
-      this.disarm();
-      this.openFlag = false;
-      this.deadlineMono = null;
-      this.endWall = null;
-      this.notifyClosed();
-    }
-  }
-
-  /**
-   * 閉遷移の通知を同期的に送出する。失効の成立のみを保証し、
+   * 無効遷移の通知を同期的に送出する。失効の成立のみを保証し、
    * WebSocket 操作は行わない。
    */
   private notifyClosed(): void {
@@ -300,32 +161,6 @@ export class AcceptanceController {
       listener();
     }
   }
-
-  private status(): AcceptanceStatus {
-    if (!this.openFlag || this.deadlineMono === null || this.endWall === null) {
-      return { state: "closed", endsAt: null, remainingMs: 0 };
-    }
-    return {
-      state: "open",
-      endsAt: this.endWall,
-      remainingMs: toDisplayMs(this.deadlineMono - this.clock.monotonic()),
-    };
-  }
-}
-
-/**
- * 表示・wire 用の残時間を正の整数ミリ秒に丸める。
- *
- * 単調時計（`performance.now()` など）は小数を返す場合があり、差分も小数に
- * なる。wire の `pairing_pending.expiresInMs` は正の安全な整数が契約のため、
- * 切り上げて整数化する。切り捨てでは 1ms 未満の残りが 0 になる。
- * 実失効判定（`now >= deadline`）には使わず、表示用のみである。
- *
- * @param rawMs - 単調時計の差分（ミリ秒）。
- * @returns `Math.ceil` した 1 以上の整数。
- */
-function toDisplayMs(rawMs: number): number {
-  return Math.max(1, Math.ceil(rawMs));
 }
 
 /**
@@ -355,7 +190,7 @@ export interface PairingRateLimiterOptions {
  * `Origin` 別の上限と全体の上限を、直近 `pairingRateWindowMs`
  *（`(now-window, now]`）で独立に判定する。判定と記録は一体であり、許可した
  * 試行だけを履歴に残す。拒否した試行は履歴に追加しない（拒否の連打で履歴が
- * 無限に育たない）。受付の開閉でリセットしない。
+ * 無限に育たない）。受付の有効/無効の切替でリセットしない。
  *
  * 計数単位は、接続前検証を通り受付中に届いた upgrade 試行であり、サーバ側が
  * その前提で呼ぶこと。窓の判定には単調時計を使う。
@@ -445,7 +280,7 @@ export class PairingRateLimiter {
  * 保留中のペアリング要求の公開内容。
  *
  * 比較コードを含む。呼び出し側はログ・URL・永続保存に出さず、両画面への
- * 表示と照合にだけ使うこと。
+ * 表示と照合にだけ使うこと。時間での失効を持たない。
  */
 export interface PendingPairing {
   /** 再利用しないペアリング要求の識別子。 */
@@ -458,12 +293,6 @@ export interface PendingPairing {
   readonly code: PairingCode;
   /** 発行時刻（壁時計ミリ秒・表示用）。 */
   readonly issuedAt: number;
-  /** 承認期限（壁時計ミリ秒・表示用）。 */
-  readonly expiresAt: number;
-  /** 承認期限（単調時計）。`now >= deadline` は失効。 */
-  readonly monotonicDeadline: number;
-  /** 承認までの残時間（ミリ秒・読取時点の単調時計で算出。正の整数に切り上げ）。 */
-  readonly remainingMs: number;
 }
 
 /**
@@ -476,18 +305,14 @@ export type PairingCreateResult =
       readonly requestId: PairingRequestId;
       /** 両画面に表示する比較コード。 */
       readonly code: PairingCode;
-      /** 承認期限（壁時計ミリ秒・表示用）。 */
-      readonly expiresAt: number;
-      /** 承認までの残時間（ミリ秒。正の整数に切り上げ）。 */
-      readonly expiresInMs: number;
     }
   | {
       readonly status: "ALREADY_PENDING";
-      /** 既存の保留の要求識別子（期限の延長はしない）。 */
+      /** 既存の保留の要求識別子。 */
       readonly requestId: PairingRequestId;
     }
   | {
-      /** 受付が閉じている・保留枠が満杯・コード生成に失敗した。 */
+      /** 受付が無効・保留枠が満杯・コード生成に失敗した。 */
       readonly status: "ACCEPTANCE_CLOSED" | "PENDING_FULL" | "CODE_GENERATION_FAILED";
     };
 
@@ -505,8 +330,6 @@ export type PairingApproveResult =
   | {
       readonly status:
         | "NOT_PENDING"
-        | "ACCEPTANCE_CLOSED"
-        | "PAIRING_EXPIRED"
         | "INVALID_CODE"
         | "CODE_MISMATCH"
         | "CONNECTION_GONE"
@@ -528,7 +351,7 @@ export interface PairingStoreOptions {
   readonly limits: BridgeLimits;
   /** 時刻の取得口。省略時は既定時計を使う。 */
   readonly clock?: Clock;
-  /** 受付モード。サーバ・CLI と共有すること。 */
+  /** 受付トグル。サーバ・CLI と共有すること。 */
   readonly acceptance: AcceptanceController;
   /**
    * 接続の生存確認。省略時は常に生存扱い。
@@ -553,9 +376,7 @@ interface PairingEntry {
   readonly origin: string;
   readonly code: PairingCode;
   readonly issuedAt: number;
-  readonly expiresAt: number;
-  readonly monotonicDeadline: number;
-  /** 作成時の受付世代。世代が変わるか受付が閉じると失効する。 */
+  /** 作成時の受付世代。世代が変わるか受付が無効になると失効する。 */
   readonly generation: number;
 }
 
@@ -563,15 +384,15 @@ interface PairingEntry {
  * ペアリング要求の保留管理。
  *
  * 要求 ID は起動インスタンス ID＋単調カウンタで払い出し、削除後も再利用
- * しない（開閉で採番は初期化しない）。比較コードは暗号学的乱数で生成し、
+ * しない（切替で採番は初期化しない）。比較コードは暗号学的乱数で生成し、
  * 全 `Origin` の生存保留と重複検査して再生成し、上限回数で得られなければ
  * エントリを残さず失敗する。承認は一度だけ成功し、すべての確認を同期的に
  * 行う（途中で `await` しない）。
  *
- * 各エントリは作成時の受付世代を記録する。受付が閉じる（手動・自動・期限切れ
- * 検出）と当該世代の保留は不可逆に失効・除去され、開き直しても復活しない。
- * 論理的な終了は受付の `onClose` 通知で同期的に成立させる。WebSocket 操作は
- * 持たせない（物理切断の drain はサーバが担う）。
+ * 各エントリは作成時の受付世代を記録する。受付の無効化で当該世代の保留は
+ * 不可逆に失効・除去され、再有効化しても復活しない。論理的な終了は受付の
+ * `onClose` 通知で同期的に成立させる。WebSocket 操作は持たせない
+ * （物理切断の drain はサーバが担う）。時間での失効は持たない。
  */
 export class PairingStore {
   private readonly limits: BridgeLimits;
@@ -596,7 +417,7 @@ export class PairingStore {
     // カウンタで同一起動内の再利用を防ぎ、乱数で起動間の衝突を防ぐ。
     // `randomUUID` は要求 ID の書式（`[A-Za-z0-9._-]`）に収まる。
     this.instanceId = randomUUID();
-    // 受付クローズの論理的終了を同期的に成立させる。WebSocket 操作は行わない。
+    // 受付無効化の論理的終了を同期的に成立させる。WebSocket 操作は行わない。
     this.acceptance.onClose(() => {
       this.entries.clear();
     });
@@ -605,13 +426,12 @@ export class PairingStore {
   /**
    * 保留を作成する。
    *
-   * 同一接続の生存保留があれば新規作成せず `ALREADY_PENDING` を返し、期限の
-   * 延長はしない。受付が閉じている・保留枠が満杯・コード生成に失敗した場合は
-   * エントリを残さず失敗する。
+   * 同一接続の生存保留があれば新規作成せず `ALREADY_PENDING` を返す。
+   * 受付が無効・保留枠が満杯・コード生成に失敗した場合はエントリを残さず
+   * 失敗する。時間での失効を持たない。
    *
-   * 単調期限・表示期限・世代は一つのスナップショットとして取得し、登録時にも
-   * 同じ世代が有効なことを確認する。閉状態の `null` 期限を発行＋既定秒へ
-   * フォールバックしない。実失効判定は単調時計を正本とする。
+   * 受付世代は開始時と登録直前に確認し、コード生成中に無効化→再有効化が
+   * 起きても旧世代としては登録しない（不正な作成を防ぐ）。
    *
    * @param connectionId - 要求元の接続識別子。
    * @param origin - 要求元の `Origin`。
@@ -619,7 +439,6 @@ export class PairingStore {
    */
   create(connectionId: string, origin: string): PairingCreateResult {
     const first = this.acceptance.snapshot();
-    this.purgeWith(first, this.clock.monotonic());
     if (first === null) {
       return { status: "ACCEPTANCE_CLOSED" };
     }
@@ -648,26 +467,13 @@ export class PairingStore {
     if (code === null) {
       return { status: "CODE_GENERATION_FAILED" };
     }
-    // コード生成中に受付が閉じる・世代が変わる場合があるため、発行時刻と
-    // 受付スナップショットを取り直して同じ世代の有効性を確認する。
-    const issuedMono = this.clock.monotonic();
-    const issuedWall = this.clock.now();
+    // コード生成中に受付が無効化→再有効化する場合があるため、受付世代を
+    // 取り直して同じ世代の有効性を確認する。世代が変わっていれば登録しない。
     const second = this.acceptance.snapshot();
     if (second === null || second.generation !== first.generation) {
       return { status: "ACCEPTANCE_CLOSED" };
     }
-    const monotonicDeadline = Math.min(
-      issuedMono + this.limits.pairingApprovalTimeoutMs,
-      second.monotonicDeadline,
-    );
-    if (monotonicDeadline <= issuedMono) {
-      // 受付終了が実質的に到来している。期限切れの保留は作らない。
-      return { status: "ACCEPTANCE_CLOSED" };
-    }
-    const expiresAt = Math.min(
-      issuedWall + this.limits.pairingApprovalTimeoutMs,
-      second.wallDeadline,
-    );
+    const issuedWall = this.clock.now();
     this.nextSequence += 1;
     const requestId: PairingRequestId = `pairing-${this.instanceId}-${this.nextSequence}`;
     this.entries.set(requestId, {
@@ -676,51 +482,36 @@ export class PairingStore {
       origin,
       code,
       issuedAt: issuedWall,
-      expiresAt,
-      monotonicDeadline,
       generation: second.generation,
     });
     return {
       status: "CREATED",
       requestId,
       code,
-      expiresAt,
-      expiresInMs: toDisplayMs(monotonicDeadline - issuedMono),
     };
   }
 
   /**
-   * 保留を承認する。受付の開放・期限内・ID 一致・コード一致・接続生存の
-   * すべてを確認して一度だけ成功する（原子性。途中で `await` しない）。
+   * 保留を承認する。ID 一致・コード一致・接続生存のすべてを確認して
+   * 一度だけ成功する（原子性。途中で `await` しない）。
    *
-   * 閉じた世代の要求は `NOT_PENDING` とし、開き直しても復活しない。生存判定が
-   * 例外を投げた場合は承認せず、対象要求を内部エラーとして終了する
-   * （`CONNECTION_CHECK_ERROR`。生存不明を `CONNECTION_GONE` と断定しない）。
+   * 無効化で失効した世代の要求は `NOT_PENDING` とし、再有効化しても復活
+   * しない。生存判定が例外を投げた場合は承認せず、対象要求を内部エラー
+   * として終了する（`CONNECTION_CHECK_ERROR`。生存不明を `CONNECTION_GONE`
+   * と断定しない）。
+   *
+   * 生存確認の後に、対象が同じ保留として残っていることを再確認してから
+   * 承認する（確認中の切断・無効化で不正承認を成立させない）。コード不一致
+   * では保留を残す。
    *
    * @param requestId - 承認する要求の識別子。
    * @param code - 照合する比較コード。
    * @returns 承認結果。
    */
   approve(requestId: string, code: string): PairingApproveResult {
-    // ADR: 一括掃除を先に行うと対象の期限切れが `NOT_PENDING` に化けるため、
-    // 対象エントリの失効はここで明示的に判定する。閉世代の対象は `NOT_PENDING`
-    // とし、開き直しても復活させない。
     const entry = this.entries.get(requestId);
-    const snapshot = this.acceptance.snapshot();
-    const now = this.clock.monotonic();
     if (entry === undefined) {
-      this.purgeWith(snapshot, now);
       return { status: "NOT_PENDING" };
-    }
-    if (snapshot === null || entry.generation !== snapshot.generation) {
-      // 受付クローズで失効した世代は不可逆に除去する。
-      this.entries.delete(entry.requestId);
-      this.purgeWith(snapshot, now);
-      return { status: "NOT_PENDING" };
-    }
-    if (now >= entry.monotonicDeadline) {
-      this.entries.delete(entry.requestId);
-      return { status: "PAIRING_EXPIRED" };
     }
     if (!isPairingCode(code)) {
       return { status: "INVALID_CODE" };
@@ -741,18 +532,23 @@ export class PairingStore {
       this.entries.delete(entry.requestId);
       return { status: "CONNECTION_GONE" };
     }
+    // ADR: 生存確認の実行中に切断・無効化が割り込むと、確認結果が古くなる。
+    // 同期呼び出しでも確認口の再入で除去されうるため、同じ保留が残って
+    // いることを再確認してから承認し、不正承認を成立させない。
+    if (this.entries.get(requestId) !== entry) {
+      return { status: "NOT_PENDING" };
+    }
     this.entries.delete(entry.requestId);
     return { status: "APPROVED", connectionId: entry.connectionId, origin: entry.origin };
   }
 
   /**
-   * 保留を拒否する。期限切れ・失効世代・未知の要求は `NOT_PENDING` とする。
+   * 保留を拒否する。未知の要求は `NOT_PENDING` とする。
    *
    * @param requestId - 拒否する要求の識別子。
    * @returns 拒否結果。
    */
   reject(requestId: string): PairingRejectResult {
-    this.sweep();
     const entry = this.entries.get(requestId);
     if (entry === undefined) {
       return { status: "NOT_PENDING" };
@@ -762,26 +558,22 @@ export class PairingStore {
   }
 
   /**
-   * 保留を取り除く（接続切断時などの内部掃除用）。期限切れも含めて取り除く。
-   *
-   * 失効世代の掃除を先に行うため、既に失効した要求は `false` を返す。
+   * 保留を取り除く（接続切断時などの内部掃除用）。
    *
    * @param requestId - 取り除く要求の識別子。
    * @returns 取り除いた場合に真。
    */
   remove(requestId: string): boolean {
-    this.sweep();
     return this.entries.delete(requestId);
   }
 
   /**
-   * 保留を取得する。期限切れ・失効世代は取り除き `undefined` を返す。
+   * 保留を取得する。
    *
    * @param requestId - 取得する要求の識別子。
    * @returns 生存中の保留、または `undefined`。
    */
   get(requestId: string): PendingPairing | undefined {
-    this.sweep();
     const entry = this.entries.get(requestId);
     if (entry === undefined) {
       return undefined;
@@ -790,58 +582,21 @@ export class PairingStore {
   }
 
   /**
-   * 生存中の保留の一覧。期限切れ・失効世代は取り除く。
+   * 生存中の保留の一覧。
    *
    * @returns 生存中の保留。
    */
   list(): PendingPairing[] {
-    this.sweep();
     return [...this.entries.values()].map((entry) => this.toPublic(entry));
   }
 
   /**
-   * 生存中の保留数。期限切れ・失効世代は取り除いてから数える。
+   * 生存中の保留数。
    *
    * @returns 生存中の保留数。
    */
   size(): number {
-    this.sweep();
     return this.entries.size;
-  }
-
-  /**
-   * 期限切れ・失効世代の保留を掃除する。
-   *
-   * 受付が閉じていれば全エントリを除去し、開いていれば現世代以外の
-   * エントリと期限切れを除去する。開き直しても旧世代は復活しない。
-   *
-   * @returns 取り除いた件数。
-   */
-  sweep(): number {
-    return this.purgeWith(this.acceptance.snapshot(), this.clock.monotonic());
-  }
-
-  /**
-   * スナップショットに基づき失効世代・期限切れを除去する。
-   *
-   * @param snapshot - 受付の原子スナップショット。閉じていれば `null`。
-   * @param now - 除去判定に使う単調時刻。
-   * @returns 取り除いた件数。
-   */
-  private purgeWith(snapshot: AcceptanceSnapshot | null, now: number): number {
-    let removed = 0;
-    for (const [requestId, entry] of this.entries) {
-      if (snapshot === null || entry.generation !== snapshot.generation) {
-        this.entries.delete(requestId);
-        removed += 1;
-        continue;
-      }
-      if (now >= entry.monotonicDeadline) {
-        this.entries.delete(requestId);
-        removed += 1;
-      }
-    }
-    return removed;
   }
 
   private toPublic(entry: PairingEntry): PendingPairing {
@@ -851,9 +606,6 @@ export class PairingStore {
       origin: entry.origin,
       code: entry.code,
       issuedAt: entry.issuedAt,
-      expiresAt: entry.expiresAt,
-      monotonicDeadline: entry.monotonicDeadline,
-      remainingMs: toDisplayMs(entry.monotonicDeadline - this.clock.monotonic()),
     };
   }
 }

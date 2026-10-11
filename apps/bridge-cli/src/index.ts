@@ -2,7 +2,7 @@
  * PC上で動作する中継アプリの起動点。
  *
  * `127.0.0.1` に明示 bind する WebSocket サーバを起動し、標準入力の対話命令で
- * ペアリング受付の開閉・保留一覧・承認/拒否・状態表示・接続管理を行う。
+ * ペアリング受付の有効化・無効化・保留一覧・承認/拒否・状態表示・接続管理を行う。
  * 診断ログは標準エラー、利用者への表示は標準出力に出す。
  * 比較コードは `pending` の明示表示にだけ出し、ログ・URL・永続保存には出さない。
  *
@@ -57,7 +57,7 @@ export function parseArgs(argv: readonly string[]): CliOptions {
       process.stdout.write(
         "使い方: bridge-cli [--port N] [--dev] [--origin ORIGIN]...\n" +
           "  --origin は --dev 指定時のみ受け付ける。\n" +
-          "対話命令: accept open / accept close / pending / approve <requestId> <code> / reject <requestId> / status / connections / disconnect <connectionId> / quit\n",
+          "対話命令: accept enable / accept disable / pending / approve <requestId> <code> / reject <requestId> / status / connections / disconnect <connectionId> / quit\n",
       );
       process.exit(0);
     } else {
@@ -104,22 +104,17 @@ export function handleCommand(
   const [command, ...rest] = line.trim().split(/\s+/);
   if (command === "accept") {
     const sub = rest[0];
-    if (sub === "open") {
-      const info = server.openAcceptance();
-      out.write(
-        `acceptance state=${info.state}` +
-          (info.endsAt === null ? "" : ` endsAt=${new Date(info.endsAt).toISOString()}`) +
-          ` remainingMs=${info.remainingMs}\n`,
-      );
+    if (sub === "enable") {
+      const info = server.enableAcceptance();
+      out.write(`acceptance enabled=${info.enabled}\n`);
       return false;
     }
-    if (sub === "close") {
-      server.closeAcceptance();
-      const info = server.getAcceptance();
-      out.write(`acceptance state=${info.state}\n`);
+    if (sub === "disable") {
+      const info = server.disableAcceptance();
+      out.write(`acceptance enabled=${info.enabled}\n`);
       return false;
     }
-    out.write("使い方: accept open / accept close\n");
+    out.write("使い方: accept enable / accept disable\n");
     return false;
   }
   if (command === "pending") {
@@ -136,10 +131,7 @@ export function handleCommand(
         out.write(`pending requestId=${item.requestId} origin=${item.origin} code=(invalid)\n`);
         continue;
       }
-      const remainingSec = Math.max(0, Math.ceil(item.remainingMs / 1000));
-      out.write(
-        `pending requestId=${item.requestId} origin=${item.origin} code=${display} remaining=${remainingSec}s\n`,
-      );
+      out.write(`pending requestId=${item.requestId} origin=${item.origin} code=${display}\n`);
     }
     return false;
   }
@@ -199,10 +191,7 @@ export function handleCommand(
     out.write(
       `endpoint=${server.endpoint} connections=${server.getConnectionCount()} ` +
         `authorized=${authorized} unauthorized=${unauthorized} pending=${pending.length} closing=${closing} ` +
-        `acceptance=${acceptance.state}` +
-        (acceptance.endsAt === null
-          ? ""
-          : ` acceptanceEndsAt=${new Date(acceptance.endsAt).toISOString()}`) +
+        `acceptance=${acceptance.enabled ? "enabled" : "disabled"}` +
         ` pairingSuccess=${stats.pairingSuccess} pairingFailure=${stats.pairingFailure} ` +
         `latestStored=${stats.latestStored}${diagnosticText}` +
         (rejections === "" ? "" : ` rejections:${rejections}`) +
@@ -268,7 +257,7 @@ async function main(): Promise<void> {
   const diagnostics: BridgeDiagnostics = startDiagnostics(server);
   process.stdout.write(`listening ${server.endpoint}\n`);
   process.stdout.write(
-    "命令: accept open / accept close / pending / approve <requestId> <code> / reject <requestId> / status / connections / disconnect <connectionId> / quit\n",
+    "命令: accept enable / accept disable / pending / approve <requestId> <code> / reject <requestId> / status / connections / disconnect <connectionId> / quit\n",
   );
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   rl.on("line", (line: string) => {

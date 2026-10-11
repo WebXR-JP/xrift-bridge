@@ -54,13 +54,12 @@ async function waitForArrival(condition: () => boolean, what: string): Promise<v
 
 test("診断割当てしたセッションが終わると生成分も回収する", async () => {
   const backend = await startBackend();
-  backend.openAcceptance();
+  backend.enableAcceptance();
   const endpoint = backend.getSnapshot().endpoint;
   if (endpoint === null) throw new Error("公開先が無い。");
   const request = createConnectionRequest({
     endpoint: endpoint.url,
     origin: TEST_ORIGIN,
-    timeoutMs: 10_000,
   });
   void request.sessionProvider.catch(() => {});
   const pairing = await request.pairingInfo;

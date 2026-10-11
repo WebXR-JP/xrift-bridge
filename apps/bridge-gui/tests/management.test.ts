@@ -8,7 +8,7 @@ function snapshot(revision: number): ManagementSnapshot {
     revision,
     backend: "starting",
     endpoint: null,
-    admission: { accepting: false, remainingMs: 0 },
+    admission: { accepting: false },
     pending: [],
     connections: [],
     sessions: [],

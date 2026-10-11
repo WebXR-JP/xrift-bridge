@@ -30,7 +30,7 @@ import {
 } from "bridge-protocol/transport";
 import { BrowserSocket, normalizeSocketData, type NormalizedSocketData } from "./browser-socket.ts";
 import { WorldClientError } from "./errors.ts";
-import { PairingAttempt, assertConnectTimeoutMs } from "./pairing-attempt.ts";
+import { PairingAttempt } from "./pairing-attempt.ts";
 import { parseBridgeEndpoint } from "./endpoint.ts";
 import { ClientSessionProvider, type SessionProvider } from "./session.ts";
 
@@ -51,30 +51,16 @@ export interface ConnectOptions {
    */
   readonly origin?: string;
   /**
-   * 接続開始から比較コード受信までの待ち時間（ミリ秒）。
-   *
-   * 有限の正の整数かつタイマー安全範囲（1以上2147483647以下）であること。
-   * コード受信で解除し、人間の承認待ちを打ち切らない。
-   *
-   * @defaultValue `10000`（省略時に接続処理が適用）。
-   */
-  readonly timeoutMs?: number;
-  /**
    * 接続試行を取り消す合図。取消時は `CONNECT_CANCELLED` で拒否しソケットを閉じる。
    */
   readonly signal?: AbortSignal;
   /**
-   * タイマーの実装。省略時は環境のタイマーを使う。
+   * 認可後に開始する transport のタイマー実装。省略時は環境のタイマーを使う。
    *
+   * 認証まわりの待ち（比較コード受信・承認応答）に時限は設けない。
    * 試験で時間を手で進める場合に差し替える。
    */
   readonly scheduler?: TimerScheduler;
-  /**
-   * 時刻の取得口。承認 watchdog の期限判定に使う。
-   *
-   * 省略時は `Date.now` を使う。試験用の差し替え口。
-   */
-  readonly now?: () => number;
 }
 
 /** ブリッジが発行した比較コードの表示用情報。 */
@@ -83,10 +69,6 @@ export interface PairingInfo {
   readonly requestId: PairingRequestId;
   /** ASCII 数字 6 文字の比較コード。 */
   readonly code: PairingCode;
-  /** 承認期限の絶対時刻。 */
-  readonly expiresAt: number;
-  /** 承認までの残り時間（ミリ秒）。 */
-  readonly expiresInMs: number;
 }
 
 /**
@@ -104,9 +86,6 @@ export interface ConnectionRequest {
   /** 認証完了後のセッション管理口で解ける約束。 */
   readonly sessionProvider: Promise<SessionProvider>;
 }
-
-/** 接続開始から比較コード受信までの既定の待ち時間（ミリ秒）。 */
-const DEFAULT_PAIRING_TIMEOUT_MS = 10_000;
 
 /** libp2p `Logger` の無操作実装を組み立てる。 */
 function createNoopLogger(): WsMessageStreamOptions["log"] {
@@ -147,17 +126,19 @@ function openSocket(endpoint: string, origin: string | undefined): WebSocket {
  * ブリッジへの接続を開始する。
  *
  * 比較コードの発行と認証完了を2つの約束で返す。承認前の取消は
- * `options.signal` で行う。イベント購読・状態取得・業務送信 API は
- * 持たず、認可後の操作は解決した `SessionProvider` で行う。
+ * `options.signal` で行う。比較コード受信待ちに時限は設けず、取消は
+ * `signal`、通信失敗はソケットの close 通知で扱う。イベント購読・
+ * 状態取得・業務送信 API は持たず、認可後の操作は解決した
+ * `SessionProvider` で行う。
  *
  * 公開 API の選択理由: echo/command の要求相関・要求待機は上位層の責務とし
  * （`data` 一本化・相関委譲）、本関数は相関・待機を持たない。2約束の形は
  * 人間への表示（比較コード）と mux 準備完了の時点が異なるため分け、
  * 承認フロー（開始→表示→承認→mux）をそのまま表す。
  *
- * @param options - 接続先・取消合図・待ち時間の設定。
+ * @param options - 接続先・取消合図・認可後 transport 設定。
  * @returns 比較コードとセッション管理口の約束。
- * @throws `RangeError` — `endpoint`・`origin`・`timeoutMs` が不正な場合。
+ * @throws `RangeError` — `endpoint`・`origin` が不正な場合。
  * @throws `WorldClientError` — WebSocket が利用できない環境の場合。
  */
 export function createConnectionRequest(options: ConnectOptions): ConnectionRequest {
@@ -166,12 +147,7 @@ export function createConnectionRequest(options: ConnectOptions): ConnectionRequ
   if (origin !== undefined && origin.length === 0) {
     throw new RangeError("origin を指定する場合は空にできない。");
   }
-  const timeoutMs = options.timeoutMs ?? DEFAULT_PAIRING_TIMEOUT_MS;
-  // ADR: 不正な `timeoutMs` はソケット生成の前に `RangeError` で投げる。
-  // 0を無期限扱いにせず、非整数・範囲外も受け付けない。
-  assertConnectTimeoutMs(timeoutMs);
   const scheduler = options.scheduler ?? defaultTimerScheduler;
-  const now = options.now ?? Date.now;
   const signal = options.signal;
   if (signal !== undefined && signal.aborted) {
     const cancelled = new WorldClientError("CONNECT_CANCELLED", "接続試行が取り消された。");
@@ -199,7 +175,7 @@ export function createConnectionRequest(options: ConnectOptions): ConnectionRequ
 
   // 認可前の段階。`requesting_pairing`（コード待ち）・`awaiting_approval`
   // （承認待ち）・`authorized`（mux 運用中）・`closed`（終了）のいずれか。
-  // 段階の判定はこの調停役が行い、試行は保持と時限だけを持つ。
+  // 段階の判定はこの調停役が行い、試行は比較コードの保持だけを持つ。
   let phase: "requesting_pairing" | "awaiting_approval" | "authorized" | "closed" =
     "requesting_pairing";
   // 生存中の接続試行。未決着の試行と有無は一致する。
@@ -420,10 +396,7 @@ export function createConnectionRequest(options: ConnectOptions): ConnectionRequ
   });
 
   liveAttempt = new PairingAttempt({
-    timeoutMs,
     ...(signal === undefined ? {} : { signal }),
-    scheduler,
-    now,
     callbacks: {
       onAttemptFailed: (failed, error) => {
         if (liveAttempt !== failed) return;

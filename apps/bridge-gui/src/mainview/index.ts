@@ -26,22 +26,10 @@ function appendLog(message: string): void {
   log.append(item);
 }
 
-/** 残りミリ秒を人間向けの秒表示にする（切り上げ）。 */
-function formatRemain(ms: number): string {
-  return `${Math.max(0, Math.ceil(ms / 1000))} 秒`;
-}
-
 // 現在採用中の表示状態。未取得の間は null である。
 let current: ManagementSnapshot | null = null;
-// 採用時点の単調時計（`performance.now()`）。残時間の減算起点である。
-let receivedAt = 0;
 // 表示用に取得した比較コード。承認には使わない（明示操作だけが承認する）。
-const pairingViews = new Map<string, { view: PairingViewResult; receivedAt: number }>();
-
-/** 取得値から画面側の単調時計で減算した残時間を返す。期限判断には使わない。 */
-function remain(initialMs: number, base: number): number {
-  return Math.max(0, initialMs - (performance.now() - base));
-}
+const pairingViews = new Map<string, PairingViewResult>();
 
 /** 採用中の表示状態を画面に反映する。 */
 function render(snapshot: ManagementSnapshot): void {
@@ -53,9 +41,7 @@ function render(snapshot: ManagementSnapshot): void {
     snapshot.endpoint === null
       ? "未公開"
       : `${snapshot.endpoint.url}（${snapshot.endpoint.listening ? "受付中" : "停止中"}）`;
-  el("admission").textContent = snapshot.admission.accepting
-    ? `受付中（残り ${formatRemain(remain(snapshot.admission.remainingMs, receivedAt))}）`
-    : "受付停止中";
+  el("admission").textContent = snapshot.admission.accepting ? "受付中" : "受付停止中";
   el("pending").textContent = `${snapshot.pending.length} 件`;
   el("connections").textContent = `${snapshot.connections.length} 件`;
   el("sessions").textContent = `${snapshot.sessions.length} 件`;
@@ -83,11 +69,7 @@ function renderPending(snapshot: ManagementSnapshot): void {
   }
   for (const entry of snapshot.pending) {
     const item = document.createElement("li");
-    const rest = document.createElement("span");
-    // 残時間の減算表示用。期限・承認可否の判断は server が行う。
-    rest.id = `pending-remain-${entry.requestId}`;
-    rest.textContent = `残り ${formatRemain(remain(entry.expiresInMs, receivedAt))}`;
-    item.append(`${entry.requestId}（`, rest, "）");
+    item.append(`${entry.requestId} `);
     item.append(
       actionButton("show-code", entry.requestId, "比較コードを表示する"),
       " ",
@@ -97,17 +79,13 @@ function renderPending(snapshot: ManagementSnapshot): void {
       " ",
       actionButton("reject", entry.requestId, "取り下げる"),
     );
-    const stored = pairingViews.get(entry.requestId);
-    if (stored !== undefined) {
-      const shown = stored.view;
+    const shown = pairingViews.get(entry.requestId);
+    if (shown !== undefined) {
       if (shown.available) {
         const detail = document.createElement("div");
         detail.className = "code";
-        const codeRest = document.createElement("span");
-        codeRest.id = `code-remain-${entry.requestId}`;
-        codeRest.textContent = `残り ${formatRemain(remain(shown.expiresInMs, stored.receivedAt))}`;
         // 表示用の比較コード。本文の記録（ログ）には載せない。
-        detail.append(`比較コード: ${shown.displayCode}（`, codeRest, "）");
+        detail.textContent = `比較コード: ${shown.displayCode}`;
         item.append(detail);
       } else {
         const detail = document.createElement("div");
@@ -296,7 +274,6 @@ function adopt(incoming: ManagementSnapshot, via: "getSnapshot" | "stateChanged"
   const next = selectNewer(current, incoming);
   current = next;
   if (next !== previous) {
-    receivedAt = performance.now();
     // 消えた保留の表示用コードは捨てる（再送基盤は作らない）。
     for (const requestId of pairingViews.keys()) {
       if (!next.pending.some((entry) => entry.requestId === requestId)) {
@@ -311,34 +288,6 @@ function adopt(incoming: ManagementSnapshot, via: "getSnapshot" | "stateChanged"
       `[bridge-gui] 古い状態を無視した: via=${via} incoming=${incoming.revision} current=${previous?.revision}`,
     );
     appendLog(`無視 via=${via} incoming=${incoming.revision} current=${previous?.revision}`);
-  }
-}
-
-/** 残時間の減算表示だけを進める。期限判断は server が行う。 */
-function tick(): void {
-  const snapshot = current;
-  if (snapshot === null) {
-    return;
-  }
-  if (snapshot.admission.accepting) {
-    el("admission").textContent =
-      `受付中（残り ${formatRemain(remain(snapshot.admission.remainingMs, receivedAt))}）`;
-  }
-  for (const entry of snapshot.pending) {
-    const rest = document.getElementById(`pending-remain-${entry.requestId}`);
-    if (rest) {
-      rest.textContent = `残り ${formatRemain(remain(entry.expiresInMs, receivedAt))}`;
-    }
-    const stored = pairingViews.get(entry.requestId);
-    if (stored !== undefined) {
-      const shown = stored.view;
-      if (shown.available) {
-        const codeRest = document.getElementById(`code-remain-${entry.requestId}`);
-        if (codeRest) {
-          codeRest.textContent = `残り ${formatRemain(remain(shown.expiresInMs, stored.receivedAt))}`;
-        }
-      }
-    }
   }
 }
 
@@ -551,7 +500,7 @@ document.addEventListener("click", (event) => {
   if (action === undefined) {
     return;
   }
-  // ADR: 識別子が不要な操作（受付の開閉・終了）もあるため `data-id` は
+  // ADR: 識別子が不要な操作（受付の有効化・無効化・終了）もあるため `data-id` は
   // 必須にしない。必要な操作だけが `handleAction` 内で `id` を使う。
   const id = target.dataset["id"] ?? "";
   void handleAction(action, id);
@@ -561,21 +510,21 @@ document.addEventListener("click", (event) => {
 async function handleAction(action: string, id: string): Promise<void> {
   try {
     switch (action) {
-      case "open-acceptance": {
-        await rpc.request.openAcceptance({});
-        console.log("[bridge-gui] 受付を開いた");
-        await refresh("受付を開く");
+      case "enable-acceptance": {
+        await rpc.request.enableAcceptance({});
+        console.log("[bridge-gui] 受付を有効化した");
+        await refresh("受付の有効化");
         break;
       }
-      case "close-acceptance": {
-        await rpc.request.closeAcceptance({});
-        console.log("[bridge-gui] 受付を閉じた");
-        await refresh("受付を閉じる");
+      case "disable-acceptance": {
+        await rpc.request.disableAcceptance({});
+        console.log("[bridge-gui] 受付を無効化した");
+        await refresh("受付の無効化");
         break;
       }
       case "show-code": {
         const result: PairingViewResult = await rpc.request.getPairingView({ requestId: id });
-        pairingViews.set(id, { view: result, receivedAt: performance.now() });
+        pairingViews.set(id, result);
         console.log(
           result.available
             ? `[bridge-gui] 比較コード表示を取得した: requestId=${id}`
@@ -590,7 +539,7 @@ async function handleAction(action: string, id: string): Promise<void> {
         const input = document.getElementById(`code-input-${id}`);
         const code = input instanceof HTMLInputElement ? input.value : "";
         const result = await rpc.request.approvePairing({ requestId: id, code });
-        // 成否の符号だけを残す。期限・承認可否は server が決める。
+        // 成否の符号だけを残す。承認可否は server が決める.
         console.log(`[bridge-gui] 承認の結果: requestId=${id} status=${result.status}`);
         await refresh("承認");
         break;
@@ -701,7 +650,5 @@ try {
   console.log(`[bridge-gui] 子画面の掃除に失敗した: ${String(error)}`);
 }
 await refreshSpike("初期化");
-
-setInterval(tick, 500);
 
 void view;

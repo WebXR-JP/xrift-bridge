@@ -21,7 +21,7 @@ import type { PluginUiMountFailure, PluginUiMountPlacement } from "./plugin-inst
 export type BackendStatus =
   /** bridge-server を組み立て中。 */
   | "starting"
-  /** 稼働中。受付の開閉とは無関係。 */
+  /** 稼働中。受付の有効/無効とは無関係。 */
   | "ready"
   /** 起動に失敗し、表示のみ提供する。終了はできる。 */
   | "failed"
@@ -39,16 +39,14 @@ export interface EndpointState {
 /**
  * ペアリング受付の表示状態。
  *
- * 残時間はミリ秒。比較コードの本文は含めない。コードが必要な画面は
- * 選択後に限定 request（`getPairingView`）で取得し、snapshot には載せない。
- * 残時間の表示は取得値から画面側の単調時計で減算し、期限・承認可否の
+ * 有効/無効の2状態だけを持ち、残時間・終了時刻は持たない。比較コードの
+ * 本文は含めない。コードが必要な画面は選択後に限定 request
+ * （`getPairingView`）で取得し、snapshot には載せない。承認可否の
  * 判断は常に server が行う。
  */
 export interface AdmissionState {
-  /** 受付中かどうか。 */
+  /** 受付が有効かどうか。 */
   readonly accepting: boolean;
-  /** 受付の残時間（ミリ秒）。受付中でない場合は 0。 */
-  readonly remainingMs: number;
 }
 
 /**
@@ -61,8 +59,6 @@ export interface AdmissionState {
 export interface PendingEntry {
   /** 照合対象の要求識別子。 */
   readonly requestId: string;
-  /** 失効までの残時間（ミリ秒）。 */
-  readonly expiresInMs: number;
 }
 
 /**
@@ -82,13 +78,9 @@ export type PairingViewResult =
       readonly code: string;
       /** 人間が照合しやすい表示形（例: `"000 123"`、半角スペース）。 */
       readonly displayCode: string;
-      /** 承認期限（壁時計ミリ秒・表示用）。 */
-      readonly expiresAt: number;
-      /** 承認までの残時間（ミリ秒）。 */
-      readonly expiresInMs: number;
     }
   | {
-      /** 取得できない場合に偽。期限切れ・承認済み・拒否済みの場合がある。 */
+      /** 取得できない場合に偽。承認済み・拒否済みの場合がある。 */
       readonly available: false;
       /** 取得できない理由（人間向けの短い説明）。 */
       readonly reason: string;
@@ -165,7 +157,7 @@ export interface TextDisplayState {
 /**
  * 管理画面の表示スナップショット。
  *
- * 起動状態・endpoint・受付状態／残時間・コードを除く保留一覧・接続一覧と
+ * 起動状態・endpoint・受付状態・コードを除く保留一覧・接続一覧と
  * 認可段階・生存セッション一覧・インスタンス識別情報と接続口・割当て状態・
  * 固定テキスト表示の状態を持つ。テキスト本文は含めない。
  */
@@ -224,11 +216,11 @@ export type ManagementRpc = {
     requests: {
       /** 表示状態の取得。読み取りは revision を進めない。 */
       getSnapshot: { params: {}; response: ManagementSnapshot };
-      /** ペアリング受付を開く。 */
-      openAcceptance: { params: {}; response: AdmissionState };
-      /** ペアリング受付を閉じる。開始待ち・承認待ちを終了し、認可済みは維持する。 */
-      closeAcceptance: { params: {}; response: AdmissionState };
-      /** 選択した保留の比較コード・期限を表示用に取得する。承認はしない。 */
+      /** ペアリング受付を有効化する。 */
+      enableAcceptance: { params: {}; response: AdmissionState };
+      /** ペアリング受付を無効化する。認可済みは維持する。 */
+      disableAcceptance: { params: {}; response: AdmissionState };
+      /** 選択した保留の比較コードを表示用に取得する。承認はしない。 */
       getPairingView: { params: { requestId: string }; response: PairingViewResult };
       /** 保留を比較コード照合で承認する。結果の成否は server が決める。 */
       approvePairing: {

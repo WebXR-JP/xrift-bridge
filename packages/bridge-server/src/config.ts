@@ -6,9 +6,12 @@
  * 検証計画は `docs/verification/bridge-connection.md` を見る。すべての値は
  * `BridgeOptions.limits` で上書きできる。
  *
- * 比較コード方式の期限・上限・レートの設計既定値は
+ * 比較コード方式の上限・レートの設計既定値は
  * `design/bridge-connection.md` の候補節を参照し、形状の正本は
  * `bridge-protocol`（`PAIRING_CODE_LENGTH` 等）に置く。
+ *
+ * 受付は有効/無効の2状態のトグルであり、時間での自動失効を持たない。
+ * 保留中の要求も時間で失効せず、手動の承認/拒否か切断まで生存する。
  *
  * 件数クレジット・応答キュー・ストリーム上限をブリッジ層に持たない。
  * framing 本体上限（65,536）は transport（`FRAME_MAX_BYTES`）の固定であり、
@@ -38,28 +41,6 @@ export interface BridgeLimits {
    */
   readonly maxConnections: number;
   /**
-   * 接続から開始メッセージ（`pairing_start`）までの制限時間（ミリ秒）。
-   *
-   * @defaultValue `10000`（設計既定）。
-   */
-  readonly pairingStartTimeoutMs: number;
-  /**
-   * 比較コード発行から承認までの制限時間（ミリ秒）。保留の絶対期限は
-   * 「発行＋この値」と「受付終了」の早い方である。
-   *
-   * 受付時間（`acceptanceDurationMs`）との大小は制限しない。
-   *
-   * @defaultValue `120000`（設計既定）。
-   */
-  readonly pairingApprovalTimeoutMs: number;
-  /**
-   * 受付を開いてから自動クローズするまでの時間（ミリ秒）。
-   * 開いている間の再操作は期限を更新しない。
-   *
-   * @defaultValue `120000`（設計既定）。
-   */
-  readonly acceptanceDurationMs: number;
-  /**
    * 未認可接続数（開始待ち＋承認待ち）の上限。`maxConnections` の内数であり、
    * 認可済み接続を追い出さない。`maxPendingPairings` 以上であること。
    *
@@ -74,6 +55,8 @@ export interface BridgeLimits {
   readonly maxPendingPairings: number;
   /**
    * 受付レートの観測窓（ミリ秒）。`(now-window, now]` に入る試行を数える。
+   *
+   * 自動失効のタイマーには使わないため、Node タイマーの上限は適用しない。
    *
    * @defaultValue `60000`（設計既定）。
    */
@@ -110,9 +93,6 @@ export interface BridgeLimits {
 export const DEFAULT_LIMITS: BridgeLimits = {
   maxWebSocketMessageBytes: 1_048_576,
   maxConnections: 8,
-  pairingStartTimeoutMs: 10_000,
-  pairingApprovalTimeoutMs: 120_000,
-  acceptanceDurationMs: 120_000,
   maxUnauthorizedConnections: 2,
   maxPendingPairings: 2,
   pairingRateWindowMs: 60_000,
@@ -127,14 +107,13 @@ export const DEFAULT_LIMITS: BridgeLimits = {
  */
 const MAX_TIMER_MS = 2_147_483_647;
 
-/** タイマーとして扱う項目。Node タイマーの範囲にも収める。 */
-const TIMER_KEYS: ReadonlySet<keyof BridgeLimits> = new Set([
-  "pairingStartTimeoutMs",
-  "pairingApprovalTimeoutMs",
-  "acceptanceDurationMs",
-  "pairingRateWindowMs",
-  "connectionCloseGraceMs",
-]);
+/**
+ * 実際に `setTimeout` へ渡す項目。Node タイマーの範囲にも収める。
+ *
+ * 受付レートの観測窓（`pairingRateWindowMs`）は窓計算にだけ使い、
+ * タイマーとして仕掛けないため含めない。
+ */
+const TIMER_KEYS: ReadonlySet<keyof BridgeLimits> = new Set(["connectionCloseGraceMs"]);
 
 /**
  * 暫定値を部分指定と突き合わせて完全な制限値にする。
@@ -145,9 +124,6 @@ const TIMER_KEYS: ReadonlySet<keyof BridgeLimits> = new Set([
  * 範囲に収まらない場合、または上限の関係
  * （`maxPendingPairings <= maxUnauthorizedConnections <= maxConnections`、
  * `maxPairingRequestsPerOrigin <= maxPairingRequestsTotal`）を満たさない場合。
- * @remarks
- * 承認待ち時間（`pairingApprovalTimeoutMs`）と受付時間
- * （`acceptanceDurationMs`）の大小は制限しない。
  */
 export function resolveLimits(partial?: Partial<BridgeLimits>): BridgeLimits {
   const merged: BridgeLimits = { ...DEFAULT_LIMITS, ...partial };

@@ -73,7 +73,6 @@ async function receivePairing(backend: GuiBackend): Promise<{
   const request = createConnectionRequest({
     endpoint: endpoint.url,
     origin: TEST_ORIGIN,
-    timeoutMs: 10_000,
   });
   void request.sessionProvider.catch(() => {});
   const pairing = await request.pairingInfo;
@@ -130,7 +129,7 @@ function isEchoOf(payload: unknown, id: string): boolean {
 
 test("診断の応答で統計が変わると状態通知が届く", async () => {
   const backend = await startBackend();
-  backend.openAcceptance();
+  backend.enableAcceptance();
   const pairing = await receivePairing(backend);
   expect(backend.approvePairing({ requestId: pairing.requestId, code: pairing.code }).status).toBe(
     "APPROVED",

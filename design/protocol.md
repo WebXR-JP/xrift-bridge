@@ -35,10 +35,10 @@ Session capability（`kind`・`direction` 別の公開型）の形状の正本�
 - 欠落した `Origin`、`null`、ワイルドカード、接尾辞一致は拒否する方針とする。具体的な符号・書式は型・境界検証・テストを参照する。
 - ペアリングはワールド側から `pairing_start` で開始する。開始を受けるとブリッジは比較コードを発行し `pairing_pending` で通知し、人間がブリッジ側（ローカル CLI、将来は GUI）で承認したその接続だけを `auth_ok{requestId,connectionId}` で接続単位に認可する。ブリッジが発行するのは暗号学的乱数による数字6桁の比較コードであり、OTP 認証ではない（照合のための比較コード）。使い捨て秘密値（ワールド側での入力）は採用しない。
 - 認証前はデータとローカル情報を送受信しない。ただしペアリングに限定した制御メッセージ（`pairing_start`・`pairing_pending`・認証前エラー）は例外として送受信する。
-- 受付モードは起動時は閉じ、ローカル操作で開き、120秒で自動クローズする。保留の絶対期限は「コード発行＋120秒」と「受付終了時刻」の早い方である。権限範囲は現行同等とし、認可はその接続だけに属し、切断で失効し、再接続は再承認である。これらを設計判断とする。形状・数値・状態遷移の詳細は正本（[packages/bridge-protocol/src/messages.ts](../packages/bridge-protocol/src/messages.ts)・[packages/bridge-protocol/src/validate.ts](../packages/bridge-protocol/src/validate.ts)・[packages/bridge-server/src/config.ts](../packages/bridge-server/src/config.ts)・実装・テスト）へ置き、ここでは複製しない。
+- 受付は起動時は無効であり、手動の有効化・無効化だけで切り替える。自動クローズ・期限・残時間表示は無い。保留に時限はなく、手動の承認・拒否か切断まで残る。無効化時は未認可接続をその場で終了・切断し（認可済みは維持）、再有効化しても終了済みの要求は復活しない。`pairing_pending` は `{v,type:"pairing_pending",requestId,code}` のみとし、期限フィールド（`expiresAt`・`expiresInMs`）は持たない。プロトコル版は `0.4.0` とする。権限範囲は現行同等とし、認可はその接続だけに属し、切断で失効し、再接続は再承認である。これらを設計判断とする。形状・数値・状態遷移の詳細は正本（[packages/bridge-protocol/src/messages.ts](../packages/bridge-protocol/src/messages.ts)・[packages/bridge-protocol/src/validate.ts](../packages/bridge-protocol/src/validate.ts)・[packages/bridge-server/src/config.ts](../packages/bridge-server/src/config.ts)・実装・テスト）へ置き、ここでは複製しない。
 - 比較コード・要求 ID を URL・クエリ・Cookie・ログ・ブラウザの永続ストレージに入れない。比較コードは両画面への表示と照合にだけ使う。
 - 受付レート・未認可接続数・保留数に上限を設け、超過は保留せず拒否する。具体値は `packages/bridge-server/src/config.ts` の `DEFAULT_LIMITS`・実装・テストを参照する。
-- ローカル管理は受付の開閉・保留一覧・要求 ID と比較コードの両方を指定する承認／拒否、接続一覧と接続 ID 指定の切断を提供し、指定接続だけを切断して待ち受けと他接続は維持する。全体停止とは区別する。承認操作はローカル管理境界だけに置き、ワールド向け WebSocket には公開しない。
+- ローカル管理は受付の有効化・無効化・保留一覧・要求 ID と比較コードの両方を指定する承認／拒否、接続一覧と接続 ID 指定の切断を提供し、指定接続だけを切断して待ち受けと他接続は維持する。全体停止とは区別する。承認操作はローカル管理境界だけに置き、ワールド向け WebSocket には公開しない。
 - 認可は接続単位にする。長期資格情報の保持と、再接続時の誤った権限継承を避けるためである。成功した WebSocket 接続だけを認可し、切断で認可は失効し、再接続には再承認が必要である。
 - `Origin` は「そのワールド」の識別に使えない。同一文書・同一スクリプト実行基盤のため、XRift ホストと同じ基盤内のコードから比較コードや通信を隔離できない。コード一致は表示された要求との対応確認であり、ワールドの真正性の証明ではない。ワールド ID・表示名・SDK 内部変数は認証境界にならない。
 
@@ -100,7 +100,7 @@ Session capability（`kind`・`direction` 別の公開型）の形状の正本�
 - yamux の公開 `ping()` を使う自前の監視ループとする。同時 Ping 1件で動かし、不応答で Connection 終端とする。間隔・応答期限の正本は [`keepalive.ts`](../packages/bridge-protocol/src/transport/keepalive.ts) の定数（`KEEPALIVE_FIRST_DELAY_MS`・`KEEPALIVE_INTERVAL_MS`・`KEEPALIVE_PING_TIMEOUT_MS`）とし、ここでは複製しない。
 - 内蔵 keepalive に障害検知を委ねない（`enableKeepAlive: false`）。`enableKeepAlive`／内蔵 keepalive の実挙動が採用版でどう振る舞うかは要確認であり、上流 master は失敗ログのみとする。
 - WS Ping との二重監視はしない。独自アプリ heartbeat は追加しない。
-- ペアリング期限（認可前）・Ping（認可後）・`connectionCloseGraceMs`（終了開始後）は目的が別である。終了開始で監視を止め、強制終了タイマーは一度だけ動かす。
+- 認可前の期限監視は持たない（保留は無期限）。Ping（認可後）・`connectionCloseGraceMs`（終了開始後）は目的が別である。終了開始で監視を止め、強制終了タイマーは一度だけ動かす。
 - Ping 成功は往復経路と相手の yamux 処理が動いたことのみを示し、業務ハンドラ・AI処理・要求完了を保証しない。
 
 ### 送信 API 契約

@@ -190,8 +190,8 @@ test("子画面の要求口に管理操作が無い", () => {
   const surface = binder as unknown as Record<string, unknown>;
   // 対応付け層自体に管理操作の口が無い。
   for (const name of [
-    "openAcceptance",
-    "closeAcceptance",
+    "enableAcceptance",
+    "disableAcceptance",
     "getPairingView",
     "approvePairing",
     "rejectPairing",
@@ -472,7 +472,6 @@ async function approveConnection(backend: GuiBackend): Promise<SessionProvider> 
   const request = createConnectionRequest({
     endpoint: endpoint.url,
     origin: TEST_ORIGIN,
-    timeoutMs: 10_000,
   });
   void request.sessionProvider.catch(() => {});
   const pairing = await request.pairingInfo;
@@ -485,7 +484,7 @@ async function approveConnection(backend: GuiBackend): Promise<SessionProvider> 
 
 test("実バックエンドの束縛送信が現割当てに届く", async () => {
   const backend = await startBackend();
-  backend.openAcceptance();
+  backend.enableAcceptance();
   const provider = await approveConnection(backend);
   const before = backend.getSnapshot().sessions.length;
   const session = await provider.tryCreateSession({
@@ -550,7 +549,7 @@ test("実バックエンドの束縛送信が現割当てに届く", async () =>
 
 test("実バックエンドの診断射影が自個体の統計だけを返す", async () => {
   const backend = await startBackend();
-  backend.openAcceptance();
+  backend.enableAcceptance();
   const provider = await approveConnection(backend);
   const before = backend.getSnapshot().sessions.length;
   const session = await provider.tryCreateSession({

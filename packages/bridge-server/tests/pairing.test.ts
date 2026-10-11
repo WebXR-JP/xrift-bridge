@@ -39,7 +39,7 @@ function manualClock(
   };
 }
 
-/** 受付を開く前の保留管理とその部品を組立てる。 */
+/** 受付を有効化する前の保留管理とその部品を組立てる。 */
 function setupPairing(
   overrides?: Parameters<typeof resolveLimits>[0],
   options?: {
@@ -53,7 +53,7 @@ function setupPairing(
 } {
   const ctl = manualClock(1_000_000, 5_000);
   const limits = resolveLimits(overrides);
-  const acceptance = new AcceptanceController({ limits, clock: ctl.clock });
+  const acceptance = new AcceptanceController();
   const store = new PairingStore({
     limits,
     clock: ctl.clock,
@@ -74,12 +74,6 @@ function queuedCodes(queue: string[], calls: { count: number }): () => string {
   };
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
 test("生成コードは6桁の数字で先頭ゼロが出る", () => {
   expect(PAIRING_CODE_LENGTH).toBe(6);
   let leadingZero = false;
@@ -97,7 +91,7 @@ test("生成コードは6桁の数字で先頭ゼロが出る", () => {
 
 test("注入コードの先頭ゼロは承認まで文字列で保持される", () => {
   const { acceptance, store } = setupPairing(undefined, { generateCode: () => "000042" });
-  acceptance.open();
+  acceptance.enable();
   const created = store.create("conn-zero", "https://app.example");
   if (created.status !== "CREATED") throw new Error("保留が作れない。");
   expect(created.code).toBe("000042");
@@ -110,12 +104,30 @@ test("注入コードの先頭ゼロは承認まで文字列で保持される",
   expect(store.approve(created.requestId, "000042")).toEqual({ status: "NOT_PENDING" });
 });
 
+test("作成結果は要求IDとコードだけを持ち期限を持たない", () => {
+  const { acceptance, store } = setupPairing(undefined, { generateCode: () => "123456" });
+  acceptance.enable();
+  const created = store.create("conn-a", "https://a.example");
+  if (created.status !== "CREATED") throw new Error("保留が作れない。");
+  expect(Object.keys(created).sort()).toEqual(["code", "requestId", "status"]);
+  const got = store.get(created.requestId);
+  if (got === undefined) throw new Error("保留が見えない。");
+  expect(Object.keys(got).sort()).toEqual([
+    "code",
+    "connectionId",
+    "issuedAt",
+    "origin",
+    "requestId",
+  ]);
+  expect(got.issuedAt).toBe(1_000_000);
+});
+
 test("生存保留と重複するコードは全Origin横断で再生成する", () => {
   const calls = { count: 0 };
   const { acceptance, store } = setupPairing(undefined, {
     generateCode: queuedCodes(["111111", "111111", "222222"], calls),
   });
-  acceptance.open();
+  acceptance.enable();
   const first = store.create("conn-a", "https://a.example");
   if (first.status !== "CREATED") throw new Error("1件目が作れない。");
   expect(first.code).toBe("111111");
@@ -135,7 +147,7 @@ test("16回衝突し続けると失敗しエントリを残さない", () => {
       return "111111";
     },
   });
-  acceptance.open();
+  acceptance.enable();
   const first = store.create("conn-a", "https://a.example");
   if (first.status !== "CREATED") throw new Error("1件目が作れない。");
   expect(calls.count).toBe(1);
@@ -150,7 +162,7 @@ test("16回衝突し続けると失敗しエントリを残さない", () => {
 
 test("書式不正の生成値は試行として数えエントリを残さない", () => {
   const { acceptance, store } = setupPairing(undefined, { generateCode: () => "abc" });
-  acceptance.open();
+  acceptance.enable();
   expect(store.create("conn-a", "https://a.example")).toEqual({
     status: "CODE_GENERATION_FAILED",
   });
@@ -159,7 +171,7 @@ test("書式不正の生成値は試行として数えエントリを残さな�
 
 test("要求IDは削除後も再利用しない", () => {
   const { acceptance, store } = setupPairing();
-  acceptance.open();
+  acceptance.enable();
   const ids: string[] = [];
   const first = store.create("conn-a", "https://a.example");
   if (first.status !== "CREATED") throw new Error("1件目が作れない。");
@@ -186,222 +198,92 @@ test("要求IDは削除後も再利用しない", () => {
   }
 });
 
-test("保留期限は発行＋承認待ちと受付終了の早い方である", () => {
-  // 受付終了が早い場合。
-  {
-    const { acceptance, store } = setupPairing({
-      pairingApprovalTimeoutMs: 120_000,
-      acceptanceDurationMs: 60_000,
-    });
-    acceptance.open();
-    const created = store.create("conn-a", "https://a.example");
-    if (created.status !== "CREATED") throw new Error("保留が作れない。");
-    // 単調: min(5000+120000, 5000+60000)、壁: min(1000000+120000, 1000000+60000)。
-    expect(created.expiresInMs).toBe(60_000);
-    expect(created.expiresAt).toBe(1_060_000);
-    expect(store.get(created.requestId)?.monotonicDeadline).toBe(65_000);
-  }
-  // 承認待ちが早い場合。
-  {
-    const { acceptance, store } = setupPairing({
-      pairingApprovalTimeoutMs: 30_000,
-      acceptanceDurationMs: 120_000,
-    });
-    acceptance.open();
-    const created = store.create("conn-a", "https://a.example");
-    if (created.status !== "CREATED") throw new Error("保留が作れない。");
-    expect(created.expiresInMs).toBe(30_000);
-    expect(created.expiresAt).toBe(1_030_000);
-    expect(store.get(created.requestId)?.monotonicDeadline).toBe(35_000);
-  }
-});
-
-test("小数の単調時計でも残時間は正の整数になる", () => {
-  const ctl = manualClock(1_000_000, 5_000.25);
-  const limits = resolveLimits({
-    pairingApprovalTimeoutMs: 120_000,
-    acceptanceDurationMs: 60_000,
-  });
-  const acceptance = new AcceptanceController({ limits, clock: ctl.clock });
-  const store = new PairingStore({
-    limits,
-    clock: ctl.clock,
-    acceptance,
+test("時計を大きく進めても受付と保留は自動終了しない", () => {
+  const { ctl, acceptance, store } = setupPairing(undefined, {
     generateCode: () => "123456",
   });
-  acceptance.open();
-  // 受付期限側が早い方の残りが小数になるよう半端に進める。
-  ctl.advanceMono(0.5);
+  acceptance.enable();
   const created = store.create("conn-a", "https://a.example");
   if (created.status !== "CREATED") throw new Error("保留が作れない。");
-  // 生の残りは 59999.5、小数にならず切り上げの正の整数になる。
-  expect(created.expiresInMs).toBe(60_000);
-  expect(Number.isInteger(created.expiresInMs)).toBe(true);
-  expect(created.expiresInMs).toBeGreaterThanOrEqual(1);
-  // 取得・一覧・受付状態の残時間も整数である。
-  const got = store.get(created.requestId);
-  if (got === undefined) throw new Error("保留が見えない。");
-  expect(Number.isInteger(got.remainingMs)).toBe(true);
-  expect(got.remainingMs).toBeGreaterThanOrEqual(1);
-  expect(store.list()[0]?.remainingMs).toBe(got.remainingMs);
-  const status = acceptance.get();
-  expect(Number.isInteger(status.remainingMs)).toBe(true);
-  expect(status.remainingMs).toBeGreaterThanOrEqual(1);
-  // 期限直前（残り 0.2ms）は切り上げで 1 になり、期限ちょうどでは失効する。
-  ctl.set(1_000_000, 65_000.05);
-  expect(store.get(created.requestId)?.remainingMs).toBe(1);
-  ctl.set(1_000_000, 65_000.25);
-  expect(store.get(created.requestId)).toBeUndefined();
-});
-
-test("期限以上では取得できず掃除される", () => {
-  const { ctl, acceptance, store } = setupPairing(
-    { pairingApprovalTimeoutMs: 1_000, acceptanceDurationMs: 60_000 },
-    { generateCode: () => "123456" },
-  );
-  acceptance.open();
-  const created = store.create("conn-a", "https://a.example");
-  if (created.status !== "CREATED") throw new Error("保留が作れない。");
-  // 期限内 (deadline 6000 の直前) は取得できる。
-  ctl.set(1_000_000, 5_999);
-  expect(store.get(created.requestId)?.requestId).toBe(created.requestId);
-  // `now >= deadline` は失効する。境界ちょうどを含む。
-  ctl.set(1_000_000, 6_000);
-  expect(store.get(created.requestId)).toBeUndefined();
-  expect(store.size()).toBe(0);
-});
-
-test("承認での失効は初回に理由を返し二度目は未保留になる", () => {
-  const { ctl, acceptance, store } = setupPairing(
-    { pairingApprovalTimeoutMs: 1_000, acceptanceDurationMs: 60_000 },
-    { generateCode: () => "123456" },
-  );
-  acceptance.open();
-  const created = store.create("conn-a", "https://a.example");
-  if (created.status !== "CREATED") throw new Error("保留が作れない。");
-  ctl.set(1_000_000, 6_000);
-  expect(store.approve(created.requestId, "123456")).toEqual({ status: "PAIRING_EXPIRED" });
-  expect(store.approve(created.requestId, "123456")).toEqual({ status: "NOT_PENDING" });
-  expect(store.size()).toBe(0);
-});
-
-test("一覧・取得・重複開始は期限を延長しない", () => {
-  const { ctl, acceptance, store } = setupPairing(
-    { pairingApprovalTimeoutMs: 1_000, acceptanceDurationMs: 60_000 },
-    { generateCode: () => "123456" },
-  );
-  acceptance.open();
-  const created = store.create("conn-a", "https://a.example");
-  if (created.status !== "CREATED") throw new Error("保留が作れない。");
-  ctl.advanceMono(500);
-  expect(store.list()).toHaveLength(1);
-  expect(store.get(created.requestId)?.requestId).toBe(created.requestId);
-  ctl.advanceMono(200);
-  // 重複開始は新規作成せず期限も延ばさない。
-  const duplicate = store.create("conn-a", "https://a.example");
-  expect(duplicate).toEqual({ status: "ALREADY_PENDING", requestId: created.requestId });
-  ctl.set(1_000_000, 6_000);
-  expect(store.approve(created.requestId, "123456")).toEqual({ status: "PAIRING_EXPIRED" });
-});
-
-test("壁時計の変更では期限が延びも縮みもしない", () => {
-  const { ctl, acceptance, store } = setupPairing(
-    { pairingApprovalTimeoutMs: 1_000, acceptanceDurationMs: 600_000 },
-    { generateCode: () => "123456" },
-  );
-  acceptance.open();
-  const first = store.create("conn-a", "https://a.example");
-  if (first.status !== "CREATED") throw new Error("1件目が作れない。");
-  // 壁時計だけが大きく進んでも単調期限は動かない。
+  // 壁時計・単調時計の双方を大きく進めても、受付も保留も残る。
   ctl.advanceWall(10_000_000);
-  expect(store.get(first.requestId)?.requestId).toBe(first.requestId);
-  expect(store.approve(first.requestId, "123456").status).toBe("APPROVED");
+  ctl.advanceMono(10_000_000);
+  expect(acceptance.isEnabled()).toBe(true);
+  expect(acceptance.get()).toEqual({ enabled: true });
+  expect(store.get(created.requestId)?.requestId).toBe(created.requestId);
+  expect(store.list()).toHaveLength(1);
+  expect(store.size()).toBe(1);
+  // 承認も通る。
+  expect(store.approve(created.requestId, "123456")).toEqual({
+    status: "APPROVED",
+    connectionId: "conn-a",
+    origin: "https://a.example",
+  });
+  // 新規作成もできる。
   const second = store.create("conn-b", "https://b.example");
-  if (second.status !== "CREATED") throw new Error("2件目が作れない。");
-  // 単調時計だけが期限を超えれば壁時計が止まっていても失効する。
-  ctl.advanceMono(1_001);
-  expect(store.get(second.requestId)).toBeUndefined();
+  expect(second.status).toBe("CREATED");
 });
 
-test("受付は起動時に閉じていて保留を作れない", () => {
+test("受付は起動時に無効で保留を作れない", () => {
   const { store, acceptance } = setupPairing();
-  expect(acceptance.get()).toEqual({ state: "closed", endsAt: null, remainingMs: 0 });
-  expect(acceptance.isOpen()).toBe(false);
+  expect(acceptance.get()).toEqual({ enabled: false });
+  expect(acceptance.isEnabled()).toBe(false);
   expect(store.create("conn-a", "https://a.example")).toEqual({
     status: "ACCEPTANCE_CLOSED",
   });
   expect(store.size()).toBe(0);
 });
 
-test("受付は開くと期限で自動クローズする", async () => {
-  // 実タイマー経路: 短い受付時間で自動クローズを観測する。
-  // タイマー遅延の揺らぎに備え、待ち時間に十分な猶予を持つ。
-  {
-    const limits = resolveLimits({ acceptanceDurationMs: 60 });
-    const acceptance = new AcceptanceController({ limits });
-    const opened = acceptance.open();
-    expect(opened.state).toBe("open");
-    expect(opened.endsAt).not.toBeNull();
-    expect(opened.remainingMs).toBeGreaterThan(0);
-    expect(opened.remainingMs).toBeLessThanOrEqual(60);
-    await sleep(500);
-    expect(acceptance.get().state).toBe("closed");
-  }
-  // 遅延タイマーに依らない経路: 単調時計が期限を超えれば待たずに閉じる。
-  {
-    const ctl = manualClock(1_000_000, 5_000);
-    const limits = resolveLimits({ acceptanceDurationMs: 60_000 });
-    const acceptance = new AcceptanceController({ limits, clock: ctl.clock });
-    acceptance.open();
-    ctl.advanceMono(60_001);
-    expect(acceptance.get().state).toBe("closed");
-    expect(acceptance.isOpen()).toBe(false);
-  }
-});
-
-test("受付の再操作は期限を延長しない", () => {
-  const ctl = manualClock(1_000_000, 5_000);
-  const limits = resolveLimits({ acceptanceDurationMs: 1_000 });
-  const acceptance = new AcceptanceController({ limits, clock: ctl.clock });
-  const first = acceptance.open();
-  expect(first).toEqual({ state: "open", endsAt: 1_001_000, remainingMs: 1_000 });
-  ctl.advanceMono(600);
-  const second = acceptance.open();
-  expect(second).toEqual({ state: "open", endsAt: 1_001_000, remainingMs: 400 });
-  // 閉じた後の再開は新しい期限を持つ。
-  acceptance.close();
-  ctl.advanceMono(100);
-  ctl.advanceWall(700);
-  const reopened = acceptance.open();
-  expect(reopened).toEqual({ state: "open", endsAt: 1_001_700, remainingMs: 1_000 });
-});
-
-test("受付を手動で閉じると保留は失効し開き直しても復活しない", () => {
+test("有効化と無効化は冪等で無効化通知は遷移時だけ送る", () => {
   const { acceptance, store } = setupPairing(undefined, { generateCode: () => "123456" });
-  acceptance.open();
+  let closedCount = 0;
+  acceptance.onClose(() => {
+    closedCount += 1;
+  });
+  expect(acceptance.enable()).toEqual({ enabled: true });
+  // 有効中の再有効化は冪等であり、世代も通知も動かさない。
+  expect(acceptance.enable()).toEqual({ enabled: true });
+  expect(closedCount).toBe(0);
   const created = store.create("conn-a", "https://a.example");
   if (created.status !== "CREATED") throw new Error("保留が作れない。");
-  acceptance.close();
-  // 閉じた後は一覧・取得が空であり、旧要求は未保留になる。
+  expect(acceptance.disable()).toEqual({ enabled: false });
+  expect(closedCount).toBe(1);
+  // 無効中の再無効化は通知を送らない。
+  expect(acceptance.disable()).toEqual({ enabled: false });
+  expect(closedCount).toBe(1);
+  // 再有効化でも無効化通知は増えない。
+  acceptance.enable();
+  expect(closedCount).toBe(1);
+  acceptance.disable();
+  expect(closedCount).toBe(2);
+});
+
+test("受付を無効にすると保留は失効し再有効化で復活しない", () => {
+  const { acceptance, store } = setupPairing(undefined, { generateCode: () => "123456" });
+  acceptance.enable();
+  const created = store.create("conn-a", "https://a.example");
+  if (created.status !== "CREATED") throw new Error("保留が作れない。");
+  acceptance.disable();
+  // 無効化後は一覧・取得が空であり、旧要求は未保留になる。
   expect(store.list()).toEqual([]);
   expect(store.get(created.requestId)).toBeUndefined();
   expect(store.size()).toBe(0);
   expect(store.approve(created.requestId, "123456")).toEqual({ status: "NOT_PENDING" });
   expect(store.reject(created.requestId)).toEqual({ status: "NOT_PENDING" });
-  // 開き直しても旧世代の保留は復活しない。
-  acceptance.open();
+  // 再有効化しても旧世代の保留は復活しない。
+  acceptance.enable();
   expect(store.list()).toEqual([]);
   expect(store.get(created.requestId)).toBeUndefined();
   expect(store.approve(created.requestId, "123456")).toEqual({ status: "NOT_PENDING" });
 });
 
-test("受付を閉じても要求ID採番は初期化しない", () => {
+test("受付を切替えても要求ID採番は初期化しない", () => {
   const { acceptance, store } = setupPairing(undefined, { generateCode: () => "123456" });
-  acceptance.open();
+  acceptance.enable();
   const first = store.create("conn-a", "https://a.example");
   if (first.status !== "CREATED") throw new Error("1件目が作れない。");
-  acceptance.close();
-  acceptance.open();
+  acceptance.disable();
+  acceptance.enable();
   const second = store.create("conn-b", "https://b.example");
   if (second.status !== "CREATED") throw new Error("2件目が作れない。");
   // 失効した旧 ID は再利用しない。
@@ -409,118 +291,88 @@ test("受付を閉じても要求ID採番は初期化しない", () => {
   expect(isPairingRequestId(second.requestId)).toBe(true);
 });
 
-test("承認の失敗理由は未保留・期限・ID・コード・接続の順で区別する", () => {
-  const { ctl, acceptance, store } = setupPairing(
-    { pairingApprovalTimeoutMs: 1_000, acceptanceDurationMs: 60_000 },
-    { generateCode: () => "123456" },
-  );
+test("承認の失敗理由は未保留・書式・不一致・接続の順で区別する", () => {
+  const { acceptance, store } = setupPairing(undefined, { generateCode: () => "123456" });
   // 未知 ID は他条件より先に未保留になる。
   expect(store.approve("pairing-unknown-1", "not-a-code")).toEqual({ status: "NOT_PENDING" });
-  acceptance.open();
+  acceptance.enable();
   const created = store.create("conn-a", "https://a.example");
   if (created.status !== "CREATED") throw new Error("保留が作れない。");
-  // 閉じた世代の要求は受付終了ではなく未保留になる（不可逆に失効する）。
-  acceptance.close();
-  ctl.set(1_000_000, 6_000);
+  // 書式不正は無効であり保留は残る。
+  expect(store.approve(created.requestId, "abc")).toEqual({ status: "INVALID_CODE" });
+  expect(store.get(created.requestId)?.requestId).toBe(created.requestId);
+  // コード不一致は区別され保留は残る。
+  expect(store.approve(created.requestId, "654321")).toEqual({ status: "CODE_MISMATCH" });
+  expect(store.get(created.requestId)?.requestId).toBe(created.requestId);
+  // 無効化で失効した世代の要求は未保留になる（不可逆に失効する）。
+  acceptance.disable();
   expect(store.approve(created.requestId, "123456")).toEqual({ status: "NOT_PENDING" });
-  // 閉じた受付での新規作成は受け付けない。
+  // 無効な受付での新規作成は受け付けない。
   expect(store.create("conn-b", "https://b.example")).toEqual({ status: "ACCEPTANCE_CLOSED" });
 });
 
-test("受付期限の到来を入口で検出すると保留は失効する", () => {
-  const { ctl, acceptance, store } = setupPairing(
-    { pairingApprovalTimeoutMs: 600_000, acceptanceDurationMs: 1_000 },
-    { generateCode: () => "123456" },
-  );
-  acceptance.open();
-  const created = store.create("conn-a", "https://a.example");
-  if (created.status !== "CREATED") throw new Error("保留が作れない。");
-  // 単調時計が受付期限を超えたら、どの入口でも閉として扱い保留は残らない。
-  ctl.advanceMono(1_001);
-  expect(acceptance.isOpen()).toBe(false);
-  expect(store.list()).toEqual([]);
-  expect(store.get(created.requestId)).toBeUndefined();
-  expect(store.size()).toBe(0);
-  expect(store.approve(created.requestId, "123456")).toEqual({ status: "NOT_PENDING" });
-  // 期限をまたぐ新規作成は受け付けず、発行＋承認待ちへのフォールバックもしない。
-  expect(store.create("conn-b", "https://b.example")).toEqual({ status: "ACCEPTANCE_CLOSED" });
-  expect(store.size()).toBe(0);
-});
-
-test("遅延タイマーによる自動クローズでも閉から再開で旧要求は承認できない", async () => {
-  const limits = resolveLimits({ pairingApprovalTimeoutMs: 600_000, acceptanceDurationMs: 60 });
-  const { acceptance, store } = (() => {
-    const inner = new AcceptanceController({ limits });
-    const innerStore = new PairingStore({
-      limits,
-      acceptance: inner,
-      generateCode: () => "123456",
-    });
-    return { acceptance: inner, store: innerStore };
-  })();
-  acceptance.open();
-  const created = store.create("conn-a", "https://a.example");
-  if (created.status !== "CREATED") throw new Error("保留が作れない。");
-  // 自動クローズの遅延揺らぎに備え、十分な猶予をもって待つ。
-  await sleep(500);
-  expect(acceptance.get().state).toBe("closed");
-  expect(store.list()).toEqual([]);
-  expect(store.approve(created.requestId, "123456")).toEqual({ status: "NOT_PENDING" });
-  acceptance.open();
-  expect(store.list()).toEqual([]);
-  expect(store.approve(created.requestId, "123456")).toEqual({ status: "NOT_PENDING" });
-  // 新世代では新規作成ができる。
-  const retry = store.create("conn-b", "https://b.example");
-  expect(retry.status).toBe("CREATED");
-});
-
-test("閉直前の保留は閉で終わり閉後の承認と新規作成の前後関係を保つ", () => {
+test("無効前の承認は成功し承認済みは再有効化で復活しない", () => {
   const { acceptance, store } = setupPairing(undefined, { generateCode: () => "123456" });
-  acceptance.open();
+  acceptance.enable();
   const created = store.create("conn-a", "https://a.example");
   if (created.status !== "CREATED") throw new Error("保留が作れない。");
   const code = store.get(created.requestId)?.code;
   if (code === undefined) throw new Error("保留が見えない。");
-  // 閉前の承認は成功する。
+  // 無効前の承認は成功する。
   expect(store.approve(created.requestId, code)).toEqual({
     status: "APPROVED",
     connectionId: "conn-a",
     origin: "https://a.example",
   });
-  // 承認済みの要求は閉後に未保留であり、再開でも復活しない。
-  acceptance.close();
+  // 承認済みの要求は無効後に未保留であり、再有効化でも復活しない。
+  acceptance.disable();
   expect(store.approve(created.requestId, code)).toEqual({ status: "NOT_PENDING" });
-  acceptance.open();
+  acceptance.enable();
   expect(store.approve(created.requestId, code)).toEqual({ status: "NOT_PENDING" });
 });
 
-test("コード生成中に受付が閉じたら保留を作らず受付終了にする", () => {
-  const ctl = manualClock(1_000_000, 5_000);
+test("コード生成中の無効化と再有効化では旧世代として作らない", () => {
   const limits = resolveLimits();
-  const acceptance = new AcceptanceController({ limits, clock: ctl.clock });
+  const acceptance = new AcceptanceController();
   const store = new PairingStore({
     limits,
-    clock: ctl.clock,
     acceptance,
     generateCode: () => {
-      acceptance.close();
+      acceptance.disable();
+      acceptance.enable();
       return "123456";
     },
   });
-  acceptance.open();
-  // 登録時の世代確認がなければ保留が残ってしまう。
+  acceptance.enable();
+  // 登録時の世代確認がなければ新世代の保留として残ってしまう。
   expect(store.create("conn-a", "https://a.example")).toEqual({ status: "ACCEPTANCE_CLOSED" });
   expect(store.size()).toBe(0);
   expect(store.list()).toEqual([]);
 });
 
+test("コード生成中の無効化だけでも保留を作らない", () => {
+  const limits = resolveLimits();
+  const acceptance = new AcceptanceController();
+  const store = new PairingStore({
+    limits,
+    acceptance,
+    generateCode: () => {
+      acceptance.disable();
+      return "123456";
+    },
+  });
+  acceptance.enable();
+  expect(store.create("conn-a", "https://a.example")).toEqual({ status: "ACCEPTANCE_CLOSED" });
+  expect(store.size()).toBe(0);
+});
+
 test("世代をまたぐ保留の持ち越しは拒否され同一接続は新規作成できる", () => {
   const { acceptance, store } = setupPairing(undefined, { generateCode: () => "123456" });
-  acceptance.open();
+  acceptance.enable();
   const first = store.create("conn-a", "https://a.example");
   if (first.status !== "CREATED") throw new Error("1件目が作れない。");
-  acceptance.close();
-  acceptance.open();
+  acceptance.disable();
+  acceptance.enable();
   // 旧世代の要求は未保留であり、同一接続の新規作成を妨げない。
   expect(store.get(first.requestId)).toBeUndefined();
   expect(store.approve(first.requestId, "123456")).toEqual({ status: "NOT_PENDING" });
@@ -530,20 +382,19 @@ test("世代をまたぐ保留の持ち越しは拒否され同一接続は新�
   expect(second.requestId).not.toBe(first.requestId);
 });
 
-test("複数の保留は受付クローズですべて終わる", () => {
+test("複数の保留は受付無効化ですべて終わる", () => {
   const calls = { count: 0 };
   const { acceptance, store } = setupPairing(undefined, {
     generateCode: queuedCodes(["111111", "222222"], calls),
   });
-  acceptance.open();
+  acceptance.enable();
   const first = store.create("conn-a", "https://a.example");
   const second = store.create("conn-b", "https://b.example");
   if (first.status !== "CREATED" || second.status !== "CREATED") {
     throw new Error("保留が作れない。");
   }
   expect(store.size()).toBe(2);
-  acceptance.close();
-  // 開始待ち・承認待ちはこのモジュールでは保留エントリとして表され、すべて消える。
+  acceptance.disable();
   expect(store.list()).toEqual([]);
   expect(store.size()).toBe(0);
   expect(store.get(first.requestId)).toBeUndefined();
@@ -567,7 +418,7 @@ test("生存判定の例外は内部エラーとして対象だけを終わら�
       return true;
     },
   });
-  acceptance.open();
+  acceptance.enable();
   const good = store.create("conn-good", "https://a.example");
   const bad = store.create("conn-bad", "https://b.example");
   if (good.status !== "CREATED" || bad.status !== "CREATED") {
@@ -587,7 +438,7 @@ test("生存判定の例外は内部エラーとして対象だけを終わら�
 
 test("書式不正のコードは無効で保留は残る", () => {
   const { acceptance, store } = setupPairing(undefined, { generateCode: () => "123456" });
-  acceptance.open();
+  acceptance.enable();
   const created = store.create("conn-a", "https://a.example");
   if (created.status !== "CREATED") throw new Error("保留が作れない。");
   expect(store.approve(created.requestId, "abc")).toEqual({ status: "INVALID_CODE" });
@@ -598,7 +449,7 @@ test("書式不正のコードは無効で保留は残る", () => {
 
 test("コード不一致は区別され保留は残る", () => {
   const { acceptance, store } = setupPairing(undefined, { generateCode: () => "123456" });
-  acceptance.open();
+  acceptance.enable();
   const created = store.create("conn-a", "https://a.example");
   if (created.status !== "CREATED") throw new Error("保留が作れない。");
   expect(store.approve(created.requestId, "654321")).toEqual({ status: "CODE_MISMATCH" });
@@ -613,7 +464,7 @@ test("接続が死んだ保留は承認できず終わる", () => {
     generateCode: queuedCodes(["111111", "222222"], calls),
     isConnectionAlive: (connectionId: string) => alive.has(connectionId),
   });
-  acceptance.open();
+  acceptance.enable();
   const first = store.create("conn-a", "https://a.example");
   const second = store.create("conn-b", "https://b.example");
   if (first.status !== "CREATED" || second.status !== "CREATED") {
@@ -625,12 +476,35 @@ test("接続が死んだ保留は承認できず終わる", () => {
   expect(store.approve(first.requestId, "111111").status).toBe("APPROVED");
 });
 
-test("拒否・取下げ・掃除ができる", () => {
-  const { ctl, acceptance, store } = setupPairing(
-    { pairingApprovalTimeoutMs: 1_000, acceptanceDurationMs: 600_000 },
-    { generateCode: () => "123456" },
-  );
-  acceptance.open();
+test("生存確認中に対象が消えたら承認せず未保留になる", () => {
+  // 切断処理との交差を再現する。生存確認の実行中に対象の保留が除去されても、
+  // 確認結果だけで承認を成立させない。
+  const limits = resolveLimits();
+  const acceptance = new AcceptanceController();
+  let storeRef: PairingStore | undefined;
+  const store = new PairingStore({
+    limits,
+    acceptance,
+    generateCode: () => "123456",
+    isConnectionAlive: (connectionId: string) => {
+      void connectionId;
+      // 確認中に切断相当の除去が割り込む。
+      storeRef?.remove(targetId);
+      return true;
+    },
+  });
+  storeRef = store;
+  acceptance.enable();
+  const created = store.create("conn-a", "https://a.example");
+  if (created.status !== "CREATED") throw new Error("保留が作れない。");
+  const targetId: string = created.requestId;
+  expect(store.approve(targetId, "123456")).toEqual({ status: "NOT_PENDING" });
+  expect(store.size()).toBe(0);
+});
+
+test("拒否・取下げができる", () => {
+  const { acceptance, store } = setupPairing(undefined, { generateCode: () => "123456" });
+  acceptance.enable();
   const created = store.create("conn-a", "https://a.example");
   if (created.status !== "CREATED") throw new Error("保留が作れない。");
   expect(store.reject(created.requestId)).toEqual({ status: "REJECTED" });
@@ -641,29 +515,22 @@ test("拒否・取下げ・掃除ができる", () => {
   // 同一コードの使い回し生成でも生存衝突はない（1件目は拒否済み）。
   expect(store.remove(second.requestId)).toBe(true);
   expect(store.size()).toBe(0);
-
-  const third = store.create("conn-c", "https://c.example");
-  if (third.status !== "CREATED") throw new Error("3件目が作れない。");
-  ctl.advanceMono(5_000);
-  expect(store.sweep()).toBe(1);
-  expect(store.size()).toBe(0);
 });
 
-test("保留枠が満杯なら拒否し期限後に回復する", () => {
-  const { ctl, acceptance, store } = setupPairing({
-    pairingApprovalTimeoutMs: 1_000,
-    acceptanceDurationMs: 600_000,
+test("保留枠が満杯なら拒否し取下げで回復する", () => {
+  const { acceptance, store } = setupPairing({
     maxPendingPairings: 2,
     maxUnauthorizedConnections: 2,
   });
-  acceptance.open();
+  acceptance.enable();
   const first = store.create("conn-a", "https://a.example");
   const second = store.create("conn-b", "https://b.example");
   if (first.status !== "CREATED" || second.status !== "CREATED") {
     throw new Error("保留が作れない。");
   }
   expect(store.create("conn-c", "https://c.example")).toEqual({ status: "PENDING_FULL" });
-  ctl.advanceMono(5_000);
+  // 時間経過ではなく取下げで枠が回復する。
+  expect(store.reject(first.requestId)).toEqual({ status: "REJECTED" });
   const retry = store.create("conn-c", "https://c.example");
   expect(retry.status).toBe("CREATED");
 });
@@ -722,16 +589,16 @@ test("Origin別と全体の上限は独立に判定する", () => {
   expect(limiter.countFor("https://c.example")).toBe(0);
 });
 
-test("受付の開閉でレート履歴はリセットしない", () => {
+test("受付の切替でレート履歴はリセットしない", () => {
   const ctl = manualClock(0, 0);
   const limits = resolveLimits();
-  const acceptance = new AcceptanceController({ limits, clock: ctl.clock });
+  const acceptance = new AcceptanceController();
   const limiter = new PairingRateLimiter({ limits, clock: ctl.clock });
   for (let index = 0; index < 3; index += 1) {
     expect(limiter.checkAndRecord("https://a.example")).toEqual({ allowed: true });
   }
-  acceptance.open();
-  acceptance.close();
+  acceptance.enable();
+  acceptance.disable();
   expect(limiter.countFor("https://a.example")).toBe(3);
   expect(limiter.countTotal()).toBe(3);
 });

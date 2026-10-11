@@ -1,5 +1,5 @@
 /**
- * ブリッジ v0.3 の wire メッセージ型。
+ * ブリッジ v0.4 の wire メッセージ型。
  *
  * フィールド名・型・必須/任意の共有定義はここに置く。外部入力の境界検証は
  * `validate.ts`、動的契約はテスト、上位の設計判断は `design/protocol.md`
@@ -13,7 +13,7 @@
  */
 
 /** プロトコルのバージョン。互換性のない変更時に上げる。 */
-export const PROTOCOL_VERSION = "0.3.0";
+export const PROTOCOL_VERSION = "0.4.0";
 
 /** 比較コードの文字数。ASCII 数字のみで先頭ゼロを保持する。 */
 export const PAIRING_CODE_LENGTH = 6;
@@ -39,7 +39,7 @@ export type SessionDirection = "to_client" | "to_server" | "bidirectional";
 /** 一方向のみの送信方向。`latest` の `direction` に使う。 */
 export type SimplexSessionDirection = Exclude<SessionDirection, "bidirectional">;
 
-/** v0.3 のメッセージ種別。 */
+/** v0.4 のメッセージ種別。 */
 export type MessageType =
   | "pairing_start"
   | "pairing_pending"
@@ -48,7 +48,7 @@ export type MessageType =
   | "data"
   | "error";
 
-/** すべての v0.3 メッセージが持つ共通フィールド。 */
+/** すべての v0.4 メッセージが持つ共通フィールド。 */
 export interface MessageBase {
   /** プロトコルバージョン。`PROTOCOL_VERSION` と一致すること。 */
   readonly v: string;
@@ -68,8 +68,8 @@ export interface PairingStartMessage extends MessageBase {
 /**
  * 比較コードの発行通知。ブリッジが両画面表示用のコードを送る。
  *
- * `requestId` は再利用しない要求識別子、`code` は ASCII 数字 6 文字、
- * `expiresAt` は承認期限の絶対時刻、`expiresInMs` は残り時間である。
+ * `requestId` は再利用しない要求識別子、`code` は ASCII 数字 6 文字である。
+ * 承認要求は時間で失効しない。
  */
 export interface PairingPendingMessage extends MessageBase {
   readonly type: "pairing_pending";
@@ -77,10 +77,6 @@ export interface PairingPendingMessage extends MessageBase {
   readonly requestId: PairingRequestId;
   /** ASCII 数字 6 文字の比較コード。 */
   readonly code: PairingCode;
-  /** 承認期限の絶対時刻。 */
-  readonly expiresAt: number;
-  /** 承認までの残り時間（ミリ秒）。 */
-  readonly expiresInMs: number;
 }
 
 /** 認証成功の応答。ブリッジが接続識別子を払い出す。 */
@@ -180,7 +176,7 @@ export interface ErrorMessage extends MessageBase {
   readonly requestId?: PairingRequestId;
 }
 
-/** v0.3 の全メッセージの合併。 */
+/** v0.4 の全メッセージの合併。 */
 export type BridgeMessage =
   | PairingStartMessage
   | PairingPendingMessage

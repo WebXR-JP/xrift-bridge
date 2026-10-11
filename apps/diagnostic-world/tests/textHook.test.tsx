@@ -53,8 +53,6 @@ const BUILD: DiagnosticBuildInfo = {
 const PAIRING: PairingInfo = {
   requestId: "pair-1",
   code: "123456",
-  expiresAt: 9_999_999_999_999,
-  expiresInMs: 120_000,
 };
 
 const diagnostics: DiagnosticSession[] = [];

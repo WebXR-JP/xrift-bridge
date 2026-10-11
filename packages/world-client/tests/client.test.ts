@@ -6,8 +6,8 @@
  * （`pairing_start`・`pairing_pending`・`auth_ok`）の往復はハーネスが担い、
  * 認可後 mux の相手は製品 transport である。
  *
- * 時間の進行が必要な箇所（開始タイマー・承認 watchdog）は手動スケジューラ
- * で進め、実時間に依存しない。送受信の到着待ちは出来事の到達で確定する。
+ * 送受信の到着待ちは出来事の到達で確定する。認証まわりに時限は設けず、
+ * 取消は `AbortSignal`、通信失敗はソケットの close 通知で扱う。
  */
 import { afterEach, expect, test } from "vite-plus/test";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
@@ -42,52 +42,22 @@ function createTestLogger(): WsMessageStreamOptions["log"] {
 }
 
 /**
- * 手で進めるタイマーと時刻。接続要求とサーバ側 Connection の双方に注入し、
- * 実時間に依存せず期限動作を検証する。
+ * 認可後の transport に渡す差し替え可能なタイマー。発火させずに保持する。
+ *
+ * 認証まわりに時限は無いため、手で進める手段は持たない。
  */
 class ManualScheduler implements TimerScheduler {
   private nextId = 1;
-  private readonly timers = new Map<number, { at: number; handler: () => void }>();
-  nowMs = 0;
+  private readonly timers = new Map<number, () => void>();
 
-  now(): number {
-    return this.nowMs;
-  }
-
-  setTimeout(handler: () => void, delayMs: number): unknown {
+  setTimeout(handler: () => void, _delayMs: number): unknown {
     const id = this.nextId++;
-    this.timers.set(id, { at: this.nowMs + delayMs, handler });
+    this.timers.set(id, handler);
     return id;
   }
 
   clearTimeout(handle: unknown): void {
     this.timers.delete(handle as number);
-  }
-
-  /** 指定ミリ秒まで期限順に発火させる。 */
-  advance(ms: number): void {
-    const target = this.nowMs + ms;
-    for (;;) {
-      let best: number | null = null;
-      let bestAt = Number.POSITIVE_INFINITY;
-      for (const [id, entry] of this.timers) {
-        if (entry.at <= target && entry.at < bestAt) {
-          best = id;
-          bestAt = entry.at;
-        }
-      }
-      if (best === null) break;
-      const entry = this.timers.get(best);
-      if (entry === undefined) break;
-      this.timers.delete(best);
-      this.nowMs = entry.at;
-      entry.handler();
-    }
-    this.nowMs = target;
-  }
-
-  pendingCount(): number {
-    return this.timers.size;
   }
 }
 
@@ -211,7 +181,7 @@ async function waitFor(condition: () => boolean, what: string): Promise<void> {
   }
 }
 
-const PAIRING = { requestId: "pair-1", code: "123456", expiresInMs: 120_000 };
+const PAIRING = { requestId: "pair-1", code: "123456" };
 
 /** ハーネスの操作口。 */
 interface Harness {
@@ -238,8 +208,8 @@ interface Harness {
  * へ流し、text は境界違反として閉じる。reliable 受信は折り返し、latest
  * 受信は受信箱へ格納する。
  */
-function startHarness(options?: { expiresInMs?: number }): Promise<Harness> {
-  const expiresInMs = options?.expiresInMs ?? PAIRING.expiresInMs;
+function startHarness(options?: { autoPairing?: boolean }): Promise<Harness> {
+  const autoPairing = options?.autoPairing ?? true;
   const latestMailbox = new Map<string, unknown>();
   const latestLog: Array<{ sessionId: string; payload: unknown }> = [];
   const receivedReliable: Array<{ sessionId: string; payload: unknown }> = [];
@@ -279,14 +249,13 @@ function startHarness(options?: { expiresInMs?: number }): Promise<Harness> {
       }
       const message = parseBridgeMessage(rawToText(data));
       if (message.type === "pairing_start") {
+        if (!autoPairing) return;
         socket.send(
           stringifyBridgeMessage({
             v: PROTOCOL_VERSION,
             type: "pairing_pending",
             requestId: PAIRING.requestId,
             code: PAIRING.code,
-            expiresAt: Date.now() + expiresInMs,
-            expiresInMs,
           }),
         );
       }
@@ -392,24 +361,6 @@ function startHarness(options?: { expiresInMs?: number }): Promise<Harness> {
   });
 }
 
-/** 何も応答しない試験サーバ（開始タイマーの検証用）。 */
-function startSilentServer(): Promise<{ port: number }> {
-  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-  servers.push(server);
-  server.on("connection", () => {
-    // 何も送らない。
-  });
-  return new Promise((resolvePromise) => {
-    server.on("listening", () => {
-      const address = server.address();
-      if (address === null || typeof address === "string") {
-        throw new Error("試験サーバの待ち受け取得に失敗した。");
-      }
-      resolvePromise({ port: address.port });
-    });
-  });
-}
-
 const servers: WebSocketServer[] = [];
 const providers: SessionProvider[] = [];
 
@@ -441,7 +392,6 @@ async function connectApproved(
   const request = createConnectionRequest({
     endpoint: `ws://127.0.0.1:${harness.port}/v1`,
     scheduler,
-    now: () => scheduler.nowMs,
   });
   const pairing = await request.pairingInfo;
   harness.approve();
@@ -456,7 +406,6 @@ test("比較コード表示・承認・同一WS上のmuxでreliable往復でき�
   const request = createConnectionRequest({
     endpoint: `ws://127.0.0.1:${harness.port}/v1`,
     scheduler,
-    now: () => scheduler.nowMs,
   });
   const pairing = await request.pairingInfo;
   expect(pairing.requestId).toBe("pair-1");
@@ -720,7 +669,6 @@ test("重複するコード通知は管理口の約束を拒否する", async ()
   const request = createConnectionRequest({
     endpoint: `ws://127.0.0.1:${harness.port}/v1`,
     scheduler,
-    now: () => scheduler.nowMs,
   });
   // 表示済みの比較コードは確定しており、拒否に変わらない。
   const pairing = await request.pairingInfo;
@@ -731,8 +679,6 @@ test("重複するコード通知は管理口の約束を拒否する", async ()
       type: "pairing_pending",
       requestId: "pair-1",
       code: "123456",
-      expiresAt: Date.now() + 120_000,
-      expiresInMs: 120_000,
     }),
   );
   await expect(request.sessionProvider).rejects.toMatchObject({ code: "UNEXPECTED_MESSAGE" });
@@ -744,7 +690,6 @@ test("異なる要求のauth_okは拒否する", async () => {
   const request = createConnectionRequest({
     endpoint: `ws://127.0.0.1:${harness.port}/v1`,
     scheduler,
-    now: () => scheduler.nowMs,
   });
   await request.pairingInfo;
   harness.sendText(
@@ -764,7 +709,6 @@ test("認可前のbinaryは境界違反として終了する", async () => {
   const request = createConnectionRequest({
     endpoint: `ws://127.0.0.1:${harness.port}/v1`,
     scheduler,
-    now: () => scheduler.nowMs,
   });
   await request.pairingInfo;
   harness.sendBinary(new Uint8Array([0, 0, 0, 1, 0x7b, 0x7d]));
@@ -792,21 +736,6 @@ test("mux移行後のtextは境界違反として終了する", async () => {
   await harness.observedClose();
 });
 
-test("開始タイマーは手動進行でCONNECT_TIMEOUTになる", async () => {
-  const silent = await startSilentServer();
-  const scheduler = new ManualScheduler();
-  const request = createConnectionRequest({
-    endpoint: `ws://127.0.0.1:${silent.port}/v1`,
-    scheduler,
-    now: () => scheduler.nowMs,
-    timeoutMs: 80,
-  });
-  expect(scheduler.pendingCount()).toBe(1);
-  scheduler.advance(80);
-  await expect(request.pairingInfo).rejects.toMatchObject({ code: "CONNECT_TIMEOUT" });
-  await expect(request.sessionProvider).rejects.toMatchObject({ code: "CONNECT_TIMEOUT" });
-});
-
 test("承認待ちの取消はCONNECT_CANCELLEDになる", async () => {
   const harness = await startHarness();
   const scheduler = new ManualScheduler();
@@ -814,7 +743,6 @@ test("承認待ちの取消はCONNECT_CANCELLEDになる", async () => {
   const request = createConnectionRequest({
     endpoint: `ws://127.0.0.1:${harness.port}/v1`,
     scheduler,
-    now: () => scheduler.nowMs,
     signal: controller.signal,
   });
   // 比較コードの到達（open 往復）より先に同期で取り消すため、両方とも未決着である。
@@ -823,21 +751,38 @@ test("承認待ちの取消はCONNECT_CANCELLEDになる", async () => {
   await expect(request.sessionProvider).rejects.toMatchObject({ code: "CONNECT_CANCELLED" });
 });
 
-test("承認応答のwatchdogは手動進行でAPPROVAL_RESPONSE_TIMEOUTになる", async () => {
-  const harness = await startHarness({ expiresInMs: 50 });
+test("承認前の切断はCONNECTION_CLOSEDになる", async () => {
+  // 比較コードを返さないハーネスで、コード受信前の切断を起こす。
+  const harness = await startHarness({ autoPairing: false });
   const scheduler = new ManualScheduler();
   const request = createConnectionRequest({
     endpoint: `ws://127.0.0.1:${harness.port}/v1`,
     scheduler,
-    now: () => scheduler.nowMs,
   });
-  const pairing = await request.pairingInfo;
-  expect(pairing.expiresInMs).toBe(50);
-  // watchdog は expiresInMs(50) + 猶予(10000) である。
-  scheduler.advance(50 + 10_000);
-  await expect(request.sessionProvider).rejects.toMatchObject({
-    code: "APPROVAL_RESPONSE_TIMEOUT",
-  });
+  // 両方の約束に拒否時の扱いを付け、未処理の拒否を残さない。
+  const pairingSettled = request.pairingInfo.then(
+    () => "resolved",
+    (error: unknown) => error,
+  );
+  const providerSettled = request.sessionProvider.then(
+    () => "resolved",
+    (error: unknown) => error,
+  );
+  // 接続確立の到達を待ってから切断する（到達前は操作口が失敗する）。
+  const deadline = Date.now() + 3_000;
+  for (;;) {
+    try {
+      harness.closeServerSide(1008, "server close before approval");
+      break;
+    } catch {
+      if (Date.now() > deadline) throw new Error("切断の実行に失敗した。");
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+  }
+  await expect(request.pairingInfo).rejects.toMatchObject({ code: "CONNECTION_CLOSED" });
+  await expect(request.sessionProvider).rejects.toMatchObject({ code: "CONNECTION_CLOSED" });
+  expect(await pairingSettled).toMatchObject({ code: "CONNECTION_CLOSED" });
+  expect(await providerSettled).toMatchObject({ code: "CONNECTION_CLOSED" });
 });
 
 test("Blobの受信値を順序どおりバイナリ化できる", async () => {
@@ -852,9 +797,6 @@ test("Blobの受信値を順序どおりバイナリ化できる", async () => {
 test("不正なendpointでは生成できない", () => {
   expect(() => createConnectionRequest({ endpoint: "ws://localhost:3100/v1" })).toThrow(RangeError);
   expect(() => createConnectionRequest({ endpoint: "" })).toThrow(RangeError);
-  expect(() =>
-    createConnectionRequest({ endpoint: "ws://127.0.0.1:3100/v1", timeoutMs: 0 }),
-  ).toThrow(RangeError);
 });
 
 test("取り消し済みの合図では接続を開始しない", async () => {

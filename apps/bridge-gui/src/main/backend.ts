@@ -109,7 +109,7 @@ function assertId(value: unknown, name: string): string {
  * @returns 表示用の受付状態。
  */
 function toAdmission(info: AcceptanceInfo): AdmissionState {
-  return { accepting: info.state === "open", remainingMs: info.remainingMs };
+  return { accepting: info.enabled };
 }
 
 /**
@@ -363,40 +363,39 @@ export class GuiBackend {
   }
 
   /**
-   * ペアリング受付を開く。
+   * ペアリング受付を有効化する。
    *
-   * @returns 開いた後の受付状態。
+   * @returns 有効化後の受付状態。
    * @throws `Error` — 終了中・起動失敗の場合。
    */
-  openAcceptance(): AdmissionState {
+  enableAcceptance(): AdmissionState {
     const { server } = this.operable();
-    const admission = toAdmission(server.openAcceptance());
+    const admission = toAdmission(server.enableAcceptance());
     this.requestNotify();
     return admission;
   }
 
   /**
-   * ペアリング受付を閉じる。開始待ち・承認待ちを終了し、認可済みは維持する。
+   * ペアリング受付を無効化する。認可済みは維持する。
    *
-   * @returns 閉じた後の受付状態。
+   * @returns 無効化後の受付状態。
    * @throws `Error` — 終了中・起動失敗の場合。
    */
-  closeAcceptance(): AdmissionState {
+  disableAcceptance(): AdmissionState {
     const { server } = this.operable();
-    server.closeAcceptance();
-    const admission = toAdmission(server.getAcceptance());
+    const admission = toAdmission(server.disableAcceptance());
     this.requestNotify();
     return admission;
   }
 
   /**
-   * 選択した保留の比較コード・期限を表示用に取得する。
+   * 選択した保留の比較コードを表示用に取得する。
    *
    * 照合のための表示だけであり、取得自体は承認しない。
    * コード一致による自動承認はしない。
    *
    * @param params - 照合対象の要求識別子。
-   * @returns 比較コードと期限。対象がなければ未提供の理由。
+   * @returns 比較コード。対象がなければ未提供の理由。
    * @throws `RangeError` — 要求識別子が空・文字列でない場合。
    * @throws `Error` — 終了中・起動失敗の場合。
    */
@@ -407,7 +406,7 @@ export class GuiBackend {
     if (entry === undefined) {
       return {
         available: false,
-        reason: "対象の保留が無い。期限切れ・承認済み・拒否済みの場合がある。",
+        reason: "対象の保留が無い。承認済み・拒否済みの場合がある。",
       };
     }
     return {
@@ -416,13 +415,11 @@ export class GuiBackend {
       // 比較コードは文字列のまま扱い、数値化しない（先頭ゼロを保持する）。
       code: entry.code,
       displayCode: formatPairingCode(entry.code),
-      expiresAt: entry.expiresAt,
-      expiresInMs: entry.remainingMs,
     };
   }
 
   /**
-   * 保留を比較コード照合で承認する。期限・承認可否は常に server が決める。
+   * 保留を比較コード照合で承認する。承認可否は常に server が決める。
    *
    * @param params - 承認する要求の識別子と比較コード（文字列のまま）。
    * @returns 承認結果。
@@ -1032,7 +1029,7 @@ export class GuiBackend {
   /**
    * 終了する。冪等であり、二度目以降は同じ終了を待つ。
    *
-   * 終了中は新規操作を拒否し、受付を閉じる → 基盤を終了する
+   * 終了中は新規操作を拒否し、受付の無効化 → 基盤を終了する
    * （割当ての失効・中断、購読解除）→ server を閉じる（待受停止）の
    * 順で後始末する。購読・通知予約の解除は最後に行う。
    */
@@ -1052,9 +1049,9 @@ export class GuiBackend {
     this.flushNotify();
     try {
       try {
-        this.server?.closeAcceptance();
+        this.server?.disableAcceptance();
       } catch {
-        // 受付終了の失敗は後始末を止めない。
+        // 受付無効化の失敗は後始末を止めない。
       }
       try {
         this.core?.close();
@@ -1100,16 +1097,11 @@ export class GuiBackend {
       backend: this.status,
       endpoint:
         server === null ? null : { url: server.endpoint, listening: this.status === "ready" },
-      admission:
-        server === null
-          ? { accepting: false, remainingMs: 0 }
-          : toAdmission(server.getAcceptance()),
+      admission: server === null ? { accepting: false } : toAdmission(server.getAcceptance()),
       pending:
         server === null
           ? []
-          : server
-              .listPending()
-              .map((entry) => ({ requestId: entry.requestId, expiresInMs: entry.remainingMs })),
+          : server.listPending().map((entry) => ({ requestId: entry.requestId })),
       connections:
         server === null
           ? []

@@ -23,7 +23,7 @@ const TEST_ORIGIN = "http://localhost:5173";
 
 /**
  * 手で進めるタイマーと時刻。接続要求とサーバ側 Connection の双方に注入し、
- * 実時間に依存せず期限動作を安定させる。通常の送受信はタイマー発火を
+ * 実時間に依存せず keepalive 動作を安定させる。通常の送受信はタイマー発火を
  * 要しないため、進めずに使う。
  */
 class ManualScheduler implements TimerScheduler {
@@ -94,9 +94,7 @@ async function connectApproved(
   const request = createConnectionRequest({
     endpoint: server.endpoint,
     origin: TEST_ORIGIN,
-    timeoutMs: 10_000,
     scheduler,
-    now: () => scheduler.nowMs,
   });
   // 先に待つ pairingInfo が拒否した場合も sessionProvider 側の扱いを確定する。
   void request.sessionProvider.catch(() => {});
@@ -160,7 +158,7 @@ function is往復(payload: unknown, id: string, expected: unknown): boolean {
 test("実bridgeと実world-clientでペアリングから認可muxまで通る", async () => {
   const scheduler = new ManualScheduler();
   const server = await startServer(scheduler);
-  server.openAcceptance();
+  server.enableAcceptance();
   const provider = await connectApproved(server, scheduler);
 
   expect(provider.isAlive).toBe(true);
@@ -174,7 +172,7 @@ test("実bridgeと実world-clientでペアリングから認可muxまで通る",
 test("reliable双方向で一般payloadの往復が通る", async () => {
   const scheduler = new ManualScheduler();
   const server = await startServer(scheduler);
-  server.openAcceptance();
+  server.enableAcceptance();
   const provider = await connectApproved(server, scheduler);
   const stopResponding = attachEchoResponder(server);
   try {
@@ -206,7 +204,7 @@ test("reliable双方向で一般payloadの往復が通る", async () => {
 test("latestのclientからserverへの送信で最新値が受信箱に残る", async () => {
   const scheduler = new ManualScheduler();
   const server = await startServer(scheduler);
-  server.openAcceptance();
+  server.enableAcceptance();
   const provider = await connectApproved(server, scheduler);
 
   const pose = await provider.tryCreateSession({
@@ -227,7 +225,7 @@ test("latestのclientからserverへの送信で最新値が受信箱に残る",
 test("FIN後も他Sessionは継続しConnection終了で認可失効と未決着拒否になる", async () => {
   const scheduler = new ManualScheduler();
   const server = await startServer(scheduler);
-  server.openAcceptance();
+  server.enableAcceptance();
   const provider = await connectApproved(server, scheduler);
   const connectionId = provider.connectionId;
   const stopResponding = attachEchoResponder(server);
@@ -292,7 +290,7 @@ test("FIN後も他Sessionは継続しConnection終了で認可失効と未決着
 test("再接続で新しいconnectionIdで再承認し送受信できる", async () => {
   const scheduler = new ManualScheduler();
   const server = await startServer(scheduler);
-  server.openAcceptance();
+  server.enableAcceptance();
   const stopResponding = attachEchoResponder(server);
 
   const first = await connectApproved(server, scheduler);
@@ -336,7 +334,7 @@ test("再接続で新しいconnectionIdで再承認し送受信できる", async
 test("管理切断は対象のみ終了し他に波及しない", async () => {
   const scheduler = new ManualScheduler();
   const server = await startServer(scheduler);
-  server.openAcceptance();
+  server.enableAcceptance();
 
   const first = await connectApproved(server, scheduler);
   const second = await connectApproved(server, scheduler);

@@ -11,6 +11,6 @@ test("接続要求は比較コードと管理口の約束を返す", () => {
   request.sessionProvider.catch(() => undefined);
 });
 
-test("対応するプロトコルバージョンは0.3である", () => {
-  expect(PROTOCOL_VERSION).toBe("0.3.0");
+test("対応するプロトコルバージョンは0.4である", () => {
+  expect(PROTOCOL_VERSION).toBe("0.4.0");
 });

@@ -23,7 +23,6 @@ import {
   type SessionProvider,
 } from "world-client";
 import {
-  DIAGNOSTIC_CONNECT_TIMEOUT_MS,
   DIAGNOSTIC_PROBE_TIMEOUT_MS,
   DiagnosticSession,
   errorHint,
@@ -50,8 +49,6 @@ const BUILD: DiagnosticBuildInfo = {
 const PAIRING: PairingInfo = {
   requestId: "pair-1",
   code: "123456",
-  expiresAt: 9_999_999_999_999,
-  expiresInMs: 120_000,
 };
 
 afterEach(() => {
@@ -646,8 +643,6 @@ test("証拠 JSON に比較コード・payload を含めない", async () => {
   expect(text).not.toContain("123456");
   expect(text).not.toContain("123 456");
   expect(text).not.toContain("payload");
-  expect(session.toResultJson().connectTimeoutMs).toBe(DIAGNOSTIC_CONNECT_TIMEOUT_MS);
-  expect(DIAGNOSTIC_CONNECT_TIMEOUT_MS).toBe(120_000);
   expect(session.toResultJson().probeTimeoutMs).toBe(DIAGNOSTIC_PROBE_TIMEOUT_MS);
 });
 
@@ -747,10 +742,7 @@ test("dispose で未完了要求を結果不明にし、以降の操作と通知
 
 test("エラー符号に対応する案内を返す", () => {
   expect(errorHint("PAIRING_REJECTED")).toContain("承認");
-  expect(errorHint("PAIRING_EXPIRED")).toContain("期限");
-  expect(errorHint("APPROVAL_RESPONSE_TIMEOUT")).toContain("承認応答");
   expect(errorHint("CONNECT_CANCELLED")).toContain("取り消");
-  expect(errorHint("CONNECT_TIMEOUT")).toContain("120秒");
   expect(errorHint("CONNECTION_CLOSED")).toContain("新規");
   expect(errorHint("NOT_AUTHORIZED")).toContain("認証");
   expect(errorHint("PROBE_TIMEOUT")).toContain("応答");
@@ -764,14 +756,10 @@ test("実在する全符号に案内が付く", () => {
   // 送らない符号（`PAIRING_LIMIT`・`PAIRING_CODE_UNAVAILABLE`）は含めない。
   const realCodes = [
     "PAIRING_REJECTED",
-    "PAIRING_EXPIRED",
     "ACCEPTANCE_CLOSED",
     "PENDING_FULL",
     "CODE_GENERATION_FAILED",
-    "PAIRING_START_TIMEOUT",
     "DUPLICATE_PAIRING_START",
-    "APPROVAL_RESPONSE_TIMEOUT",
-    "CONNECT_TIMEOUT",
     "CONNECT_CANCELLED",
     "CONNECTION_CLOSED",
     "ORIGIN_RATE_LIMITED",
@@ -805,6 +793,8 @@ test("実在する全符号に案内が付く", () => {
   // 未知符号には案内を付けない。
   expect(errorHint("UNKNOWN_CODE")).toBeUndefined();
   // 送らない符号には案内を持たない（死に分岐の混入検出）。
+  // 時限廃止で送られなくなった符号も含む。
   expect(errorHint("PAIRING_LIMIT")).toBeUndefined();
+  expect(errorHint("PAIRING_EXPIRED")).toBeUndefined();
   expect(errorHint("PAIRING_CODE_UNAVAILABLE")).toBeUndefined();
 });

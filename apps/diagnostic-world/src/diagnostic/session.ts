@@ -24,9 +24,6 @@ import {
 } from "world-client";
 import type { DiagnosticBuildInfo } from "../build-info.ts";
 
-/** 診断画面の接続待機（ミリ秒）。比較コード受信前の待機上限である。 */
-export const DIAGNOSTIC_CONNECT_TIMEOUT_MS = 120_000;
-
 /** echo 往復に使う Session の論理名。 */
 export const ECHO_SESSION_ID = "diag-echo";
 
@@ -57,10 +54,6 @@ export interface PairingView {
   readonly requestId: string;
   /** ASCII 数字 6 文字の比較コード。 */
   readonly code: string;
-  /** 承認期限の絶対時刻。 */
-  readonly expiresAt: number;
-  /** 承認までの残り時間（ミリ秒）。 */
-  readonly expiresInMs: number;
 }
 
 /** 診断実行時の自ウィンドウの環境。呼び出し側が一度だけ採取する。 */
@@ -112,7 +105,6 @@ export interface DiagnosticSnapshot {
   readonly phase: DiagnosticPhase;
   readonly connectionState: DiagnosticConnectionState;
   readonly endpoint: string;
-  readonly connectTimeoutMs: number;
   /** 表示中の比較コード。画面表示のみに使う。証拠には含めない。 */
   readonly pairing: PairingView | null;
   readonly lastError: DiagnosticErrorView | null;
@@ -159,11 +151,8 @@ export function errorHint(code: string): string | undefined {
       "bridge 側で承認し直すこと。"
     );
   }
-  if (code === "PAIRING_EXPIRED") {
-    return "比較コードの承認期限が切れた。新規に接続開始して新しい比較コードで再試行すること。";
-  }
   if (code === "ACCEPTANCE_CLOSED") {
-    return "bridge の受付が閉じている。bridge の状態を確認してから再試行すること。";
+    return "bridge の受付が有効でない。bridge の状態を確認してから再試行すること。";
   }
   if (code === "PENDING_FULL") {
     return "bridge の承認待ちが満杯である。不要な承認待ちを片付けてから新規に接続開始すること。";
@@ -171,23 +160,8 @@ export function errorHint(code: string): string | undefined {
   if (code === "CODE_GENERATION_FAILED") {
     return "比較コードの生成に失敗した。bridge の状態を確認して新規に接続開始すること。";
   }
-  if (code === "PAIRING_START_TIMEOUT") {
-    return "開始待ちが時間切れになった。bridge との接続を確認して新規に接続開始すること。";
-  }
   if (code === "DUPLICATE_PAIRING_START") {
     return "開始要求が重複した。接続状態を確認し、必要なら取消してから再試行すること。";
-  }
-  if (code === "APPROVAL_RESPONSE_TIMEOUT") {
-    return (
-      "承認応答が時間内に届かない。bridge 側の表示と診断側の比較コードを照合し、" +
-      "期限切れなら新規に接続開始すること。"
-    );
-  }
-  if (code === "CONNECT_TIMEOUT") {
-    return (
-      "120秒待機でも比較コードが届かない。bridge の起動と Origin 許可（`--dev --origin`）を" +
-      "確認し、再試行すること。"
-    );
   }
   if (code === "CONNECT_CANCELLED") {
     return "接続試行を取り消した。再試行する場合は新規に接続開始すること。";
@@ -347,7 +321,6 @@ export class DiagnosticSession {
       phase: this.phase,
       connectionState: this.connectionState,
       endpoint: this.endpoint,
-      connectTimeoutMs: DIAGNOSTIC_CONNECT_TIMEOUT_MS,
       pairing: this.pairing === null ? null : { ...this.pairing },
       lastError: this.lastError,
       echo: { ...this.echo },
@@ -391,8 +364,8 @@ export class DiagnosticSession {
   /**
    * 接続を開始し、比較コードの発行を受けて人間の承認成立を待つ。ボタン操作時のみ呼ぶこと。
    *
-   * 秘密値は扱わない。接続待機の 120 秒は比較コード受信前の待機上限である
-   * （bridge の認証待ち制限は変えない）。応答用 Session（`diag-echo`・
+   * 秘密値は扱わない。比較コード受信待ちに時限は設けず、取消は `cancel`、
+   * 通信失敗はソケットの close 通知で扱う。応答用 Session（`diag-echo`・
    * `diag-ping`）の準備完了で成功する。
    *
    * @returns 認可成立時に解決する。
@@ -422,7 +395,6 @@ export class DiagnosticSession {
     // ここで渡すと DOM の overload と食い違うため渡さない。
     const request = this.createRequest({
       endpoint: this.endpoint,
-      timeoutMs: DIAGNOSTIC_CONNECT_TIMEOUT_MS,
       signal: aborter.signal,
     });
     const settlement = new Promise<void>((resolve, reject) => {
@@ -668,7 +640,6 @@ export class DiagnosticSession {
       endpoint: snapshot.endpoint,
       phase: snapshot.phase,
       connectionState: snapshot.connectionState,
-      connectTimeoutMs: snapshot.connectTimeoutMs,
       probeTimeoutMs: this.probeTimeoutMs,
       pairingShown: snapshot.pairing !== null,
       lastError: snapshot.lastError,
@@ -1020,8 +991,6 @@ function toPairingView(pairing: PairingInfo): PairingView {
   return {
     requestId: pairing.requestId,
     code: pairing.code,
-    expiresAt: pairing.expiresAt,
-    expiresInMs: pairing.expiresInMs,
   };
 }
 

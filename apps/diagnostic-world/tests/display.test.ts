@@ -25,7 +25,6 @@ function idleSnapshot(): DiagnosticSnapshot {
     phase: "idle",
     connectionState: "disconnected",
     endpoint: "ws://127.0.0.1:3100/v1",
-    connectTimeoutMs: 120_000,
     pairing: null,
     lastError: null,
     echo: { status: "none" },
@@ -43,8 +42,6 @@ function pairingSnapshot(): DiagnosticSnapshot {
     pairing: {
       requestId: "pair-1",
       code: "123456",
-      expiresAt: 9_999_999_999_999,
-      expiresInMs: 120_000,
     },
   };
 }

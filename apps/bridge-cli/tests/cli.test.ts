@@ -2,7 +2,7 @@
  * CLI 対話命令の検証。
  *
  * `bridge-server` の公開 API で起動した実サーバに対し、`apps/bridge-cli` の
- * `handleCommand` が受付開閉・保留表示・承認/拒否・状態表示を行うことを確かめる。
+ * `handleCommand` が受付の有効化・無効化・保留表示・承認/拒否・状態表示を行うことを確かめる。
  * パッケージからアプリを参照できないため、送受信の試験器具は
  * `bridge-server` 側から必要最小限だけ複製して自己完結させる。
  *
@@ -182,12 +182,12 @@ function pairingStartMessage(): string {
   return JSON.stringify({ v: PROTOCOL_VERSION, type: "pairing_start" });
 }
 
-test("CLIでaccept open・pending・approve・reject・statusが動く", async () => {
+test("CLIでaccept enable・pending・approve・reject・statusが動く", async () => {
   const server = await startServer({ generateCode: () => "000042" });
   const captured = captureOutput();
   const out = captured.out;
-  handleCommand("accept open", server, out);
-  expect(captured.output.join("")).toContain("state=open");
+  handleCommand("accept enable", server, out);
+  expect(captured.output.join("")).toContain("enabled=true");
 
   const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
   socket.send(pairingStartMessage());
@@ -216,7 +216,7 @@ test("CLIでaccept open・pending・approve・reject・statusが動く", async (
 
   handleCommand("status", server, out);
   const statusText = captured.output.join("");
-  expect(statusText).toContain("acceptance=open");
+  expect(statusText).toContain("acceptance=enabled");
   expect(statusText).toContain("authorized=1");
   expect(statusText).toContain("pairingSuccess=1");
 
@@ -231,8 +231,8 @@ test("CLIでaccept open・pending・approve・reject・statusが動く", async (
   const rejectError = await second.collector.waitForErrorCode("PAIRING_REJECTED");
   expect(rejectError.message.type).toBe("error");
 
-  handleCommand("accept close", server, out);
-  expect(captured.output.join("")).toContain("state=closed");
+  handleCommand("accept disable", server, out);
+  expect(captured.output.join("")).toContain("enabled=false");
   handleCommand("pending", server, out);
   expect(captured.output.join("")).toContain("pending: (none)");
   expect(handleCommand("quit", server, out)).toBe(true);
@@ -244,12 +244,12 @@ test("CLIのstatusは受付状態・各接続数・理由別拒否集計を出�
   const out = captured.out;
   handleCommand("status", server, out);
   let text = captured.output.join("");
-  expect(text).toContain("acceptance=closed");
+  expect(text).toContain("acceptance=disabled");
   expect(text).toContain("connections=0");
-  server.openAcceptance();
+  server.enableAcceptance();
   handleCommand("status", server, out);
   text = captured.output.join("");
-  expect(text).toContain("acceptance=open");
+  expect(text).toContain("acceptance=enabled");
   // 拒否を1件起こすと集計に出る。
   await expect(openRaw(server.endpoint, "https://evil.example")).rejects.toThrow();
   handleCommand("status", server, out);
