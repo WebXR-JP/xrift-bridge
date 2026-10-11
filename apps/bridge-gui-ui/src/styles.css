@@ -1,3 +1,8 @@
+/* 管理画面の意匠はこの大域 stylesheet に集める。 */
+
+/* 複数部品の template で共有する `.card` 等は大域に置く。部品 CSS */
+/* （既定の擬似 encapsulation）は自 template にしか届かないため、子部品の */
+/* 要素には適用されない。vanilla の `index.css` と見た目を揃える。 */
 * {
   box-sizing: border-box;
 }
@@ -9,4 +14,139 @@ body {
   background: #f1f5f9;
   color: #1e293b;
   min-height: 100vh;
+}
+
+.container {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 32px 20px;
+}
+
+h1 {
+  font-size: 1.5rem;
+  margin-bottom: 4px;
+}
+
+.subtitle {
+  color: #64748b;
+  margin-top: 0;
+}
+
+.card {
+  background: #fff;
+  border-radius: 12px;
+  padding: 20px 24px;
+  margin: 20px 0;
+  box-shadow: 0 2px 8px rgb(15 23 42 / 0.08);
+}
+
+h2 {
+  font-size: 1.1rem;
+  margin-top: 0;
+}
+
+dl > div {
+  display: grid;
+  grid-template-columns: 160px 1fr;
+  gap: 8px;
+  padding: 6px 0;
+  border-top: 1px solid #e2e8f0;
+}
+
+dt {
+  color: #64748b;
+}
+
+dd {
+  margin: 0;
+}
+
+.row {
+  display: flex;
+  gap: 8px;
+}
+
+button {
+  font-size: 0.85rem;
+  padding: 4px 12px;
+}
+
+/* 比較コード入力欄（子部品の行で使う）。 */
+input {
+  font-size: 0.85rem;
+  padding: 4px 8px;
+  width: 140px;
+}
+
+ul {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 0.9rem;
+  color: #475569;
+}
+
+li {
+  margin: 4px 0;
+}
+
+/* 一覧（子部品で `entries` として使う）。 */
+.entries {
+  margin: 0;
+  padding-left: 20px;
+  font-size: 0.9rem;
+}
+
+.entries li {
+  margin: 8px 0;
+}
+
+/* 比較コードの表示（子部品の行で使う）。 */
+.code {
+  margin-top: 4px;
+  font-size: 1.1rem;
+  font-weight: 700;
+}
+
+/* 操作失敗の表示（本文は載せない）。 */
+.error {
+  margin: 0;
+  min-height: 1.2em;
+  font-size: 0.85rem;
+  color: #b91c1c;
+}
+
+/* 補足（子画面の説明などで使う）。 */
+.note {
+  font-size: 0.85rem;
+  color: #64748b;
+  margin-top: 0;
+}
+
+#spike-host {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+#spike-host electrobun-webview {
+  width: 100%;
+  height: 240px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+}
+
+/* 実プラグイン子画面の配置先（vanilla の plugin-container 相当）。 */
+#plugin-host {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+#plugin-host electrobun-webview {
+  width: 100%;
+  height: 320px;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
 }

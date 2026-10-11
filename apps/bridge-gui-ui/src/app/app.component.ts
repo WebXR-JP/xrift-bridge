@@ -34,7 +34,6 @@ import { TextCardComponent } from "./text-card.component.ts";
     TextCardComponent,
   ],
   templateUrl: "./app.component.html",
-  styleUrl: "./app.component.css",
 })
 export class AppComponent implements OnInit {
   /** 採用中の表示状態。 */
