@@ -28,6 +28,9 @@ vp run -r build
 pnpm --filter bridge-gui gui:prepare
 ```
 
+`hutch` が `PATH` に無い環境では `export PATH="$HOME/.hutch/bin:$PATH"` を足すこと
+（`gui:prepare`・`gui:run`・`gui:build` は `hutch` 呼び出しのため）。
+
 `apps/bridge-gui/.hutch/`・`build/`・`artifacts/` は生成物のためコミット対象外である。
 
 ## 入口
@@ -86,14 +89,17 @@ apps/bridge-gui/
 - 段0: 足場は成立。`hutch electrobun prepare` で devkit を再現でき、
   `tsc`・`vp run -r build`・`vp test`・`vp check` が通る。
   独立 lockfile（`hutch.lock`）・持ち込み `node_modules` は無い。
-- 段1: Bun main へ切り替えて独立起動3回で往復成立を確認した（`records/seg1-run*.log`）。
+- 段1: Bun main へ切り替えて独立起動3回で往復成立を確認した（`records/seg1-run*.log`。
+  当該ログは `*.log` 無視のためリポジトリに含まれず、ローカル参照である）。
   各回とも `getSnapshot` 応答の Webview 到達・`viewReady` の main 到達・
   main push 3回での revision 3到達・同一 revision 再取得の無視を、
   main ログと Webview 側の受信・採用記録の両方で確認した。
   途中で画面側の選択子重複（`##revision`）による表示失敗を見つけ、呼び出し側を
-  修正した。以降の2回は異常ログ無しである。Cottontail 0.7.1 での不成立
+  修正した。以降の2回は異常ログ無しである。Cottontail 0.7.1 での RPC 不成立の観測
   （Webview→main の RPC 要求が `RPC request timed out.` になる。無改変の公式
-  `notes-app` でも再現）は別版調査を行わず記録のみとする。
+  `notes-app` でも再現）は、当該組合せ依存を示唆する所見として
+  検証計画（`docs/verification/bridge-app.md`「観測・解釈・未確認の整理」）に残し、
+  別版調査を行わず記録のみとする。
 - 段2: `GuiBackend`（同一 main プロセス内で `createBridgeServer` 既定 port 3100・
   `PRODUCTION_ORIGIN` → `createBridgeAppCore`）で最小実結線した。
   `tests/backend.test.ts`（backend 直接・実 WebSocket・既存 `ws`・yamux）が通る:
@@ -101,25 +107,38 @@ apps/bridge-gui/
   echo 同形返送・ping→pong→運用切断で一覧除外→再接続で新要求・再承認
   （承認前の管理口未解決を含む）、未割当て reliable への送信中断、
   引数・終了中検証、終了後の同一ポート再束縛（待受解放の証明）。
-- 段2発煙（`records/seg2-smoke.log`）: Bun main で実バックエンドが `3100` 待受けし、
+- 段2発煙（`records/seg2-smoke.log`。同ログは `*.log` 無視のためリポジトリに含まれず、
+  ローカル参照である）: Bun main で実バックエンドが `3100` 待受けし、
   遷移規則下で管理画面の読込み・`getSnapshot`・`viewReady` が通ることを確認した。
   SIGTERM 経路では取消し→後始末（`shutdown` 記録）→再要求で待受ポートが解放され、
   アプリ固有プロセスの残存が無いことを確認した。
-- 目視確認（画面描画・操作フロー・閉窓経路の終了・stable 包装の実行）は
+- 目視確認（画面描画・操作フロー・閉窓経路の終了）は
   人間の GUI セッションで行うこと（下記の人間確認待ち）。
   比較コード本文・業務 payload をログに残さない運用は変えないこと。
+- 段5・段6（2026-10-11）: stable 包装を生成し、配布物からの起動で
+  `getSnapshot`／`viewReady` の往復（main 側記録）・正常終了（待受解放・残存なし）を
+  確認した。寸法・メモリ・起動時間を初期計測した（条件・絶対値・未確認の分離を含む）。
+  詳細は検証計画（`docs/verification/bridge-app.md`「Electrobun スパイクの記録（段5〜6）」）を正本とし、
+  生ログは `records/seg5-*.log`・`records/seg6-*.log`
+  （`*.log` 無視のためリポジトリに含まれないローカル参照）に残す。
 
 ## 人間確認待ち
 
-GUI 目視が要るため、この環境では未確認である。人間の GUI セッションで
-`pnpm --filter bridge-gui gui:run`（開発実行）を行い、以下を確認すること。
+GUI 目視・GUI 操作が要るため、この環境では未確認である。人間の GUI セッションで
+以下を確認すること。判定材料の確定値は検証計画
+（`docs/verification/bridge-app.md`「人間の判断に必要な材料」）にまとめてある。
 
 - 管理画面の描画（状態・受付・保留・接続・セッション・割当て・受信記録）。
 - 受付の開閉、保留の比較コード表示、目視照合後の承認・取り下げ、
   接続の切断、セッションへの診断割当て、アプリ終了ボタン。
 - 操作後の `stateChanged` push による表示更新（改訂番号の進行）。
+- 配布物（`build/stable-macos-arm64/XRift Bridge.app`。dmg は `artifacts/`）からの起動手順:
+  1. `open "apps/bridge-gui/build/stable-macos-arm64/XRift Bridge.app"` で起動する。
+     初回は自己展開（`Application Support/net.xrift.bridge-gui` への書込み）が入る。
+  2. 管理画面で保留の比較コードを目視照合して承認し、診断割当て後の echo/ping 往復を確認する。
+  3. 終了後に `nc -z 127.0.0.1 3100` が失敗することと、Activity Monitor 等で
+     `XRift Bridge` が残っていないことを見る。
 - 閉窓・通常終了で待受ポート（`3100`）が解放され、プロセスが残らないこと。
   手順: 終了後に `nc -z 127.0.0.1 3100` が失敗することと、Activity Monitor 等で
   `XRift Bridge` が残っていないことを見る。
-- `pnpm --filter bridge-gui gui:build`（stable 包装）の実行。
-- 配布サイズ・常駐メモリの記録（採用判断の材料。未計測）。
+- 可視 Webview 条件下でのメモリ・起動時間の再測定（採用判断の材料。窓なし条件の値は計測済み）。
