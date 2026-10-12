@@ -1,4 +1,4 @@
-# bridge-gui（Electrobun 実現性スパイク・段0〜2）
+# bridge-gui-main（Electrobun 実現性スパイク・段0〜2）
 
 XRift Bridge の管理画面。Electrobun 2.x＋Bun main を前提とする。
 管理画面（mainview）の正本は Angular 実装（`apps/bridge-gui-ui`）である。
@@ -26,7 +26,7 @@ XRift Bridge の管理画面。Electrobun 2.x＋Bun main を前提とする。
 pnpm install
 # Hutch の生成物（.hutch/devkit）を用意する（初回・pin 変更時。
 # `electrobun/*` の型解決に要るため `vp run -r build` より先に行う）
-pnpm --filter bridge-gui gui:prepare
+pnpm --filter bridge-gui-main gui:prepare
 # 上流の dist を作る（段2以降で backend が参照するため。Angular の production AOT を含む）
 vp run -r build
 ```
@@ -39,7 +39,7 @@ vp run -r build
 fresh 直後でも `vp run -r build` が vp のキャッシュに救われて通る場合がある。
 失敗の再現確認はキャッシュ外（`--no-cache`）か `tsc` 直叩きで行うこと。
 
-`apps/bridge-gui/.hutch/`・`build/`・`artifacts/` は生成物のためコミット対象外である。
+`apps/bridge-gui-main/.hutch/`・`build/`・`artifacts/` は生成物のためコミット対象外である。
 
 ## 入口
 
@@ -48,12 +48,12 @@ fresh 直後でも `vp run -r build` が vp のキャッシュに救われて通
 `hutch.config.ts` の ADR コメントを参照。GUI の起動・包装は opt-in の入口を使う。
 
 ```sh
-pnpm --filter bridge-gui gui:run          # 開発実行（単発。Angular dev 生成＋dev 包装＋起動）
-pnpm --filter bridge-gui gui:run:console  # 上記に開発観測（ngDebugProbe）と開発口を足す
-pnpm --filter bridge-gui gui:build        # 配布用に包装（stable。Angular prod 生成＋stable 包装）
+pnpm --filter bridge-gui-main gui:run          # 開発実行（単発。Angular dev 生成＋dev 包装＋起動）
+pnpm --filter bridge-gui-main gui:run:console  # 上記に開発観測（ngDebugProbe）と開発口を足す
+pnpm --filter bridge-gui-main gui:build        # 配布用に包装（stable。Angular prod 生成＋stable 包装）
 
 # ローカル開発ワールド（http://localhost:5173）から接続して確認する場合
-BRIDGE_GUI_DEV_ORIGINS=http://localhost:5173 pnpm --filter bridge-gui gui:run
+BRIDGE_GUI_DEV_ORIGINS=http://localhost:5173 pnpm --filter bridge-gui-main gui:run
 ```
 
 管理画面の実体は `apps/bridge-gui-ui/`（UI 専用に TS 6.0 系を局所固定。
@@ -71,7 +71,7 @@ GUI から UI への `workspace:*` ビルド依存を明示し、再帰 build �
 開発観測は `BRIDGE_GUI_NG_DEBUG=1`（既定無効）である。
 Angular 画面の起動時間（main 起動→`viewReady` で測る）・配布物寸法の差分は
 未計測である（`ng:build:*` の wall を起動時間としない）。
-`ng:build:*` 実行時の `File '../bridge-gui/.hutch/devkit/api/browser/global.d.ts'
+`ng:build:*` 実行時の `File '../bridge-gui-main/.hutch/devkit/api/browser/global.d.ts'
 not found in TypeScript compilation` は既知の非致命の警告である
 （終了符号 0 に影響しない。devkit 内の型宣言が ng の編集単位外にあるための表示であり、
 型検査は `build`（`tsc --noEmit`）で行う）。
@@ -114,7 +114,7 @@ AI からの自動操作用の loopback 接続口。Bun main 上で完結し、�
   終了経路）で待受を必ず閉じる。
 
 ```sh
-pnpm --filter bridge-gui gui:run:console  # dev 包装＋開発口で起動
+pnpm --filter bridge-gui-main gui:run:console  # dev 包装＋開発口で起動
 # 起動記録の port・token を見て curl 等で叩く（例: 受付の無効化）
 curl -s -H "Authorization: Bearer <token>" -H 'Content-Type: application/json' \
   -d '{"op":"disableAcceptance","correlationId":"probe-1"}' \
@@ -133,7 +133,7 @@ curl -s -H "Authorization: Bearer <token>" -H 'Content-Type: application/json' \
 ## 構成（段2時点の最小実結線）
 
 ```text
-apps/bridge-gui/
+apps/bridge-gui-main/
   package.json hutch.config.ts electrobun.config.ts tsconfig.json
   src/main/index.ts        # バックエンド組立て、終了集約、RPC接続
   src/main/backend.ts      # bridge-server＋bridge-app-core の組立て（GuiBackend）
@@ -226,7 +226,7 @@ apps/bridge-gui/
   生存セッションへの診断割当て（テキスト表示用は対象外表示）、固定テキストカード、子画面埋込み、終了。
 - 操作後の `stateChanged` push による表示更新（改訂番号の進行）。
 - ローカル開発ワールドとの往復の再現手順:
-  1. `BRIDGE_GUI_DEV_ORIGINS=http://localhost:5173 pnpm --filter bridge-gui gui:run`
+  1. `BRIDGE_GUI_DEV_ORIGINS=http://localhost:5173 pnpm --filter bridge-gui-main gui:run`
      で GUI を起動する。
   2. 別ターミナルで `vp run diagnostic-world#dev` を起動し、ブラウザで
      `http://localhost:5173` を開く。
@@ -238,7 +238,7 @@ apps/bridge-gui/
 残る未確認は以下である。
 
 - 配布物（`build/stable-macos-arm64/XRift Bridge.app`。dmg は `artifacts/`）からの導線:
-  1. `open "apps/bridge-gui/build/stable-macos-arm64/XRift Bridge.app"` で起動する。
+  1. `open "apps/bridge-gui-main/build/stable-macos-arm64/XRift Bridge.app"` で起動する。
      初回は自己展開（`Application Support/net.xrift.bridge-gui` への書込み）が入る。
   2. 管理画面で保留の比較コードを目視照合して承認し、診断割当て後の echo/ping 往復を確認する。
   3. 終了後に `nc -z 127.0.0.1 3100` が失敗することと、Activity Monitor 等で

@@ -1,6 +1,6 @@
 // @hutch cli=0.27.1 cottontail=0.7.1
 export default {
-  // 依存解決はルート pnpm に一本化する。bridge-gui 独自の install タスクは持たず、
+  // 依存解決はルート pnpm に一本化する。bridge-gui-main 独自の install タスクは持たず、
   // hutch.lock も作らない。初回はルートで `pnpm install` すること。
   // ADR: Hutch 既定のリゾルバ（hutch.lock）を使わない理由は、独立 lockfile の
   // 持ち込み禁止と二重解決の防止である。外部管理に寄せる場合も pnpm を経由する。

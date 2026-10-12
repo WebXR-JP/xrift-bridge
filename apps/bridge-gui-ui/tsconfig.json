@@ -24,9 +24,9 @@
     "paths": {
       // ADR: Electrobun の npm 配布物は view バンドル時に Hutch が解決するため、
       // node_modules には存在しない。型検査と Angular のバンドル解決のために
-      // bridge-gui の devkit 配置へ写す（pin 変更時は配置を確認すること）。
-      "electrobun/view": ["../bridge-gui/.hutch/devkit/api/browser/index.ts"],
-      "electrobun/rpc": ["../bridge-gui/.hutch/devkit/api/sdks/main/entries/rpc.ts"]
+      // bridge-gui-main の devkit 配置へ写す（pin 変更時は配置を確認すること）。
+      "electrobun/view": ["../bridge-gui-main/.hutch/devkit/api/browser/index.ts"],
+      "electrobun/rpc": ["../bridge-gui-main/.hutch/devkit/api/sdks/main/entries/rpc.ts"]
     }
   },
   "include": ["src/**/*", "tests/**/*"]

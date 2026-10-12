@@ -2,7 +2,7 @@
   "name": "bridge-gui-ui",
   "version": "0.0.0",
   "private": true,
-  "description": "bridge-gui 管理画面の Angular 実装（mainview）。",
+  "description": "bridge-gui-main 管理画面の Angular 実装（mainview）。",
   "scripts": {
     "build": "ng build --configuration production",
     "test": "vp test && ng test --watch=false",

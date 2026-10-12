@@ -304,7 +304,7 @@ export interface OperationAck {
 // 構造型であり、`ElectrobunRPCSchema` 制約（`{bun, webview}`）も構造適合で
 // 満たせる。そのため契約ではこの素朴な構造型で表し、`electrobun/rpc` を
 // import しない（契約パッケージのビルドを `.hutch` に依存させない）。
-// 制約が構造型を拒否する場合は bridge-gui 側のアダプタで最小の型写像を行う。
+// 制約が構造型を拒否する場合は bridge-gui-main 側のアダプタで最小の型写像を行う。
 type RpcSchema<Requests, Messages> = {
   requests: Requests;
   messages: Messages;

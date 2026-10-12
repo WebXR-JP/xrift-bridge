@@ -11,7 +11,7 @@
  * `channel` を読み、`dev` で非包装・`stable`／`canary` で包装とする。
  * 実測した包装物の記録は、dev 包装の `Resources/version.json` が
  * `"channel":"dev"`、stable 包装の `Resources/metadata.json` が
- * `"channel":"stable"` である（`apps/bridge-gui/build/` で確認）。
+ * `"channel":"stable"` である（`apps/bridge-gui-main/build/` で確認）。
  * devkit の読取り失敗時の代替（dev 扱い）は開く方向の代替になるため、
  * ここでは採用しない。不明時は閉じたままにする。
  * 隔離実行は構造で保つ（`127.0.0.1` 束縛・実行ごとの乱数 token・

@@ -7,7 +7,7 @@
 ```mermaid
 flowchart LR
     S["生存セッション<br/>(bridge-server が公開)"] -->|"割当て"| P["プラグインインスタンス<br/>(bridge-app-core が管理)"]
-    P -->|"埋込み表示"| G["管理画面・比較コード照合<br/>(bridge-gui-ui + bridge-gui)"]
+    P -->|"埋込み表示"| G["管理画面・比較コード照合<br/>(bridge-gui-ui + bridge-gui-main)"]
     G --- B["GUIバックエンド<br/>(両者を組み立て)"]
     B --- S
     G --- C["契約<br/>(bridge-gui-contract)"]
@@ -23,7 +23,7 @@ flowchart LR
 | `packages/bridge-app-core`     | プラグイン定義とインスタンス管理、接続口の適合判定、割当て・解除、失効処理、UI非依存の状態と操作、同梱プラグイン     |
 | `packages/bridge-gui-contract` | 契約（表示DTO・限定操作・純粋な微少ランタイム）。`management`／`plugin-instance`／`plugin-spike` の subpath を分ける |
 | `apps/bridge-gui-ui`           | 管理画面（mainview）の Angular 実装。契約だけを参照する                                                              |
-| `apps/bridge-gui`              | 起動・終了、比較コード照合、Angular 画面の包装・表示、プラグインUIの埋込み、デスクトップ機能、画面との通信           |
+| `apps/bridge-gui-main`         | 起動・終了、比較コード照合、Angular 画面の包装・表示、プラグインUIの埋込み、デスクトップ機能、画面との通信           |
 
 - `bridge-app-core` はサーバー管理境界を受け取り、GUIライブラリを参照しない。GUIのバックエンドが両者を組み立てる。
 - 埋込み画面（Webview）へ `BridgeServer` や生の `Session` を渡さない。表示用データと限定した操作だけを渡す。
@@ -89,7 +89,7 @@ flowchart LR
 - 反映確認は「表示用状態に反映した」ことであり、送信 API の成功や描画完了とは区別する。同時実行は一件とし、期限切れ・切断は結果不明として自動再送しない。不正な応答は対象セッションのみ中断し、不正入力は送信前に拒否する。
 - 形状・論理名・上限・応答期限・検証規則は契約モジュール（[`packages/bridge-app-core/src/text-contract.ts`](../packages/bridge-app-core/src/text-contract.ts)の公開 subpath）を正本とし、ここでは複製しない。契約モジュールはブラウザ安全な構成とし、ワールドは root import でサーバー依存を引き込まない。公開範囲は[`packages/bridge-app-core/package.json`](../packages/bridge-app-core/package.json)の exports を正本とする。プラグイン本体の振る舞いは[`packages/bridge-app-core/src/plugins/text/plugin.ts`](../packages/bridge-app-core/src/plugins/text/plugin.ts)、ワールド側の受信・表示は[`apps/diagnostic-world/src/text/`](../apps/diagnostic-world/src/text/)を正本とする。
 - 割当ては固定プラグイン一種類・同時に一インスタンスとし、開始通知での自動割当てはしない。明示操作でのみ行い、論理名と capability が一致する唯一の候補が全接続を通じて一件だけの場合に割り当て、候補ゼロ・複数は理由付きで拒否する（先着順・一件目・Origin 推測をしない）。解除・インスタンス削除は対象セッションを中断する。再接続後は再承認・新規セッション・新規の明示割当てを要求し、同名でも旧操作口・未完了要求・本文を引き継がない。論理名の一致は内容互換性や真正性の証明ではない。
-- 画面は埋込みの子画面（プラグイン UI 埋込み）で行い、管理 Webview 内の暫定 UI は使わない。同じ表示データ・限定操作の境界を再利用する。Webview へ生のサーバー・セッションを渡さない方針を維持し、本文は snapshot・ログ・永続保存に残さない。表示データと限定操作の正本は `bridge-gui-contract` の `management` subpath（[`packages/bridge-gui-contract/src/management.ts`](../packages/bridge-gui-contract/src/management.ts)）、組立ては[`apps/bridge-gui/src/main/backend.ts`](../apps/bridge-gui/src/main/backend.ts)を正本とする。
+- 画面は埋込みの子画面（プラグイン UI 埋込み）で行い、管理 Webview 内の暫定 UI は使わない。同じ表示データ・限定操作の境界を再利用する。Webview へ生のサーバー・セッションを渡さない方針を維持し、本文は snapshot・ログ・永続保存に残さない。表示データと限定操作の正本は `bridge-gui-contract` の `management` subpath（[`packages/bridge-gui-contract/src/management.ts`](../packages/bridge-gui-contract/src/management.ts)）、組立ては[`apps/bridge-gui-main/src/main/backend.ts`](../apps/bridge-gui-main/src/main/backend.ts)を正本とする。
 - 診断割当てはテキスト表示用セッションを対象外とし、テキスト割当てと排他にする。
 
 ## 管理画面の Angular 移行（設計変更）

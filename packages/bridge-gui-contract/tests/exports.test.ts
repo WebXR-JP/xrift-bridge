@@ -30,7 +30,7 @@ import {
 // 公開 subpath の実行時表面を固定する。名前付き import 自体が存在の保証に
 // なり（欠ければ収集時に落ちる）、本体では種類と規則・属性値の一致だけを
 // 確かめる。型だけの輸出は型検査（`test:types` と利用者の `tsc`）で固定し、
-// 個々の振る舞いは利用者側（bridge-gui の tests）が新境界経由で検証する。
+// 個々の振る舞いは利用者側（bridge-gui-main の tests）が新境界経由で検証する。
 
 test("management の公開値が関数として取り出せる", () => {
   expect(typeof selectNewer).toBe("function");

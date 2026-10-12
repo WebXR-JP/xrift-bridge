@@ -43,14 +43,14 @@ apm_modules/
 # XRift CLI local metadata
 .xrift/
 
-# Electrobun / Hutch（apps/bridge-gui の生成物。コミット対象外）
+# Electrobun / Hutch（apps/bridge-gui-main の生成物。コミット対象外）
 .hutch/
 .cottontail-tmp/
 build/
 artifacts/
 *.tsbuildinfo
 # 管理画面の Hutch 包装用写し（`gui:run`・`gui:build` が Angular の `dist` から作る。正本は `apps/bridge-gui-ui/dist/`）
-apps/bridge-gui/src/mainview-dist/
+apps/bridge-gui-main/src/mainview-dist/
 
 # Python
 __pycache__/

@@ -91,7 +91,7 @@
 
 ## Electrobun スパイクの記録（段5〜6・2026-10-11 実施済み）
 
-段0-2（開発実行での RPC 往復・実結線・冪等終了。`apps/bridge-gui/README.md` に記録）に続く、
+段0-2（開発実行での RPC 往復・実結線・冪等終了。`apps/bridge-gui-main/README.md` に記録）に続く、
 stable 配布物の確認（段5）と初期計測（段6）の結果である。計画節・MVP第1段の記録は書き換えない。
 比較コード本文・業務 payload は残さない（以下は版・寸法・時刻・改訂番号のみ）。
 
@@ -109,15 +109,15 @@ stable 配布物の確認（段5）と初期計測（段6）の結果である�
 
 ### 段5: stable 配布物の確認
 
-- 生成: `pnpm --filter bridge-gui gui:build`（`hutch` 経由、`--env=stable`）で生成した。
+- 生成: `pnpm --filter bridge-gui-main gui:build`（`hutch` 経由、`--env=stable`）で生成した。
   注意として `hutch` は `PATH` に無く `~/.hutch/bin` を足す必要があった（手順は README に残す）。
   包装時に `macOS icon source not found: .../icon.iconset` の警告が出る（icon 未用意。動作には影響なし）。
 - 成果物（2026-10-11 09:41 生成）:
-  - `apps/bridge-gui/artifacts/macos-arm64-XRiftBridge.dmg`: 21296346 B（20800 KiB）。
+  - `apps/bridge-gui-main/artifacts/macos-arm64-XRiftBridge.dmg`: 21296346 B（20800 KiB）。
     sha256 `3ae535b70538922454973c4efee63b355051b6ecb6ee2b27cf2551d47b6c5a92`
-  - `apps/bridge-gui/artifacts/stable-macos-arm64-XRiftBridge.app.tar.zst`: 20572275 B（20092 KiB）。
+  - `apps/bridge-gui-main/artifacts/stable-macos-arm64-XRiftBridge.app.tar.zst`: 20572275 B（20092 KiB）。
     sha256 `bb73d6c09cd7e420071509f1edfa3986bd8c1a7e4f4b40635267c63dc5d1ba18`
-  - `apps/bridge-gui/artifacts/stable-macos-arm64-update.json`: 213 B。
+  - `apps/bridge-gui-main/artifacts/stable-macos-arm64-update.json`: 213 B。
     内容は channel `stable`・version `0.0.1`・hash `qu1nngpidtpo`。
     sha256 `3f8144eb783bc0533919c5ad3de21026f414c630890a4cfd99e88260ad9741e4`
   - `build/stable-macos-arm64/XRift Bridge.app`: ビルド直後は launcher＋tar.zst のみ（du 約 20M）。
@@ -127,7 +127,7 @@ stable 配布物の確認（段5）と初期計測（段6）の結果である�
     終了後も残る。`~/Library/Caches` への追加は無い。
 - 配布物からの起動: 展開済み `.app` の launcher を直接実行し、以下を main 側記録で確認した
   （stable は Webview console 転送が無いため、画面側の受信・採用記録は開発版の代理確認で補う。
-  生ログの例は `apps/bridge-gui/records/seg5-packaged-t1.log`。当該ログは `*.log` 無視のため
+  生ログの例は `apps/bridge-gui-main/records/seg5-packaged-t1.log`。当該ログは `*.log` 無視のため
   リポジトリに含まれず、ローカル参照である）。
   - backend が `3100` で待受けする（`nc` で確認）。
   - `Webview が遷移した: views://mainview/index.html` → `Webview の文書を読み込んだ`（dom-ready）。
@@ -249,7 +249,7 @@ MVP第1段（セッション公開＋診断移設）の実施結果を記録す�
 - 応答の出所: echo／ping 応答を生成するのは `packages/bridge-app-core/src/plugins/diagnostic.ts` のみであり、`packages/bridge-server/src` に診断参照は無い（`diagnostic-handler.ts` は削除済み）。`status` の診断項目は `server.getStats()` ではなく CLI の `startDiagnostics()` 由来である。
 - 契約の実測: `getStats()` のキーから診断項目が消えていること、reliable Session にサーバ側の既定応答が無いこと、認可前・切替中はセッションが公開されないこと、session 終了で一覧・取得から外れ終了通知が一度だけであることを確認した。
 - 制限・未再現（失敗側の記録）: `packages/bridge-server/tests/server.test.ts` の「受付の自動クローズでも開始待ちは失効する」（実タイマー系）が負荷時に間欠失敗するとの報告があったが、41 回の再現試行で未再現であり、本変更の経路（セッション公開・診断・管理購読）と非交差と確認した。解消の主張はしない。（注記：当該テストは受付トグル化に伴い撤去済み）
-- 未計測（第1段の対象外）: `apps/bridge-gui`（Electrobun）そのもの、実 GUI→実ワールドの往復、native↔webview の RPC、埋込み UI、パッケージング／配布サイズ・常駐メモリは未計測である。`design/bridge-app.md`「基盤の観測」の該当項目は未計測である。
+- 未計測（第1段の対象外）: `apps/bridge-gui-main`（Electrobun）そのもの、実 GUI→実ワールドの往復、native↔webview の RPC、埋込み UI、パッケージング／配布サイズ・常駐メモリは未計測である。`design/bridge-app.md`「基盤の観測」の該当項目は未計測である。
 
 ## GUI 自動検証（段5: 固定文面の送信往復）
 
@@ -268,14 +268,14 @@ MVP第1段（セッション公開＋診断移設）の実施結果を記録す�
 - 目的: 実ワールドの表示板への文面表示、切断・再接続時の再承認・再割当ての必要性、表示板の文面消去を目視で確認する。
 - 手順:
   1. `vp run -r build` で上流をビルドする。
-  2. 開発用 Origin を許可して画面を起動する（`BRIDGE_GUI_DEV_ORIGINS=http://localhost:5173 pnpm --filter bridge-gui gui:run`）。
+  2. 開発用 Origin を許可して画面を起動する（`BRIDGE_GUI_DEV_ORIGINS=http://localhost:5173 pnpm --filter bridge-gui-main gui:run`）。
   3. 別端末で `vp run diagnostic-world#dev` を起動し、閲覧器で `http://localhost:5173` を開く。
   4. ワールドの操作盤から接続を開始し、表示された照合符号を画面の保留表示と目視照合して承認する。
   5. 認可後、画面の「テキスト送信」でワールド側の専用セッションへ割り当て、本文を入力して送信し、表示板に本文が出ることを確認する。
   6. 接続を切断・再接続し、再承認と再割当てが必要であること、表示板の本文が消えることを確認する。
   7. 終了後に `nc -z 127.0.0.1 3100` が失敗し、プロセスが残らないことを確認する。
 - 注意: 表示板はワールド内の描画面であり文書構造（DOM）から本文を読めないため、この確認は目視に限る。`xrift.json` の説明文は更新済みであり、本番へ上げる場合は新版として改めて審査を受ける（過去の審査通過を流用しない）。
-- 正本分担: 環境の前提・不調時の対応は `apps/bridge-gui/README.md` と `apps/diagnostic-world/README.md` を参照する。
+- 正本分担: 環境の前提・不調時の対応は `apps/bridge-gui-main/README.md` と `apps/diagnostic-world/README.md` を参照する。
 
 ## プラグイン UI 埋込み（段0 スパイク）
 
@@ -289,4 +289,4 @@ MVP第1段（セッション公開＋診断移設）の実施結果を記録す�
   - 終了時の回収: 窓を閉じると全マウントが終了理由で回収され（`count=2`）、`shutdown` 後に待受ポートが解放され、プロセスの残存は無い。
 - 解釈: 同時二枚での混線なし・識別子非再利用・終了時全回収は、当該試作条件の範囲で確認できる。
 - 未確認・対象外: 実プラグイン（テキスト・診断）の結線、配布物（stable）での同梱 UI 動作、生成途中の削除・管理画面再読込みの実機挙動、可視条件のメモリは扱わない。実ワールド表示は人間確認手順に分ける。
-- 備考: 段0 の SDK 適合層（`apps/bridge-gui/src/main/spike-rpc.ts`）は `created` 後に個体別 RPC を結線して `loadURL` する形であり、同梱 SDK 2.0.2 のソースに基づく。
+- 備考: 段0 の SDK 適合層（`apps/bridge-gui-main/src/main/spike-rpc.ts`）は `created` 後に個体別 RPC を結線して `loadURL` する形であり、同梱 SDK 2.0.2 のソースに基づく。

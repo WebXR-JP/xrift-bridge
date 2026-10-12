@@ -1,5 +1,5 @@
 {
-  "name": "bridge-gui",
+  "name": "bridge-gui-main",
   "version": "0.0.0",
   "private": true,
   "description": "XRift Bridge の管理画面（Electrobun によるデスクトップ GUI。段1スパイク）。",
