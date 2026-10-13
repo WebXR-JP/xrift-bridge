@@ -120,11 +120,10 @@ export function createManagementRpc(
         approvePairing: ({ requestId, code }) => backend.approvePairing({ requestId, code }),
         rejectPairing: ({ requestId }) => backend.rejectPairing({ requestId }),
         disconnectConnection: ({ connectionId }) => backend.disconnectConnection({ connectionId }),
-        assignDiagnostics: ({ localSessionId }) => backend.assignDiagnostics({ localSessionId }),
-        assignText: () => backend.assignText(),
-        sendText: ({ localSessionId, instanceId, text }) =>
-          backend.sendText({ localSessionId, instanceId, text }),
-        unassignText: () => backend.unassignText(),
+        assignPlugin: ({ pluginKind, localSessionId }) =>
+          backend.assignPlugin({ pluginKind, localSessionId }),
+        unassignPlugin: ({ instanceId, localSessionId, portId }) =>
+          backend.unassignPlugin({ instanceId, localSessionId, portId }),
         spikeCreate: () => spike.createSpikeMount(),
         spikeDestroy: ({ mountId }) => spike.destroySpikeMount(mountId),
         spikePush: ({ mountId }) => spike.pushSpikeMount(mountId),

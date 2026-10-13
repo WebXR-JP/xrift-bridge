@@ -29,9 +29,10 @@ function prepareServiceStub() {
     approvePairing: vi.fn(async (_requestId: string, _code: string) => {}),
     rejectPairing: vi.fn(async (_requestId: string) => {}),
     disconnectConnection: vi.fn(async (_connectionId: string) => {}),
-    assignDiagnostics: vi.fn(async (_localSessionId: string) => {}),
-    assignText: vi.fn(async () => {}),
-    unassignText: vi.fn(async () => {}),
+    assignPlugin: vi.fn(async (_pluginKind: string, _localSessionId?: string) => {}),
+    unassignPlugin: vi.fn(
+      async (_instanceId: string, _localSessionId: string, _portId: string) => {},
+    ),
     quit: vi.fn(async () => {}),
     createSpike: vi.fn(async () => {}),
     pushSpike: vi.fn(async (_mountId: string) => {}),

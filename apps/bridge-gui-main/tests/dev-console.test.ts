@@ -42,17 +42,10 @@ function makeSnapshot(revision: number): ManagementSnapshot {
     pending: [],
     connections: [],
     sessions: [],
-    plugins: { instances: [], assignments: [] },
-    text: {
-      localSessionId: null,
-      instanceId: null,
-      canSend: false,
-      pendingId: null,
-      lastResult: null,
-      stats: { attempts: 0, acknowledged: 0, unknown: 0 },
-    },
+    plugins: { kinds: [], instances: [], assignments: [] },
     pluginMounts: [],
     pluginMountFailures: [],
+    pluginNavigationRules: [],
   };
 }
 
@@ -75,10 +68,14 @@ function prepareContext(observer?: DevConsoleObserver): {
     approvePairing: () => ({ status: "APPROVED", connectionId: "c1", origin: "o" }),
     rejectPairing: () => ({ status: "REJECTED" }),
     disconnectConnection: () => ({ ok: true as const }),
-    assignDiagnostics: () => ({ localSessionId: "s1", instanceId: "i1", portId: "diagnostic" }),
-    assignText: () => ({ localSessionId: "s1", instanceId: "i1", portId: "text" }),
-    sendText: async () => ({ status: "acknowledged" as const, id: "t1" }),
-    unassignText: () => ({ ok: true as const }),
+    assignPlugin: () => ({
+      pluginKind: "diagnostic",
+      pluginId: "diagnostic",
+      localSessionId: "s1",
+      instanceId: "i1",
+      portId: "diagnostic",
+    }),
+    unassignPlugin: () => ({ released: true, issues: [] }),
   };
   const spike = {
     createSpikeMount: () => ({ mountId: "spike-1", initialUrl: "views://blank" }),
@@ -326,4 +323,39 @@ test("操作全体の期限超過は定型の失敗応答になり秘密を載�
   expect((json as { ok: boolean }).ok).toBe(false);
   expect((json as { error: string }).error).toBe(DEV_OP_TIMEOUT_ERROR);
   expect(text).not.toContain(SECRET);
+});
+
+test("旧管理操作名は許可外として拒否する", async () => {
+  const { context, upstream } = prepareContext();
+  for (const op of ["assignDiagnostics", "assignText", "sendText", "unassignText"]) {
+    const response = await handleDevConsoleRequest(
+      makeRequest("/dev/op", { body: JSON.stringify({ op }) }),
+      upstream,
+      context,
+    );
+    expect(response.status).toBe(404);
+  }
+  // 新操作は受け付ける。
+  const assigned = await handleDevConsoleRequest(
+    makeRequest("/dev/op", {
+      body: JSON.stringify({
+        op: "assignPlugin",
+        params: { pluginKind: "diagnostic", localSessionId: "s1" },
+      }),
+    }),
+    upstream,
+    context,
+  );
+  expect(assigned.status).toBe(200);
+  const released = await handleDevConsoleRequest(
+    makeRequest("/dev/op", {
+      body: JSON.stringify({
+        op: "unassignPlugin",
+        params: { instanceId: "i1", localSessionId: "s1", portId: "diagnostic" },
+      }),
+    }),
+    upstream,
+    context,
+  );
+  expect(released.status).toBe(200);
 });

@@ -2,17 +2,15 @@ import { expect, test } from "vite-plus/test";
 import { selectNewer } from "bridge-gui-contract/management";
 import {
   buildPluginBlankUrl,
+  buildPluginNavigationRules,
   buildPluginViewUrl,
   parsePluginMountId,
   PLUGIN_BLANK_PATH,
   PLUGIN_INITIAL_FETCH_ATTEMPTS,
   PLUGIN_INITIAL_FETCH_RETRY_MS,
-  PLUGIN_NAVIGATION_RULES,
-  PLUGIN_NAVIGATION_RULES_ATTRIBUTE,
   PLUGIN_PENDING_TIMEOUT_MS,
   pluginMountKindOf,
   selectNewerInstanceSnapshot,
-  TEXT_SEND_REQUEST_TIMEOUT_MS,
 } from "bridge-gui-contract/plugin-instance";
 import {
   buildBlankUrl,
@@ -33,20 +31,30 @@ test("management の公開値が関数として取り出せる", () => {
   expect(typeof selectNewer).toBe("function");
 });
 
-test("plugin-instance の公開表面が欠けておらず規則と属性値が一致する", () => {
+test("plugin-instance の公開表面が欠けておらず規則生成が公開される", () => {
   expect(typeof selectNewerInstanceSnapshot).toBe("function");
   expect(typeof buildPluginBlankUrl).toBe("function");
   expect(typeof buildPluginViewUrl).toBe("function");
+  expect(typeof buildPluginNavigationRules).toBe("function");
   expect(typeof parsePluginMountId).toBe("function");
   expect(typeof pluginMountKindOf).toBe("function");
   expect(typeof PLUGIN_BLANK_PATH).toBe("string");
-  expect(typeof PLUGIN_NAVIGATION_RULES_ATTRIBUTE).toBe("string");
-  expect(typeof TEXT_SEND_REQUEST_TIMEOUT_MS).toBe("number");
   expect(typeof PLUGIN_PENDING_TIMEOUT_MS).toBe("number");
   expect(typeof PLUGIN_INITIAL_FETCH_ATTEMPTS).toBe("number");
   expect(typeof PLUGIN_INITIAL_FETCH_RETRY_MS).toBe("number");
-  // タグに載せる属性値は規則の直列化と一致する（不一致では子画面の遷移許可がずれる）。
-  expect(JSON.parse(PLUGIN_NAVIGATION_RULES_ATTRIBUTE)).toEqual([...PLUGIN_NAVIGATION_RULES]);
+  // 遷移規則の直書き定数は持たず、登録由来の生成だけを公開する。
+  // タグに載せる値は backend の snapshot 配布で受け取る。
+  expect(
+    buildPluginNavigationRules([
+      "views://plugin-text/index.html",
+      "views://plugin-diagnostic/index.html",
+    ]),
+  ).toEqual([
+    "^*",
+    "views://plugin-host/*",
+    "views://plugin-text/*",
+    "views://plugin-diagnostic/*",
+  ]);
 });
 
 test("plugin-spike の公開表面が欠けておらず規則と属性値が一致する", () => {

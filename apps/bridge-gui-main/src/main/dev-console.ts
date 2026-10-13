@@ -227,18 +227,17 @@ export async function runDevOperation(
       return backend.rejectPairing({ requestId: params["requestId"] });
     case "disconnectConnection":
       return backend.disconnectConnection({ connectionId: params["connectionId"] });
-    case "assignDiagnostics":
-      return backend.assignDiagnostics({ localSessionId: params["localSessionId"] });
-    case "assignText":
-      return backend.assignText();
-    case "sendText":
-      return backend.sendText({
+    case "assignPlugin":
+      return backend.assignPlugin({
+        pluginKind: params["pluginKind"],
         localSessionId: params["localSessionId"],
-        instanceId: params["instanceId"],
-        text: params["text"],
       });
-    case "unassignText":
-      return backend.unassignText();
+    case "unassignPlugin":
+      return backend.unassignPlugin({
+        instanceId: params["instanceId"],
+        localSessionId: params["localSessionId"],
+        portId: params["portId"],
+      });
     case "spikeCreate":
       return spike.createSpikeMount();
     case "spikeDestroy":

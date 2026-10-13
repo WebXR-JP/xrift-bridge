@@ -25,14 +25,17 @@
 
   <app-session-list
     [sessions]="snapshot()?.sessions ?? []"
-    (assignRequested)="onAssignDiagnostics($event)"
+    [diagnosticBindings]="diagnosticBindings"
+    (assignRequested)="onAssignPlugin($event)"
+    (unassignRequested)="onUnassignPlugin($event)"
   />
 
   <app-text-card
-    [text]="snapshot()?.text ?? null"
+    [owned]="textOwned"
+    [fetched]="fetched"
     [error]="textError()"
-    (assignRequested)="onAssignText()"
-    (unassignRequested)="onUnassignText()"
+    (assignRequested)="onAssignPlugin({ pluginKind: 'text' })"
+    (unassignRequested)="onUnassignPlugin($event)"
   />
 
   <section class="card">

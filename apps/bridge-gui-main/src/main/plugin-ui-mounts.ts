@@ -6,8 +6,8 @@
  * の適合層が `BrowserView` に結び付け、ここでは対応付けと照合・退役だけを担う。
  * 単体検証は偽の子画面・偽チャネル・偽 backend で行える。
  *
- * 現割当ての要望読み・子画面 URL・限定射影への到達は静的登録表
- * （`plugin-companions.ts`）の記述子に委譲し、ここに種別分岐を持たない。
+ * 現割当ての要望読み・子画面 URL・限定射影への到達は backend ごとに生成した
+ * 登録表（`plugin-companions.ts`）の記述子に委譲し、ここに種別分岐を持たない。
  * 新しい companion の追加は登録だけで行い、この層の分岐追加は要らない。
  *
  * 対応付けの方針は以下である。
@@ -37,35 +37,22 @@ import type {
 } from "bridge-gui-contract/plugin-instance";
 import {
   buildPluginBlankUrl,
+  buildPluginViewUrl,
   parsePluginMountId,
   PLUGIN_PENDING_TIMEOUT_MS,
 } from "bridge-gui-contract/plugin-instance";
-import { PluginInstanceBinder, type InstanceProjectionBackend } from "./plugin-instances.ts";
-import {
-  defaultPluginCompanionRegistry,
-  type CompanionRequestEnv,
-  type PluginCompanionRegistry,
-} from "./plugin-companions.ts";
+import { PluginInstanceBinder } from "./plugin-instances.ts";
+import type { CompanionRequestEnv } from "bridge-gui-plugin-sdk/companion";
+import type { PluginCompanionRegistry } from "./plugin-companions.ts";
 
 /**
- * 子画面配置の対応付けが読む backend の最小口。`GuiBackend` が満たす。
+ * 子画面配置の対応付けが読む backend の最小口。
  *
- * 個体別射影（`InstanceProjectionBackend`）と合わせ、現割当ての有無だけを
- * 問う。管理 snapshot 全体・他個体の情報・候補一覧・保留情報は返さない。
+ * 外部変化の通知だけを型で求める。現割当て・個体別射影への到達は
+ * companion が factory で capture した限定口で行い、backend 経由では
+ * 扱わない。管理 snapshot 全体・他個体の情報・候補一覧・保留情報は返さない。
  */
 export interface PluginUiBindingBackend {
-  /**
-   * 現在のテキスト束縛を返す。
-   *
-   * @returns 現割当てがある場合の束縛情報。無ければ `null`。
-   */
-  getTextBinding(): { instanceId: string; localSessionId: string; portId: string } | null;
-  /**
-   * 現在の診断束縛の一覧を返す。
-   *
-   * @returns 現割当てがある束縛情報の一覧。無ければ空配列。
-   */
-  listDiagnosticBindings(): Array<{ instanceId: string; localSessionId: string; portId: string }>;
   /**
    * 外部状態（子画面配置など）の変化を状態通知に載せる。
    *
@@ -193,23 +180,19 @@ export class PluginUiCoordinator implements CompanionRequestEnv {
 
   /**
    * @param parentWebviewId - 管理画面 Webview の識別子。親の照合に使う。
-   * @param backend - 現割当てと個体別射影の最小口。
+   * @param backend - 外部変化の通知口。
    * @param createChannel - 個体別チャネルの工場。SDK 依存はここに閉じる。
    * @param now - 時刻取得。生成待ち・準備完了待ちの期限用であり、試験で差し替える。
-   * @param registry - 種別トークンから記述子を引く登録表。省略時は既定の共有表。
+   * @param registry - 種別トークンから記述子を引く登録表。backend ごとに生成して渡す。
    */
   constructor(
     private readonly parentWebviewId: number,
-    private readonly backend: PluginUiBindingBackend & InstanceProjectionBackend,
+    private readonly backend: PluginUiBindingBackend,
     private readonly createChannel: PluginUiChannelFactory,
     private readonly now: () => number = Date.now,
-    private readonly registry: PluginCompanionRegistry = defaultPluginCompanionRegistry,
+    private readonly registry: PluginCompanionRegistry,
   ) {
-    this.binder = new PluginInstanceBinder(
-      { isLive: (mountId) => this.isLive(mountId) },
-      backend,
-      registry,
-    );
+    this.binder = new PluginInstanceBinder({ isLive: (mountId) => this.isLive(mountId) }, registry);
   }
 
   /** 対応付け中の件数。記録用である。 */
@@ -522,7 +505,7 @@ export class PluginUiCoordinator implements CompanionRequestEnv {
     for (const companion of this.registry.list()) {
       let bindings: Array<{ instanceId: string; localSessionId: string; portId: string }>;
       try {
-        bindings = companion.listDesired(this.backend);
+        bindings = companion.listDesired();
       } catch {
         // 取得の失敗はその種別だけ置き、対応付けの整理を止めない。
         // 呼び出し側がこの種別を対象外にするため、ここで記録する。
@@ -544,7 +527,8 @@ export class PluginUiCoordinator implements CompanionRequestEnv {
 
   /**
    * 現割当てに配置を作る。識別子は単調な連番で発行し、使い回さない。
-   * 子画面 URL は登録表の記述子が作り、種別分岐を持たない。
+   * 子画面 URL は登録表の解決済み view パスから汎用の組み立てで作り、
+   * 種別分岐を持たない。
    *
    * @param want - 配置する現割当ての要望。
    */
@@ -566,7 +550,7 @@ export class PluginUiCoordinator implements CompanionRequestEnv {
       throw new RangeError(`未登録の種別への配置である: ${want.kind}`);
     }
     const initialUrl = buildPluginBlankUrl(mountId);
-    const viewUrl = companion.buildViewUrl(mountId);
+    const viewUrl = buildPluginViewUrl(companion.viewPath, mountId);
     this.mounts.set(mountId, {
       mountId,
       kind: want.kind,

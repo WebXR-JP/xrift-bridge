@@ -2,6 +2,7 @@ import Electrobun, { BrowserView, BrowserWindow, type ElectrobunEvent } from "el
 import { PRODUCTION_ORIGIN } from "bridge-server";
 import { parsePluginMountId } from "bridge-gui-contract/plugin-instance";
 import { GuiBackend } from "./backend.ts";
+import { registerBundledPlugins } from "../composition/bundled-plugins.ts";
 import {
   DEV_CONSOLE_OPT_IN_ENV,
   shouldStartDevConsole,
@@ -52,7 +53,11 @@ const backendOptions =
   devOrigins.length === 0 ? undefined : { allowedOrigins: [PRODUCTION_ORIGIN, ...devOrigins] };
 
 // GUI バックエンドの生成は非同期であるため、到達前から共有する。
-const backendPromise: Promise<GuiBackend> = GuiBackend.create(backendOptions);
+// 同梱プラグインの選択と登録順は composition root が宣言し、
+// backend は受け取った登録関数だけを使う。
+const backendPromise: Promise<GuiBackend> = GuiBackend.create(backendOptions, {
+  registerPlugins: registerBundledPlugins,
+});
 // 終了手順の共有。二度目以降は同じ終了を待つ（冪等）。
 let shutdownTask: Promise<void> | null = null;
 // 開発専用の AI 操作・観測口（loopback 接続口）。有効条件（三つ）を
@@ -278,7 +283,15 @@ void backendPromise.then((ready) => {
   spikeMounts = new PluginMountManager(mainWindow.webview.id, createChannelFactory());
   // 実プラグイン子画面の対応付け。backend の現割当てへの追随と
   // 個体別チャネルの結線を担い、段0とは名前空間を分ける。
-  pluginUi = new PluginUiCoordinator(mainWindow.webview.id, ready, createPluginUiChannelFactory());
+  // companion 登録表は backend が生成したものを注入する（共有 singleton は使わない）。
+  const registry = ready.companionRegistry;
+  pluginUi = new PluginUiCoordinator(
+    mainWindow.webview.id,
+    ready,
+    createPluginUiChannelFactory(registry),
+    Date.now,
+    registry,
+  );
   // バックエンドの状態変化への追随を先に登録し、Webview への通知を後に
   // 登録する。対応付けの整理と子画面への送信を先に行い、配置の現在値を
   // 載せて送る。購読者の例外はバックエンド側で隔離する。

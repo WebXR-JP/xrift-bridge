@@ -9,11 +9,8 @@
  * @packageDocumentation
  */
 import { BrowserView } from "electrobun/main";
-import {
-  defaultPluginCompanionRegistry,
-  type CompanionRequestEnv,
-  type PluginCompanionRegistry,
-} from "./plugin-companions.ts";
+import type { CompanionRequestEnv } from "bridge-gui-plugin-sdk/companion";
+import type { PluginCompanionRegistry } from "./plugin-companions.ts";
 import type {
   PluginUiChannel,
   PluginUiChannelFactory,
@@ -47,7 +44,7 @@ type GenericCompanionRpc = {
  * @param mountId - 結び付けるマウント識別子。
  * @param kind - 束縛する個体の種別トークン。登録済みであること。
  * @param env - main 側の汎用口。
- * @param registry - 種別トークンから記述子を引く登録表。省略時は既定の共有表。
+ * @param registry - 種別トークンから記述子を引く登録表。backend が生成した表を渡す。
  * @returns 当該マウント専用の push 口。
  * @throws `RangeError` — 未登録種別の場合。
  */
@@ -56,7 +53,7 @@ export function createCompanionChannel(
   mountId: string,
   kind: string,
   env: CompanionRequestEnv,
-  registry: PluginCompanionRegistry = defaultPluginCompanionRegistry,
+  registry: PluginCompanionRegistry,
 ): PluginUiChannel {
   const companion = registry.get(kind);
   if (companion === undefined) {
@@ -151,11 +148,11 @@ export class ElectrobunPluginUiChildView implements PluginUiChildView {
  * 登録表の記述子を使って種別を問わず個体別チャネルを結線する。
  * 子からの識別子指定は受け付けず、結線時に束縛した個体だけを使う。
  *
- * @param registry - 種別トークンから記述子を引く登録表。省略時は既定の共有表。
+ * @param registry - 種別トークンから記述子を引く登録表。backend が生成した表を渡す。
  * @returns `ElectrobunPluginUiChildView` 専用の工場。偽ハンドルには使わない。
  */
 export function createPluginUiChannelFactory(
-  registry: PluginCompanionRegistry = defaultPluginCompanionRegistry,
+  registry: PluginCompanionRegistry,
 ): PluginUiChannelFactory {
   return (view: PluginUiChildView, mountId: string, kind: string, env: CompanionRequestEnv) => {
     if (!(view instanceof ElectrobunPluginUiChildView)) {

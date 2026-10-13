@@ -21,7 +21,6 @@ import type {
   PairingViewResult,
 } from "bridge-gui-contract/management";
 import { selectNewer } from "bridge-gui-contract/management";
-import { PLUGIN_NAVIGATION_RULES_ATTRIBUTE } from "bridge-gui-contract/plugin-instance";
 import type { PluginUiMountPlacement } from "bridge-gui-contract/plugin-instance";
 import { SPIKE_NAVIGATION_RULES_ATTRIBUTE } from "bridge-gui-contract/plugin-spike";
 import type { SpikeMountSummary } from "bridge-gui-contract/plugin-spike";
@@ -105,6 +104,13 @@ export class ManagementService {
   private spikeHost: HTMLElement | null = null;
   private pluginHost: HTMLElement | null = null;
 
+  // 採用中 snapshot の遷移規則。backend が登録済み companion の解決済み
+  // view パス集合から生成した値の写しであり、タグ属性に載せる正本である。
+  // 未採用の間は `null` であり、規則欠落時は旧固定値や全面許可へ
+  // fallback せず、タグを置かない。静的登録のため backend 生存期間中は不変であり、
+  // 改訂進行で既存タグを作り直さない。
+  private pluginNavigationRules: readonly string[] | null = null;
+
   constructor(private readonly rpc: ManagementRpcClient) {
     this.rpc.setProbeHandler(() => this.buildProbe());
     this.rpc.setDevObserveHandler(() => this.buildDevObservation());
@@ -139,7 +145,9 @@ export class ManagementService {
       console.log(`[bridge-gui-ng] 状態を更新した: via=${via} revision=${next.revision}`);
       this.appendLog(`更新 via=${via} revision=${next.revision}`);
       // 実プラグイン子画面の配置は snapshot 由来であり、採用時に合わせる。
+      // 遷移規則も採用中 snapshot の値を正本とし、以後のタグ配置に使う。
       // 段0は `spikeList` 由来であり、ここでは触らない。
+      this.pluginNavigationRules = [...next.pluginNavigationRules];
       this.reconcilePluginTags(next.pluginMounts);
     } else {
       console.log(`[bridge-gui-ng] 古い状態を無視した: via=${via} incoming=${incoming.revision}`);
@@ -381,6 +389,8 @@ export class ManagementService {
     this.pluginHost = plugin;
     const current = this.current();
     if (current !== null) {
+      // 遅延 host 登録時も採用中 snapshot の規則を使う。
+      this.pluginNavigationRules = [...current.pluginNavigationRules];
       this.reconcilePluginTags(current.pluginMounts);
     }
     this.reconcileSpikeTags(this.spikeSummaries());
@@ -391,15 +401,14 @@ export class ManagementService {
     kind: "spike" | "plugin",
     mountId: string,
     initialUrl: string,
+    navigationRules: string,
   ): HTMLElement {
     const tag = document.createElement("electrobun-webview");
     // 初期 URL は main 発行の DTO をそのまま載せる。任意 URL・HTML・preload は付けない。
+    // 属性設定を先に行い、配置（append）の後に属性を変えない。
     tag.setAttribute("src", initialUrl);
     tag.setAttribute("renderer", "native");
-    tag.setAttribute(
-      "navigation-rules",
-      kind === "spike" ? SPIKE_NAVIGATION_RULES_ATTRIBUTE : PLUGIN_NAVIGATION_RULES_ATTRIBUTE,
-    );
+    tag.setAttribute("navigation-rules", navigationRules);
     // `sandbox` 属性は付けない（main が照合する）。
     tag.id = `${kind}-${mountId}`;
     return tag;
@@ -415,7 +424,7 @@ export class ManagementService {
     if (this.spikeTags.has(mountId) || this.spikeHost === null) {
       return;
     }
-    const tag = this.buildMountTag("spike", mountId, initialUrl);
+    const tag = this.buildMountTag("spike", mountId, initialUrl, SPIKE_NAVIGATION_RULES_ATTRIBUTE);
     this.spikeHost.append(tag);
     this.spikeTags.set(mountId, tag);
   }
@@ -458,6 +467,9 @@ export class ManagementService {
   /**
    * 実プラグインの配置用 DTO に従ってタグを一度だけ置く。既存は作り直さない。
    *
+   * 遷移規則は採用中 snapshot の値を載せる。規則欠落時は旧固定値や全面許可へ
+   * fallback せず、置かずに次回の採用・登録に任せる。
+   *
    * @param mountId - 所有表が発行したマウント識別子。
    * @param initialUrl - 所有表が発行した初期 URL。
    */
@@ -465,7 +477,11 @@ export class ManagementService {
     if (this.pluginTags.has(mountId) || this.pluginHost === null) {
       return;
     }
-    const tag = this.buildMountTag("plugin", mountId, initialUrl);
+    const rules = this.pluginNavigationRules;
+    if (rules === null) {
+      return;
+    }
+    const tag = this.buildMountTag("plugin", mountId, initialUrl, JSON.stringify(rules));
     this.pluginHost.append(tag);
     this.pluginTags.set(mountId, tag);
   }
@@ -670,102 +686,73 @@ export class ManagementService {
   }
 
   /**
-   * 診断インスタンスを割り当てる。
+   * 汎用プラグインを割り当てる。
    *
-   * @param localSessionId - 割り当てる生存セッションのローカル識別子。
+   * @param pluginKind - 割り当てる種別トークン。
+   * @param localSessionId - 割り当てる生存セッションのローカル識別子。省略時は方針に従い選ぶ。
    */
-  async assignDiagnostics(localSessionId: string): Promise<void> {
-    const key = `assign:${localSessionId}`;
+  async assignPlugin(pluginKind: string, localSessionId?: string): Promise<void> {
+    const key =
+      localSessionId === undefined
+        ? `assign-plugin:${pluginKind}`
+        : `assign-plugin:${pluginKind}:${localSessionId}`;
     if (!this.beginOperation(key)) {
       return;
     }
     try {
-      const result = await this.rpc.assignDiagnostics(localSessionId);
+      const result = await this.rpc.assignPlugin(pluginKind, localSessionId);
       console.log(
-        `[bridge-gui-ng] 診断を割り当てた: localSessionId=${localSessionId} instanceId=${result.instanceId}`,
+        `[bridge-gui-ng] プラグインを割り当てた: kind=${result.pluginKind} localSessionId=${result.localSessionId} instanceId=${result.instanceId}`,
       );
-      this.appendLog(`診断を割り当てた localSessionId=${localSessionId}`);
-      await this.refresh("診断割当て");
-    } catch {
-      console.log(`[bridge-gui-ng] 診断割当てに失敗した: localSessionId=${localSessionId}`);
-      this.appendLog(`診断割当てに失敗した localSessionId=${localSessionId}`);
-    } finally {
-      this.endOperation(key);
-    }
-  }
-
-  /** 固定テキスト表示を明示割当てする。 */
-  async assignText(): Promise<void> {
-    if (!this.beginOperation("assign-text")) {
-      return;
-    }
-    try {
-      const result = await this.rpc.assignText();
-      console.log(
-        `[bridge-gui-ng] テキストを割り当てた: localSessionId=${result.localSessionId} instanceId=${result.instanceId}`,
-      );
-      this.appendLog(`テキストを割り当てた localSessionId=${result.localSessionId}`);
+      this.appendLog(`プラグインを割り当てた kind=${result.pluginKind}`);
       this.textFailure.set("");
-      await this.refresh("テキスト割当て");
+      await this.refresh("プラグイン割当て");
     } catch (error: unknown) {
-      console.log(`[bridge-gui-ng] テキスト割当てに失敗した: ${String(error)}`);
-      this.appendLog("テキスト割当てに失敗した");
+      console.log(`[bridge-gui-ng] プラグイン割当てに失敗した: ${String(error)}`);
+      this.appendLog("プラグイン割当てに失敗した");
       this.textFailure.set(`操作に失敗した: ${describeActionError(error)}`);
     } finally {
-      this.endOperation("assign-text");
+      this.endOperation(key);
     }
   }
 
   /**
-   * 固定テキストを送信する。本文は送信時のみ扱い、記録に残さない。
+   * 汎用プラグインの割当てを外す。描画した所有記録の三識別子で照合する。
    *
-   * 管理画面のカード操作では使わず、RPC 配線の契約確認用に残す。
-   * 本文の入力と送信は子画面が行う。
+   * `released:false`・issues 非空は「解除成功」と記録しない。
+   * クリック後に引き直さず、描画時の識別子を使う。
    *
-   * @param localSessionId - 画面が認識している割当て先のローカル識別子。
-   * @param instanceId - 画面が認識している割当て先のインスタンス識別子。
-   * @param text - 送信する本文。
+   * @param instanceId - 描画した所有記録のインスタンス識別子。
+   * @param localSessionId - 描画した所有記録のローカル識別子。
+   * @param portId - 描画した所有記録の接続口識別子。
    */
-  async sendText(localSessionId: string, instanceId: string, text: string): Promise<void> {
-    const key = `send-text:${localSessionId}`;
+  async unassignPlugin(instanceId: string, localSessionId: string, portId: string): Promise<void> {
+    const key = `unassign-plugin:${instanceId}`;
     if (!this.beginOperation(key)) {
       return;
     }
     try {
-      const result = await this.rpc.sendText(localSessionId, instanceId, text);
-      // 決着の符号だけを残す。本文は載せない。
-      if (result.status === "acknowledged") {
-        this.appendLog("テキスト送信を反映確認した");
+      const result = await this.rpc.unassignPlugin(instanceId, localSessionId, portId);
+      if (!result.released || result.issues.length > 0) {
+        console.log(
+          `[bridge-gui-ng] プラグイン割当て解除が不完全である: released=${result.released} issues=${result.issues.length}`,
+        );
+        this.appendLog("プラグイン割当て解除が不完全である");
+        this.textFailure.set(
+          `解除が不完全である: released=${result.released} issues=${result.issues.length}`,
+        );
       } else {
-        this.appendLog(`テキスト送信の結果不明 reason=${result.reason}`);
+        console.log("[bridge-gui-ng] プラグインの割当てを外した");
+        this.appendLog("プラグインの割当てを外した");
+        this.textFailure.set("");
       }
-      this.textFailure.set("");
-      await this.refresh("テキスト送信");
+      await this.refresh("プラグイン割当て解除");
     } catch (error: unknown) {
-      this.appendLog("テキスト送信に失敗した");
+      console.log(`[bridge-gui-ng] プラグイン割当て解除に失敗した: ${String(error)}`);
+      this.appendLog("プラグイン割当て解除に失敗した");
       this.textFailure.set(`操作に失敗した: ${describeActionError(error)}`);
     } finally {
       this.endOperation(key);
-    }
-  }
-
-  /** 固定テキストの割当てを外す。 */
-  async unassignText(): Promise<void> {
-    if (!this.beginOperation("unassign-text")) {
-      return;
-    }
-    try {
-      await this.rpc.unassignText();
-      console.log("[bridge-gui-ng] テキストの割当てを外した");
-      this.appendLog("テキストの割当てを外した");
-      this.textFailure.set("");
-      await this.refresh("テキスト割当て解除");
-    } catch (error: unknown) {
-      console.log(`[bridge-gui-ng] テキスト割当て解除に失敗した: ${String(error)}`);
-      this.appendLog("テキスト割当て解除に失敗した");
-      this.textFailure.set(`操作に失敗した: ${describeActionError(error)}`);
-    } finally {
-      this.endOperation("unassign-text");
     }
   }
 

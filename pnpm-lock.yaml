@@ -264,6 +264,9 @@ importers:
       bridge-gui-contract:
         specifier: workspace:*
         version: link:../../packages/bridge-gui-contract
+      bridge-gui-plugin-sdk:
+        specifier: workspace:*
+        version: link:../../packages/bridge-gui-plugin-sdk
       bridge-gui-ui:
         specifier: workspace:*
         version: link:../bridge-gui-ui
@@ -469,6 +472,25 @@ importers:
       bridge-server:
         specifier: workspace:*
         version: link:../bridge-server
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 24.19.1
+      typescript:
+        specifier: 'catalog:'
+        version: 7.0.2
+      vite-plus:
+        specifier: 'catalog:'
+        version: 1.0.0(@types/node@24.19.1)(@vitest/ui@5.0.1)(esbuild@0.28.2)(happy-dom@20.14.5)(jiti@2.7.0)(sass-embedded@1.104.1)(sass@1.104.1)(typescript@7.0.2)(yaml@2.9.1)
+
+  packages/bridge-gui-plugin-sdk:
+    dependencies:
+      bridge-app-core:
+        specifier: workspace:*
+        version: link:../bridge-app-core
+      bridge-gui-contract:
+        specifier: workspace:*
+        version: link:../bridge-gui-contract
     devDependencies:
       '@types/node':
         specifier: 'catalog:'

@@ -5,6 +5,7 @@
  * payload・テキスト本文は含めない（件数・改訂番号のみ）。
  */
 import type { ManagementSnapshot } from "bridge-gui-contract/management";
+import { buildPluginNavigationRules } from "bridge-gui-contract/plugin-instance";
 
 /**
  * 試験用の表示状態を作る。
@@ -21,17 +22,13 @@ export function makeSnapshot(overrides?: Partial<ManagementSnapshot>): Managemen
     pending: [],
     connections: [],
     sessions: [],
-    plugins: { instances: [], assignments: [] },
-    text: {
-      localSessionId: null,
-      instanceId: null,
-      canSend: false,
-      pendingId: null,
-      lastResult: null,
-      stats: { attempts: 0, acknowledged: 0, unknown: 0 },
-    },
+    plugins: { kinds: [], instances: [], assignments: [] },
     pluginMounts: [],
     pluginMountFailures: [],
+    pluginNavigationRules: buildPluginNavigationRules([
+      "views://plugin-text/index.html",
+      "views://plugin-diagnostic/index.html",
+    ]),
     ...overrides,
   };
 }

@@ -18,11 +18,11 @@ import type {
   NgDevObserveResult,
   OperationAck,
   PairingViewResult,
+  PluginBindingSummary,
   StateChangedMessage,
+  UnassignPluginResult,
 } from "bridge-gui-contract/management";
-import type { AssignmentSummary } from "bridge-gui-contract/management";
 import type { ApprovalResult, RejectionResult } from "bridge-server";
-import type { TextSendResult } from "bridge-app-core";
 import type {
   PluginMountDto,
   SpikeMountSummary,
@@ -172,43 +172,30 @@ export class ManagementRpcClient {
   }
 
   /**
-   * 診断インスタンスを割り当てる。対象外セッションの判定は表示側で行う。
+   * 汎用プラグインを割り当てる。種別と割当て先だけを指定する。
    *
-   * @param localSessionId - 割り当てる生存セッションのローカル識別子。
-   * @returns 割当て結果。
+   * @param pluginKind - 割り当てる種別トークン。
+   * @param localSessionId - 割り当てる生存セッションのローカル識別子。省略時は方針に従い選ぶ。
+   * @returns 確定した束縛の表示状態。
    */
-  assignDiagnostics(localSessionId: string): Promise<AssignmentSummary> {
-    return this.rpc.request.assignDiagnostics({ localSessionId });
+  assignPlugin(pluginKind: string, localSessionId?: string): Promise<PluginBindingSummary> {
+    return this.rpc.request.assignPlugin({ pluginKind, localSessionId });
   }
 
   /**
-   * 固定テキスト表示を明示割当てする。引数は取らない。
+   * 汎用プラグインの割当てを外す。描画した所有記録の三識別子で照合する。
    *
-   * @returns 割当て結果。
+   * @param instanceId - 描画した所有記録のインスタンス識別子。
+   * @param localSessionId - 描画した所有記録のローカル識別子。
+   * @param portId - 描画した所有記録の接続口識別子。
+   * @returns 解放結果。
    */
-  assignText(): Promise<AssignmentSummary> {
-    return this.rpc.request.assignText({});
-  }
-
-  /**
-   * 固定テキストを送信する。本文は送信時のみ扱い、記録に残さない。
-   *
-   * @param localSessionId - 画面が認識している割当て先のローカル識別子。
-   * @param instanceId - 画面が認識している割当て先のインスタンス識別子。
-   * @param text - 送信する本文。
-   * @returns 送信結果。
-   */
-  sendText(localSessionId: string, instanceId: string, text: string): Promise<TextSendResult> {
-    return this.rpc.request.sendText({ localSessionId, instanceId, text });
-  }
-
-  /**
-   * 固定テキストの割当てを外す。
-   *
-   * @returns 受付応答。
-   */
-  unassignText(): Promise<OperationAck> {
-    return this.rpc.request.unassignText({});
+  unassignPlugin(
+    instanceId: string,
+    localSessionId: string,
+    portId: string,
+  ): Promise<UnassignPluginResult> {
+    return this.rpc.request.unassignPlugin({ instanceId, localSessionId, portId });
   }
 
   /**

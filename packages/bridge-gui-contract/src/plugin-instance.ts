@@ -8,7 +8,7 @@
  * 子から任意の `instanceId`／`localSessionId` を受け取って振り分ける口は持たず、
  * main が束縛した個体の現割当てだけを使う。実行時の依存を持たない。
  *
- * 種別ごとの固有契約（限定表示・snapshot・通知・RPC 型・view パス）は各
+ * 種別ごとの固有契約（限定表示・snapshot・通知・RPC 型・相対 entrypoint）は各
  * companion が所有する（`apps/bridge-gui-main/src/plugin-ui/<種別>/contract.ts`）。
  * ここには全 companion で共通の手段だけを置く。
  *
@@ -65,32 +65,6 @@ export function selectNewerInstanceSnapshot<T extends { readonly revision: numbe
 
 /** 実プラグイン子画面の配置先（空ページ）。初期配置先であり、検証内容は持たない。 */
 export const PLUGIN_BLANK_PATH = "views://plugin-host/blank.html";
-
-/**
- * 実プラグイン子画面タグの遷移規則。全面拒否を先に置き、
- * 空ページと実プラグイン子画面だけを後に許可する（後に一致した規則が勝つ）。
- *
- * 同梱パスの文字列は各 companion の view パス（`TEXT_VIEW_PATH`・
- * `DIAGNOSTIC_VIEW_PATH`）の正本と一致させること。一致は bridge-gui-main の
- * 同期テストで固定し、ここでの列挙と登録表の二重定義のずれを検出する。
- */
-export const PLUGIN_NAVIGATION_RULES: readonly string[] = buildPluginNavigationRules([
-  "views://plugin-text/index.html",
-  "views://plugin-diagnostic/index.html",
-]);
-
-/** タグの `navigation-rules` 属性に載せる形。 */
-export const PLUGIN_NAVIGATION_RULES_ATTRIBUTE: string = JSON.stringify(PLUGIN_NAVIGATION_RULES);
-
-/**
- * テキスト送信 request の RPC 待機期限（ミリ秒）。
- *
- * プラグインの応答期限（`TEXT_RESPONSE_TIMEOUT_MS`＝10秒）より長くし、
- * 反映確認の到達を RPC 側の期限切れで落とさない。余裕は遅延確認の到達用で
- * あり、自動再送の猶予ではない。RPC 自体の失敗は反映確認とみなさず、
- * 状態再取得で確かめる。
- */
-export const TEXT_SEND_REQUEST_TIMEOUT_MS = 15_000;
 
 /**
  * 子画面の生成待ちが失効するまでの時間（ミリ秒）。
@@ -186,9 +160,10 @@ export function buildPluginBlankUrl(mountId: string): string {
  * マウント識別子つきの子画面 URL を作る。
  *
  * main が個体別 RPC の結線後に `loadURL()` で読み込む先である。
- * 画面からの指定は受け付けない。種別ごとの view パスは各 companion が持つ。
+ * 画面からの指定は受け付けない。view パスはホストが解決した値だけを使い、
+ * 種別ごとの組み立てはここに持たない。
  *
- * @param viewPath - 同梱子画面の view パス（`views://...`）。
+ * @param viewPath - 同梱子画面の view パス（`views://...`）。ホストの解決済みであること。
  * @param mountId - 再利用しないマウント識別子。空でないこと。
  * @returns 子画面の URL。
  */

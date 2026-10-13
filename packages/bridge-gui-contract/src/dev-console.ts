@@ -40,10 +40,8 @@ export const DEV_OPS = [
   "approvePairing",
   "rejectPairing",
   "disconnectConnection",
-  "assignDiagnostics",
-  "assignText",
-  "sendText",
-  "unassignText",
+  "assignPlugin",
+  "unassignPlugin",
   "spikeCreate",
   "spikeDestroy",
   "spikePush",
@@ -283,11 +281,13 @@ export type DevBusinessSummary =
   | { readonly kind: "ack" }
   | {
       readonly kind: "assignment";
+      readonly pluginKind: string;
+      readonly pluginId: string;
       readonly localSessionId: string;
       readonly instanceId: string;
       readonly portId: string;
     }
-  | { readonly kind: "textSend"; readonly status: string; readonly reason: string | null }
+  | { readonly kind: "unassignment"; readonly released: boolean; readonly issues: number }
   | { readonly kind: "spikeCreated"; readonly mountId: string }
   | { readonly kind: "spikePushed"; readonly revision: number }
   | { readonly kind: "spikeList"; readonly count: number };
@@ -343,26 +343,27 @@ export function summarizeBusinessResult(op: DevOpName, result: unknown): DevBusi
       };
     }
     case "disconnectConnection":
-    case "unassignText":
     case "spikeDestroy":
     case "spikeReset":
     case "retryPluginMounts": {
       return { kind: "ack" };
     }
-    case "assignDiagnostics":
-    case "assignText": {
+    case "assignPlugin": {
       return {
         kind: "assignment",
+        pluginKind: typeof table["pluginKind"] === "string" ? table["pluginKind"] : "",
+        pluginId: typeof table["pluginId"] === "string" ? table["pluginId"] : "",
         localSessionId: typeof table["localSessionId"] === "string" ? table["localSessionId"] : "",
         instanceId: typeof table["instanceId"] === "string" ? table["instanceId"] : "",
         portId: typeof table["portId"] === "string" ? table["portId"] : "",
       };
     }
-    case "sendText": {
+    case "unassignPlugin": {
+      const issues = table["issues"];
       return {
-        kind: "textSend",
-        status: typeof table["status"] === "string" ? table["status"] : "UNKNOWN",
-        reason: typeof table["reason"] === "string" ? table["reason"] : null,
+        kind: "unassignment",
+        released: table["released"] === true,
+        issues: Array.isArray(issues) ? issues.length : 0,
       };
     }
     case "spikeCreate": {

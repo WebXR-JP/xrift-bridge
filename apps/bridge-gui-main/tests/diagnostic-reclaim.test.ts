@@ -10,6 +10,7 @@
 import { afterEach, expect, test } from "vite-plus/test";
 import { createConnectionRequest, type SessionProvider } from "world-client";
 import { GuiBackend } from "../src/main/backend.ts";
+import { registerBundledPlugins } from "../src/composition/bundled-plugins.ts";
 
 const TEST_ORIGIN = "https://gui-diagnostic-reclaim-test.invalid";
 
@@ -37,7 +38,10 @@ afterEach(async () => {
  * 試験用のバックエンドを生成する。待ち受けは空きポート自動選択である。
  */
 async function startBackend(): Promise<GuiBackend> {
-  const backend = await GuiBackend.create({ port: 0, allowedOrigins: [TEST_ORIGIN] });
+  const backend = await GuiBackend.create(
+    { port: 0, allowedOrigins: [TEST_ORIGIN] },
+    { registerPlugins: registerBundledPlugins },
+  );
   backends.push(backend);
   expect(backend.getSnapshot().backend).toBe("ready");
   return backend;
@@ -77,7 +81,7 @@ test("診断割当てしたセッションが終わると生成分も回収す�
   const target = backend.getSnapshot().sessions[0];
   if (target === undefined) throw new Error("生存セッションが無い。");
 
-  backend.assignDiagnostics({ localSessionId: target.localSessionId });
+  backend.assignPlugin({ pluginKind: "diagnostic", localSessionId: target.localSessionId });
   expect(backend.getSnapshot().plugins.assignments).toHaveLength(1);
   expect(backend.getSnapshot().plugins.instances).toHaveLength(1);
 

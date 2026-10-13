@@ -15,11 +15,10 @@ import { Electroview } from "electrobun/view";
 import { validateTextForSend } from "bridge-app-core/text-contract";
 import type { TextSendResult } from "bridge-app-core";
 import type { TextInstanceRpc, TextInstanceSnapshot } from "./contract.ts";
-import { TEXT_MOUNT_KIND } from "./contract.ts";
+import { TEXT_MOUNT_KIND, TEXT_SEND_REQUEST_TIMEOUT_MS } from "./contract.ts";
 import {
   PLUGIN_INITIAL_FETCH_ATTEMPTS,
   PLUGIN_INITIAL_FETCH_RETRY_MS,
-  TEXT_SEND_REQUEST_TIMEOUT_MS,
   parsePluginMountId,
   pluginMountKindOf,
   selectNewerInstanceSnapshot,

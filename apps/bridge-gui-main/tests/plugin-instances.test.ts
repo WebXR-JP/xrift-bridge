@@ -1,8 +1,8 @@
 /**
- * 段1の個体別 DTO／限定操作／射影の検証。
+ * 個体別 DTO／限定操作／射影の検証。
  *
- * 偽の backend・偽の生存照合で対応付けの振る舞いだけを確かめ、
- * 実バックエンドでは束縛送信の委譲と診断統計の射影を通す。
+ * 偽の companion・偽の生存照合で対応付けの振る舞いだけを確かめ、
+ * 実バックエンドでは本番 companion 経由の束縛送信の委譲と診断統計の射影を通す。
  * 管理操作・他個体・失効した対応付けには到達・取得できないこと、
  * 古い revision で巻き戻さないことを保証する。
  * 比較コード本文・送信本文は記録に残さない。
@@ -14,26 +14,15 @@ import {
   DIAGNOSTIC_PORT_ID,
   TEXT_PORT_ID,
   TEXT_SESSION_ID,
-  type DiagnosticStats,
-  type PluginInstanceHandle,
-  type TextPluginOperations,
-  type TextPluginState,
   type TextSendResult,
 } from "bridge-app-core";
 import { createConnectionRequest, type SessionProvider } from "world-client";
-import {
-  projectDiagnosticInstanceView,
-  projectTextInstanceView,
-  GuiBackend,
-} from "../src/main/backend.ts";
-import {
-  asMountLiveness,
-  PluginInstanceBinder,
-  type InstanceProjectionBackend,
-} from "../src/main/plugin-instances.ts";
-import { textCompanion } from "../src/plugin-ui/text/companion.ts";
-import { diagnosticCompanion } from "../src/plugin-ui/diagnostic/companion.ts";
-import type { CompanionRequestEnv } from "../src/main/plugin-companions.ts";
+import type { InstanceBaseView } from "bridge-gui-contract/plugin-instance";
+import { GuiBackend } from "../src/main/backend.ts";
+import { registerBundledPlugins } from "../src/composition/bundled-plugins.ts";
+import { asMountLiveness, PluginInstanceBinder } from "../src/main/plugin-instances.ts";
+import { PluginCompanionRegistry } from "../src/main/plugin-companions.ts";
+import type { CompanionRequestEnv, PluginCompanion } from "bridge-gui-plugin-sdk/companion";
 import {
   PluginMountManager,
   type MountChildView,
@@ -74,85 +63,105 @@ const DIAGNOSTIC_VIEW: DiagnosticInstanceView = {
   stats: { diagnosticEcho: 0, diagnosticPing: 0 },
 };
 
+/** 検証用の companion 到達先。限定口の capture 前の材料である。 */
+interface StubStore {
+  readonly views: Map<string, InstanceBaseView>;
+  readonly sent: Map<string, unknown[]>;
+  readonly lapsed: Set<string>;
+}
+
+function stubStore(): StubStore {
+  return { views: new Map(), sent: new Map(), lapsed: new Set() };
+}
+
 /**
- * 検証用の偽 backend。束縛個体の有無と現割当ての失効だけを再現する。
- *
- * 識別子は `main` の対応付けが決める前提であり、子からの指定では
- * 振り向かない（渡された識別子で写像を引くのみ）。
+ * 検証用のテキスト companion。到達は capture した材料だけを使う。
  */
-class FakeProjectionBackend implements InstanceProjectionBackend {
-  private readonly textViews = new Map<string, TextInstanceView>();
-  private readonly textSent = new Map<string, string[]>();
-  private readonly diagnosticViews = new Map<string, DiagnosticInstanceView>();
-  private readonly lapsed = new Set<string>();
+function stubTextCompanion(store: StubStore): PluginCompanion {
+  return {
+    kind: "text",
+    label: "テキスト",
+    viewPath: "views://plugin-text/index.html",
+    listDesired: () => [],
+    readView: (instanceId: string) => {
+      const view = store.views.get(instanceId);
+      if (view === undefined || store.lapsed.has(instanceId)) {
+        throw new RangeError("束縛したテキスト個体ではない。");
+      }
+      return view;
+    },
+    toSnapshot: (view, revision) => ({ ...(view as TextInstanceView), revision }),
+    send: (instanceId: string, params: unknown) => {
+      const view = store.views.get(instanceId);
+      if (view === undefined || store.lapsed.has(instanceId)) {
+        return Promise.reject(new RangeError("束縛したテキスト個体ではない。"));
+      }
+      // ADR: `as` を使う理由は、操作引数の形状を companion が固定するためである。
+      const table = params as { text: unknown };
+      if (typeof table.text !== "string") {
+        return Promise.reject(new RangeError("text は文字列であること。"));
+      }
+      store.sent.get(instanceId)?.push(table.text);
+      return Promise.resolve({ status: "acknowledged", id: "text-1" });
+    },
+    pushMessageName: "textStateChanged",
+    buildRequestHandlers: (mountId: string, env: CompanionRequestEnv) => ({
+      getTextState: () => {
+        const snapshot = env.readSnapshot("text", mountId);
+        const typed = snapshot as TextInstanceSnapshot;
+        env.markReady(mountId);
+        return typed;
+      },
+      sendText: (params: { text: string }) => {
+        const result = env.send("text", mountId, params);
+        return result as Promise<TextSendResult>;
+      },
+    }),
+  };
+}
 
-  addText(view: TextInstanceView): void {
-    this.textViews.set(view.instanceId, view);
-    this.textSent.set(view.instanceId, []);
-  }
-
-  addDiagnostic(view: DiagnosticInstanceView): void {
-    this.diagnosticViews.set(view.instanceId, view);
-  }
-
-  /** 現割当てを失効させる。以後の射影・送信は拒否する。 */
-  lapse(instanceId: string): void {
-    this.lapsed.add(instanceId);
-  }
-
-  /** 束縛個体へ委譲された本文の一覧。 */
-  sentTextsOf(instanceId: string): readonly string[] {
-    return this.textSent.get(instanceId) ?? [];
-  }
-
-  getTextInstanceView(params: { instanceId: unknown }): TextInstanceView {
-    if (typeof params.instanceId !== "string") {
-      throw new RangeError("instanceId は空でない文字列であること。");
-    }
-    const view = this.textViews.get(params.instanceId);
-    if (view === undefined || this.lapsed.has(view.instanceId)) {
-      throw new RangeError("束縛したテキスト個体ではない。");
-    }
-    return view;
-  }
-
-  sendTextForInstance(instanceId: unknown, params: { text: unknown }): Promise<TextSendResult> {
-    if (typeof instanceId !== "string") {
-      return Promise.reject(new RangeError("instanceId は空でない文字列であること。"));
-    }
-    const view = this.textViews.get(instanceId);
-    if (view === undefined || this.lapsed.has(view.instanceId)) {
-      return Promise.reject(new RangeError("束縛したテキスト個体ではない。"));
-    }
-    if (typeof params.text !== "string") {
-      return Promise.reject(new RangeError("text は文字列であること。"));
-    }
-    this.textSent.get(view.instanceId)?.push(params.text);
-    return Promise.resolve({ status: "acknowledged", id: "text-1" });
-  }
-
-  getDiagnosticInstanceView(params: { instanceId: unknown }): DiagnosticInstanceView {
-    if (typeof params.instanceId !== "string") {
-      throw new RangeError("instanceId は空でない文字列であること。");
-    }
-    const view = this.diagnosticViews.get(params.instanceId);
-    if (view === undefined || this.lapsed.has(view.instanceId)) {
-      throw new RangeError("束縛した診断個体ではない。");
-    }
-    return view;
-  }
+/**
+ * 検証用の診断 companion。到達は capture した材料だけを使う。
+ */
+function stubDiagnosticCompanion(store: StubStore): PluginCompanion {
+  return {
+    kind: "diagnostic",
+    label: "診断",
+    viewPath: "views://plugin-diagnostic/index.html",
+    listDesired: () => [],
+    readView: (instanceId: string) => {
+      const view = store.views.get(instanceId);
+      if (view === undefined || store.lapsed.has(instanceId)) {
+        throw new RangeError("束縛した診断個体ではない。");
+      }
+      return view;
+    },
+    toSnapshot: (view, revision) => ({ ...(view as DiagnosticInstanceView), revision }),
+    pushMessageName: "diagnosticStateChanged",
+    buildRequestHandlers: (mountId: string, env: CompanionRequestEnv) => ({
+      getDiagnosticState: () => {
+        const snapshot = env.readSnapshot("diagnostic", mountId);
+        const typed = snapshot as DiagnosticInstanceSnapshot;
+        env.markReady(mountId);
+        return typed;
+      },
+    }),
+  };
 }
 
 /** 検証用の組み立て。生存集合への出し入れで破棄を再現する。 */
 function setup(): {
-  backend: FakeProjectionBackend;
+  store: StubStore;
   live: Set<string>;
   binder: PluginInstanceBinder;
 } {
-  const backend = new FakeProjectionBackend();
+  const store = stubStore();
   const live = new Set<string>();
-  const binder = new PluginInstanceBinder({ isLive: (mountId) => live.has(mountId) }, backend);
-  return { backend, live, binder };
+  const registry = new PluginCompanionRegistry();
+  registry.register(stubTextCompanion(store));
+  registry.register(stubDiagnosticCompanion(store));
+  const binder = new PluginInstanceBinder({ isLive: (mountId) => live.has(mountId) }, registry);
+  return { store, live, binder };
 }
 
 /**
@@ -174,13 +183,14 @@ function toRequestEnv(binder: PluginInstanceBinder): CompanionRequestEnv {
 
 /** テキスト・診断を1件ずつ束縛した組み立て。 */
 function bindBoth(): {
-  backend: FakeProjectionBackend;
+  store: StubStore;
   live: Set<string>;
   binder: PluginInstanceBinder;
 } {
   const assembled = setup();
-  assembled.backend.addText(TEXT_VIEW);
-  assembled.backend.addDiagnostic(DIAGNOSTIC_VIEW);
+  assembled.store.views.set(TEXT_VIEW.instanceId, TEXT_VIEW);
+  assembled.store.views.set(DIAGNOSTIC_VIEW.instanceId, DIAGNOSTIC_VIEW);
+  assembled.store.sent.set(TEXT_VIEW.instanceId, []);
   assembled.live.add("spike-1");
   assembled.live.add("spike-2");
   assembled.binder.bindMount("spike-1", "text", TEXT_VIEW.instanceId);
@@ -217,9 +227,8 @@ test("子画面の要求口に管理操作が無い", () => {
     "approvePairing",
     "rejectPairing",
     "disconnectConnection",
-    "assignDiagnostics",
-    "assignText",
-    "unassignText",
+    "assignPlugin",
+    "unassignPlugin",
     "quit",
     "spikeCreate",
     "spikeDestroy",
@@ -230,13 +239,20 @@ test("子画面の要求口に管理操作が無い", () => {
   ]) {
     expect(surface[name]).toBeUndefined();
   }
-  // 子画面が呼べる要求は限定口だけであり、本番経路（companion の要求表）で確かめる。
+  // 子画面が呼べる要求は限定口だけである。
+  const registry = new PluginCompanionRegistry();
+  const store = stubStore();
+  registry.register(stubTextCompanion(store));
+  registry.register(stubDiagnosticCompanion(store));
+  const text = registry.get("text");
+  const diagnostic = registry.get("diagnostic");
+  if (text === undefined || diagnostic === undefined) throw new Error("companion が無い。");
   const env = toRequestEnv(binder);
-  expect(Object.keys(textCompanion.buildRequestHandlers("spike-1", env)).sort()).toEqual([
+  expect(Object.keys(text.buildRequestHandlers("spike-1", env)).sort()).toEqual([
     "getTextState",
     "sendText",
   ]);
-  expect(Object.keys(diagnosticCompanion.buildRequestHandlers("spike-2", env))).toEqual([
+  expect(Object.keys(diagnostic.buildRequestHandlers("spike-2", env))).toEqual([
     "getDiagnosticState",
   ]);
 });
@@ -256,7 +272,12 @@ test("束縛した個体以外の情報を取得できない", () => {
   expect(() => binder.readSnapshot("text", "spike-2")).toThrow(RangeError);
   expect(() => binder.send("text", "spike-2", { text: DUMMY_TEXT })).toThrow(RangeError);
   // 取得に識別子の指定口は無く、自分の個体だけが返る。
-  const getTextState = textCompanion.buildRequestHandlers("spike-1", toRequestEnv(binder))[
+  const registry = new PluginCompanionRegistry();
+  const store = stubStore();
+  registry.register(stubTextCompanion(store));
+  const companion = registry.get("text");
+  if (companion === undefined) throw new Error("companion が無い。");
+  const getTextState = companion.buildRequestHandlers("spike-1", toRequestEnv(binder))[
     "getTextState"
   ] as () => TextInstanceSnapshot;
   expect(getTextState().instanceId).toBe(TEXT_VIEW.instanceId);
@@ -286,9 +307,9 @@ test("失効したマウントの要求を拒否する", () => {
 });
 
 test("現割当てが失効した要求を拒否する", async () => {
-  const { backend, binder } = bindBoth();
+  const { store, binder } = bindBoth();
   binder.setSink("spike-1", "text", () => {});
-  backend.lapse(TEXT_VIEW.instanceId);
+  store.lapsed.add(TEXT_VIEW.instanceId);
   // 失効後の取得・送信・push は拒否し、古い割当てへ転送しない。
   expect(() => binder.readSnapshot("text", "spike-1")).toThrow(RangeError);
   await expect(binder.send("text", "spike-1", { text: DUMMY_TEXT })).rejects.toThrow(RangeError);
@@ -314,8 +335,12 @@ test("対応付けは結線済みの所有だけを生存とする", () => {
 });
 
 test("テキスト送信が束縛個体の現割当てに委譲される", async () => {
-  const { backend, binder } = bindBoth();
-  const handlers = textCompanion.buildRequestHandlers("spike-1", toRequestEnv(binder));
+  const { store, binder } = bindBoth();
+  const registry = new PluginCompanionRegistry();
+  registry.register(stubTextCompanion(store));
+  const companion = registry.get("text");
+  if (companion === undefined) throw new Error("companion が無い。");
+  const handlers = companion.buildRequestHandlers("spike-1", toRequestEnv(binder));
   // ADR: `as` を使う理由は、要求表が種別を問わない汎用表であり、試験で
   // 束縛種別の具象口を取り出すためである。根拠は、対応付けが同一種別の
   // 記述子で結線・送信を対にすることである。
@@ -323,16 +348,16 @@ test("テキスト送信が束縛個体の現割当てに委譲される", async
   const result = await sendText({ text: DUMMY_TEXT });
   expect(result.status).toBe("acknowledged");
   // 束縛個体に委譲され、別個体には届かない。
-  expect(backend.sentTextsOf(TEXT_VIEW.instanceId)).toEqual([DUMMY_TEXT]);
-  expect(backend.sentTextsOf(DIAGNOSTIC_VIEW.instanceId)).toEqual([]);
+  expect(store.sent.get(TEXT_VIEW.instanceId)).toEqual([DUMMY_TEXT]);
+  expect(store.sent.get(DIAGNOSTIC_VIEW.instanceId)).toBeUndefined();
   // 余分な識別子を付けても束縛個体に届く（振り分け口は無い）。
   await sendText({
     text: "ダミー本文-002",
     instanceId: DIAGNOSTIC_VIEW.instanceId,
     localSessionId: "別",
   } as unknown as { text: string });
-  expect(backend.sentTextsOf(TEXT_VIEW.instanceId)).toEqual([DUMMY_TEXT, "ダミー本文-002"]);
-  expect(backend.sentTextsOf(DIAGNOSTIC_VIEW.instanceId)).toEqual([]);
+  expect(store.sent.get(TEXT_VIEW.instanceId)).toEqual([DUMMY_TEXT, "ダミー本文-002"]);
+  expect(store.sent.get(DIAGNOSTIC_VIEW.instanceId)).toBeUndefined();
 });
 
 test("push は改訂を進めて当該マウントだけに届く", () => {
@@ -343,8 +368,10 @@ test("push は改訂を進めて当該マウントだけに届く", () => {
     instanceId: "instance-3",
     localSessionId: "local-3",
   };
-  assembled.backend.addText(firstView);
-  assembled.backend.addText(secondView);
+  assembled.store.views.set(firstView.instanceId, firstView);
+  assembled.store.views.set(secondView.instanceId, secondView);
+  assembled.store.sent.set(firstView.instanceId, []);
+  assembled.store.sent.set(secondView.instanceId, []);
   assembled.live.add("spike-1");
   assembled.live.add("spike-2");
   assembled.binder.bindMount("spike-1", "text", firstView.instanceId);
@@ -396,67 +423,6 @@ test("古い revision の個体表示では巻き戻さない", () => {
   ).toBe(2);
 });
 
-/** 検証用の偽テキスト参照。射影の入力に使う。 */
-function fakeTextHandle(
-  instanceId: string,
-  state: TextPluginState,
-): PluginInstanceHandle<TextPluginState, TextPluginOperations> {
-  return {
-    instanceId,
-    pluginId: "text",
-    getState: () => state,
-    getOperations: () => ({
-      sendText: (_text: string, _localSessionId: string) =>
-        Promise.resolve({ status: "acknowledged", id: "text-1" }),
-      onStateChanged: (_handler: (state: TextPluginState) => void) => () => {},
-    }),
-  };
-}
-
-/** 検証用の偽診断参照。射影の入力に使う。 */
-function fakeDiagnosticHandle(
-  instanceId: string,
-  stats: DiagnosticStats,
-): PluginInstanceHandle<DiagnosticStats> {
-  return { instanceId, pluginId: "diagnostic", getState: () => stats };
-}
-
-test("個体別射影に管理情報と本文が含まれない", () => {
-  const view = projectTextInstanceView(
-    fakeTextHandle("instance-1", {
-      canSend: true,
-      pendingId: "text-1",
-      lastResult: null,
-      stats: { attempts: 2, acknowledged: 1, unknown: 1 },
-    }),
-    "local-1",
-  );
-  // 載せる項目は限定表示だけであり、保留・接続・候補は載せない。
-  expect(Object.keys(view).sort()).toEqual([
-    "canSend",
-    "instanceId",
-    "lastResult",
-    "localSessionId",
-    "pendingId",
-    "pluginId",
-    "portId",
-    "stats",
-  ]);
-  expect(view.stats).toEqual({ attempts: 2, acknowledged: 1, unknown: 1 });
-  const diagnostic = projectDiagnosticInstanceView(
-    fakeDiagnosticHandle("instance-9", { diagnosticEcho: 3, diagnosticPing: 5 }),
-    "local-9",
-  );
-  expect(Object.keys(diagnostic).sort()).toEqual([
-    "instanceId",
-    "localSessionId",
-    "pluginId",
-    "portId",
-    "stats",
-  ]);
-  expect(diagnostic.stats).toEqual({ diagnosticEcho: 3, diagnosticPing: 5 });
-});
-
 const TEST_ORIGIN = "https://gui-instance-test.invalid";
 
 const backends: GuiBackend[] = [];
@@ -481,7 +447,10 @@ afterEach(async () => {
 
 /** 試験用のバックエンドを生成する。待ち受けは空きポート自動選択である。 */
 async function startBackend(): Promise<GuiBackend> {
-  const backend = await GuiBackend.create({ port: 0, allowedOrigins: [TEST_ORIGIN] });
+  const backend = await GuiBackend.create(
+    { port: 0, allowedOrigins: [TEST_ORIGIN] },
+    { registerPlugins: registerBundledPlugins },
+  );
   backends.push(backend);
   expect(backend.getSnapshot().backend).toBe("ready");
   return backend;
@@ -541,9 +510,13 @@ test("実バックエンドの束縛送信が現割当てに届く", async () =>
     }
   });
 
-  const assignment = backend.assignText();
+  const assignment = backend.assignPlugin({ pluginKind: "text" });
+  const companion = backend.companionRegistry.get("text");
+  if (companion === undefined) throw new Error("テキスト companion が無い。");
   // 個体別射影は自分の個体だけを返し、管理情報を含めない。
-  const view = backend.getTextInstanceView({ instanceId: assignment.instanceId });
+  // ADR: `as` を使う理由は、汎用口が種別を問わない表示を返し、試験で
+  // 束縛種別の具象表示を取り出すためである。
+  const view = companion.readView(assignment.instanceId) as TextInstanceView;
   expect(view.instanceId).toBe(assignment.instanceId);
   expect(view.localSessionId).toBe(assignment.localSessionId);
   expect(view.portId).toBe(TEXT_PORT_ID);
@@ -558,28 +531,29 @@ test("実バックエンドの束縛送信が現割当てに届く", async () =>
     "stats",
   ]);
   // 他個体の指定では取れない。
-  expect(() => backend.getTextInstanceView({ instanceId: "無い" })).toThrow(RangeError);
-  expect(() => backend.getTextInstanceView({ instanceId: "" })).toThrow(RangeError);
+  expect(() => companion.readView("無い")).toThrow(RangeError);
 
   // 束縛送信は現割当てに委譲され、反映確認で決着する。本文は射影に残らない。
-  const result = await backend.sendTextForInstance(assignment.instanceId, { text: DUMMY_TEXT });
+  const send = companion.send;
+  if (send === undefined) throw new Error("テキストの送信口が無い。");
+  const result = (await send(assignment.instanceId, { text: DUMMY_TEXT })) as TextSendResult;
   expect(result.status).toBe("acknowledged");
   await waitForArrival(
-    () => backend.getTextInstanceView({ instanceId: assignment.instanceId }).lastResult !== null,
+    () => (companion.readView(assignment.instanceId) as TextInstanceView).lastResult !== null,
     "反映確認の射影反映",
   );
   expect(
-    JSON.stringify(backend.getTextInstanceView({ instanceId: assignment.instanceId })),
+    JSON.stringify(companion.readView(assignment.instanceId) as TextInstanceView),
   ).not.toContain(DUMMY_TEXT);
 
   // 解除後は失効として拒否し、古い割当てへ転送しない。
-  backend.unassignText();
-  expect(() => backend.getTextInstanceView({ instanceId: assignment.instanceId })).toThrow(
-    RangeError,
-  );
-  expect(() => backend.sendTextForInstance(assignment.instanceId, { text: DUMMY_TEXT })).toThrow(
-    RangeError,
-  );
+  backend.unassignPlugin({
+    instanceId: assignment.instanceId,
+    localSessionId: assignment.localSessionId,
+    portId: assignment.portId,
+  });
+  expect(() => companion.readView(assignment.instanceId)).toThrow(RangeError);
+  expect(() => send(assignment.instanceId, { text: DUMMY_TEXT })).toThrow(RangeError);
 });
 
 test("実バックエンドの診断射影が自個体の統計だけを返す", async () => {
@@ -598,16 +572,22 @@ test("実バックエンドの診断射影が自個体の統計だけを返す",
   );
   const target = backend.getSnapshot().sessions[before];
   if (target === undefined) throw new Error("生存セッションが無い。");
-  const assignment = backend.assignDiagnostics({ localSessionId: target.localSessionId });
+  const assignment = backend.assignPlugin({
+    pluginKind: "diagnostic",
+    localSessionId: target.localSessionId,
+  });
+  const companion = backend.companionRegistry.get("diagnostic");
+  if (companion === undefined) throw new Error("診断 companion が無い。");
 
   await session.sendReliable({ op: "echo", id: "inst-1", value: "ダミー値" });
   await session.sendReliable({ op: "ping", id: "inst-p1" });
   await waitForArrival(() => {
-    const stats = backend.getDiagnosticInstanceView({ instanceId: assignment.instanceId }).stats;
+    const stats = (companion.readView(assignment.instanceId) as DiagnosticInstanceView).stats;
     return stats.diagnosticEcho === 1 && stats.diagnosticPing === 1;
   }, "診断統計の反映");
 
-  const view = backend.getDiagnosticInstanceView({ instanceId: assignment.instanceId });
+  // ADR: `as` を使う理由は上記と同様である。
+  const view = companion.readView(assignment.instanceId) as DiagnosticInstanceView;
   expect(view.localSessionId).toBe(target.localSessionId);
   expect(view.portId).toBe(DIAGNOSTIC_PORT_ID);
   expect(Object.keys(view).sort()).toEqual([
@@ -617,9 +597,9 @@ test("実バックエンドの診断射影が自個体の統計だけを返す",
     "portId",
     "stats",
   ]);
-  // 他個体・テキスト個体では取れない。
-  expect(() => backend.getDiagnosticInstanceView({ instanceId: "無い" })).toThrow(RangeError);
-  expect(() => backend.getTextInstanceView({ instanceId: assignment.instanceId })).toThrow(
-    RangeError,
-  );
+  // 他個体では取れない。
+  expect(() => companion.readView("無い")).toThrow(RangeError);
+  const textCompanion = backend.companionRegistry.get("text");
+  if (textCompanion === undefined) throw new Error("テキスト companion が無い。");
+  expect(() => textCompanion.readView(assignment.instanceId)).toThrow(RangeError);
 });

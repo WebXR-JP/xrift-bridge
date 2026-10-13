@@ -37,6 +37,21 @@
           {{ current.plugins.assignments.length }}
         </dd>
       </div>
+      @if (current.plugins.instances.length > 0) {
+        <div>
+          <dt>所有一覧</dt>
+          <dd>
+            <ul>
+              @for (item of current.plugins.instances; track item.instanceId) {
+                <li>
+                  {{ item.pluginKind }} {{ item.instanceId }} {{ item.localSessionId }}
+                  {{ item.portId }}（{{ item.phase }}）
+                </li>
+              }
+            </ul>
+          </dd>
+        </div>
+      }
     </dl>
   } @else {
     <p>未取得</p>

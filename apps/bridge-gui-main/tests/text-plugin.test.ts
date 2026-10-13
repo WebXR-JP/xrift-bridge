@@ -1,8 +1,10 @@
 /**
- * 固定テキスト表示の割当て・送信・回収の統合検証。
+ * テキスト割当て・送信・回収の統合検証。
  *
  * バックエンドを直接生成し、`world-client` を Node の `origin` 指定で動かして、
  * 実 WebSocket・既存 `ws`・yamux で候補検査・送信・切断・再割当てまでを通す。
+ * 割当ては汎用管理操作（`assignPlugin`/`unassignPlugin`）、送信と表示読取りは
+ * 本番 companion（backend が生成した登録表）経由で行い、新本番経路を通す。
  * ワールド側は `{op:"shown", id}` を返す応答器であり、本文を返送しない。
  * 比較コード本文・送信本文は記録に残さない（照合は値の一致で行う）。
  * テストで使う本文はダミーのみである。
@@ -11,8 +13,12 @@
  */
 import { afterEach, expect, test } from "vite-plus/test";
 import { TEXT_PORT_ID, TEXT_SESSION_ID, isTextShowRequest } from "bridge-app-core";
+import type { TextSendResult } from "bridge-app-core";
 import { createConnectionRequest, type ReliableSession, type SessionProvider } from "world-client";
 import { GuiBackend } from "../src/main/backend.ts";
+import { registerBundledPlugins } from "../src/composition/bundled-plugins.ts";
+import type { PluginCompanion } from "bridge-gui-plugin-sdk/companion";
+import type { TextInstanceView } from "../src/plugin-ui/text/contract.ts";
 
 const TEST_ORIGIN = "https://gui-text-test.invalid";
 
@@ -43,7 +49,10 @@ afterEach(async () => {
  * 試験用のバックエンドを生成する。待ち受けは空きポート自動選択である。
  */
 async function startBackend(): Promise<GuiBackend> {
-  const backend = await GuiBackend.create({ port: 0, allowedOrigins: [TEST_ORIGIN] });
+  const backend = await GuiBackend.create(
+    { port: 0, allowedOrigins: [TEST_ORIGIN] },
+    { registerPlugins: registerBundledPlugins },
+  );
   backends.push(backend);
   expect(backend.getSnapshot().backend).toBe("ready");
   return backend;
@@ -126,24 +135,72 @@ function respondShown(session: ReliableSession): void {
 }
 
 /**
- * 割当て対象のローカル識別子を取り出す。未割当てなら失敗する。
+ * backend が生成した登録表からテキスト companion を取り出す。
+ *
+ * 本番配線（manager→access→companion）で作られた記述子であり、
+ * 送信・表示読取りの新本番経路である。
  */
-function assignedLocalSessionId(backend: GuiBackend): string {
-  const localSessionId = backend.getSnapshot().text.localSessionId;
-  if (localSessionId === null) throw new Error("テキスト割当てが無い。");
-  return localSessionId;
+function textCompanionOf(backend: GuiBackend): PluginCompanion {
+  const companion = backend.companionRegistry.get("text");
+  if (companion === undefined) throw new Error("テキスト companion が無い。");
+  return companion;
+}
+
+/**
+ * テキスト種別の所有記録を取り出す。未割当てなら失敗する。
+ */
+function assignedTextOf(backend: GuiBackend): {
+  instanceId: string;
+  localSessionId: string;
+  portId: string;
+} {
+  const record = backend.getSnapshot().plugins.instances.find((item) => item.pluginKind === "text");
+  if (record === undefined) throw new Error("テキスト割当てが無い。");
+  return {
+    instanceId: record.instanceId,
+    localSessionId: record.localSessionId,
+    portId: record.portId,
+  };
+}
+
+/**
+ * 束縛個体の限定表示を読む。本文は含めない。
+ */
+function readTextView(backend: GuiBackend, instanceId: string): TextInstanceView {
+  // ADR: `as` を使う理由は、汎用口が種別を問わない表示を返し、試験で
+  // 束縛種別の具象表示を取り出すためである。根拠は、対応付けが同一種別の
+  // 記述子で読み・付番を対にすることである。
+  return textCompanionOf(backend).readView(instanceId) as TextInstanceView;
+}
+
+/**
+ * 束縛個体の現割当てへ本文を送る。子は本文だけを渡す。
+ */
+function sendTextViaCompanion(
+  backend: GuiBackend,
+  instanceId: string,
+  text: unknown,
+): Promise<TextSendResult> {
+  const send = textCompanionOf(backend).send;
+  if (send === undefined) throw new Error("テキストの送信口が無い。");
+  // ADR: `as` を使う理由は、汎用口が `unknown` で返す解決値を試験で
+  // 具象の送信結果として確かめるためである。根拠は、companion の固有操作が
+  // テキスト送信の解決型を保つことである。
+  return send(instanceId, { text }) as Promise<TextSendResult>;
 }
 
 test("候補が無いときはテキスト割当てを拒否する", async () => {
   const backend = await startBackend();
   backend.enableAcceptance();
   // セッション自体が無い場合。
-  expect(() => backend.assignText()).toThrowError(RangeError);
+  expect(() => backend.assignPlugin({ pluginKind: "text" })).toThrowError(RangeError);
   // テキスト表示用以外のセッションだけの場合。
   const provider = await approveConnection(backend);
   await createSessions(backend, provider, ["other"]);
-  expect(() => backend.assignText()).toThrowError(RangeError);
-  expect(backend.getSnapshot().text.localSessionId).toBeNull();
+  expect(() => backend.assignPlugin({ pluginKind: "text" })).toThrowError(RangeError);
+  expect(
+    backend.getSnapshot().plugins.instances.find((item) => item.pluginKind === "text"),
+  ).toBeUndefined();
   expect(backend.getSnapshot().plugins.assignments).toHaveLength(0);
 });
 
@@ -153,19 +210,23 @@ test("候補が一件のときは割り当てて表示に反映する", async ()
   const provider = await approveConnection(backend);
   await createSessions(backend, provider, [TEXT_SESSION_ID]);
 
-  const assignment = backend.assignText();
+  const assignment = backend.assignPlugin({ pluginKind: "text" });
+  expect(assignment.pluginKind).toBe("text");
   expect(assignment.portId).toBe(TEXT_PORT_ID);
-  const text = backend.getSnapshot().text;
-  expect(text.localSessionId).toBe(assignment.localSessionId);
-  expect(text.instanceId).toBe(assignment.instanceId);
-  expect(text.canSend).toBe(true);
-  expect(text.pendingId).toBeNull();
-  expect(text.lastResult).toBeNull();
-  expect(text.stats).toEqual({ attempts: 0, acknowledged: 0, unknown: 0 });
+  const owned = backend.getSnapshot().plugins.instances.find((item) => item.pluginKind === "text");
+  expect(owned?.localSessionId).toBe(assignment.localSessionId);
+  expect(owned?.instanceId).toBe(assignment.instanceId);
+  expect(owned?.phase).toBe("active");
+  const view = readTextView(backend, assignment.instanceId);
+  expect(view.localSessionId).toBe(assignment.localSessionId);
+  expect(view.canSend).toBe(true);
+  expect(view.pendingId).toBeNull();
+  expect(view.lastResult).toBeNull();
+  expect(view.stats).toEqual({ attempts: 0, acknowledged: 0, unknown: 0 });
   expect(backend.getSnapshot().plugins.assignments).toHaveLength(1);
 
   // 割当て中の再要求は拒否する（多重割当てを作らない）。
-  expect(() => backend.assignText()).toThrowError(RangeError);
+  expect(() => backend.assignPlugin({ pluginKind: "text" })).toThrowError(RangeError);
 });
 
 test("候補が複数のときはテキスト割当てを拒否する", async () => {
@@ -179,8 +240,10 @@ test("候補が複数のときはテキスト割当てを拒否する", async ()
   expect(backend.getSnapshot().sessions).toHaveLength(2);
 
   // 先着順・一件目の選択はしない。
-  expect(() => backend.assignText()).toThrowError(RangeError);
-  expect(backend.getSnapshot().text.localSessionId).toBeNull();
+  expect(() => backend.assignPlugin({ pluginKind: "text" })).toThrowError(RangeError);
+  expect(
+    backend.getSnapshot().plugins.instances.find((item) => item.pluginKind === "text"),
+  ).toBeUndefined();
   expect(backend.getSnapshot().plugins.assignments).toHaveLength(0);
 });
 
@@ -197,23 +260,19 @@ test("正常な送信は反映確認で決着し表示が進む", async () => {
     revisions.push(message.revision);
   });
   try {
-    const assignment = backend.assignText();
+    const assignment = backend.assignPlugin({ pluginKind: "text" });
     const before = backend.getSnapshot().revision;
-    const result = await backend.sendText({
-      localSessionId: assignment.localSessionId,
-      instanceId: assignment.instanceId,
-      text: DUMMY_TEXT,
-    });
+    const result = await sendTextViaCompanion(backend, assignment.instanceId, DUMMY_TEXT);
     expect(result.status).toBe("acknowledged");
     await waitForArrival(
-      () => backend.getSnapshot().text.lastResult?.status === "acknowledged",
+      () => readTextView(backend, assignment.instanceId).lastResult?.status === "acknowledged",
       "反映確認の表示反映",
     );
-    const text = backend.getSnapshot().text;
-    expect(text.pendingId).toBeNull();
-    expect(text.canSend).toBe(true);
-    expect(text.lastResult).toEqual(result);
-    expect(text.stats).toEqual({ attempts: 1, acknowledged: 1, unknown: 0 });
+    const view = readTextView(backend, assignment.instanceId);
+    expect(view.pendingId).toBeNull();
+    expect(view.canSend).toBe(true);
+    expect(view.lastResult).toEqual(result);
+    expect(view.stats).toEqual({ attempts: 1, acknowledged: 1, unknown: 0 });
     // 状態通知が改訂を進めている（購読経路の結線）。
     expect(backend.getSnapshot().revision).toBeGreaterThan(before);
     expect(revisions.length).toBeGreaterThan(0);
@@ -225,48 +284,26 @@ test("正常な送信は反映確認で決着し表示が進む", async () => {
   }
 });
 
-test("識別子が一致しない送信と不正な本文は拒否する", async () => {
+test("束縛外の送信と不正な本文は拒否する", async () => {
   const backend = await startBackend();
   backend.enableAcceptance();
   const provider = await approveConnection(backend);
   const [session] = await createSessions(backend, provider, [TEXT_SESSION_ID]);
   if (session === undefined) throw new Error("テキスト用セッションが無い。");
   respondShown(session);
-  const assignment = backend.assignText();
+  const assignment = backend.assignPlugin({ pluginKind: "text" });
 
-  // 古い・誤った識別子は新しい割当てへ転送しない。
-  expect(() =>
-    backend.sendText({
-      localSessionId: assignment.localSessionId,
-      instanceId: "無い",
-      text: DUMMY_TEXT,
-    }),
-  ).toThrowError(RangeError);
-  expect(() =>
-    backend.sendText({
-      localSessionId: "無い",
-      instanceId: assignment.instanceId,
-      text: DUMMY_TEXT,
-    }),
-  ).toThrowError(RangeError);
+  // 束縛外の個体には送らない（所有検証は同期的）。
+  expect(() => textCompanionOf(backend).readView("無い")).toThrowError(RangeError);
+  expect(() => sendTextViaCompanion(backend, "無い", DUMMY_TEXT)).toThrowError(RangeError);
   // 送信できない本文は送らず、試行に数えない。
-  await expect(
-    backend.sendText({
-      localSessionId: assignment.localSessionId,
-      instanceId: assignment.instanceId,
-      text: "",
-    }),
-  ).rejects.toThrowError(RangeError);
-  expect(() =>
-    backend.sendText({
-      localSessionId: assignment.localSessionId,
-      instanceId: assignment.instanceId,
-      text: 123,
-    }),
-  ).toThrowError(RangeError);
-  const text = backend.getSnapshot().text;
-  expect(text.stats).toEqual({ attempts: 0, acknowledged: 0, unknown: 0 });
-  expect(text.pendingId).toBeNull();
+  await expect(sendTextViaCompanion(backend, assignment.instanceId, "")).rejects.toThrowError(
+    RangeError,
+  );
+  expect(() => sendTextViaCompanion(backend, assignment.instanceId, 123)).toThrowError(RangeError);
+  const view = readTextView(backend, assignment.instanceId);
+  expect(view.stats).toEqual({ attempts: 0, acknowledged: 0, unknown: 0 });
+  expect(view.pendingId).toBeNull();
 });
 
 test("切断後は割当てが失効し再承認と再割当てが必要になる", async () => {
@@ -276,14 +313,10 @@ test("切断後は割当てが失効し再承認と再割当てが必要にな�
   const [session] = await createSessions(backend, provider, [TEXT_SESSION_ID]);
   if (session === undefined) throw new Error("テキスト用セッションが無い。");
   respondShown(session);
-  const first = backend.assignText();
-  await expect(
-    backend.sendText({
-      localSessionId: first.localSessionId,
-      instanceId: first.instanceId,
-      text: DUMMY_TEXT,
-    }),
-  ).resolves.toMatchObject({ status: "acknowledged" });
+  const first = backend.assignPlugin({ pluginKind: "text" });
+  await expect(sendTextViaCompanion(backend, first.instanceId, DUMMY_TEXT)).resolves.toMatchObject({
+    status: "acknowledged",
+  });
 
   // 運用切断で割当て表示が消え、生成分が回収される。
   const connectionId = backend.getSnapshot().connections[0]?.connectionId;
@@ -292,20 +325,15 @@ test("切断後は割当てが失効し再承認と再割当てが必要にな�
   await waitForArrival(
     () =>
       backend.getSnapshot().sessions.length === 0 &&
-      backend.getSnapshot().text.localSessionId === null,
+      backend.getSnapshot().plugins.instances.find((item) => item.pluginKind === "text") ===
+        undefined,
     "切断による割当て失効",
   );
-  expect(backend.getSnapshot().text.instanceId).toBeNull();
-  expect(backend.getSnapshot().text.canSend).toBe(false);
   expect(backend.getSnapshot().plugins.assignments).toHaveLength(0);
-  // 旧識別子の送信は新しい割当てへ転送しない。
-  expect(() =>
-    backend.sendText({
-      localSessionId: first.localSessionId,
-      instanceId: first.instanceId,
-      text: DUMMY_TEXT,
-    }),
-  ).toThrowError(RangeError);
+  // 旧識別子の送信は新しい割当てへ転送しない（所有検証は同期的）。
+  expect(() => sendTextViaCompanion(backend, first.instanceId, DUMMY_TEXT)).toThrowError(
+    RangeError,
+  );
 
   // 再接続は再承認が必要であり、同名でも旧割当てを引き継がない。
   const reprovider = await approveConnection(backend);
@@ -313,18 +341,14 @@ test("切断後は割当てが失効し再承認と再割当てが必要にな�
   if (resession === undefined) throw new Error("再作成のセッションが無い。");
   expect(backend.getSnapshot().sessions[0]?.localSessionId).not.toBe(first.localSessionId);
   respondShown(resession);
-  const second = backend.assignText();
+  const second = backend.assignPlugin({ pluginKind: "text" });
   expect(second.instanceId).not.toBe(first.instanceId);
-  const text = backend.getSnapshot().text;
-  expect(text.lastResult).toBeNull();
-  expect(text.stats).toEqual({ attempts: 0, acknowledged: 0, unknown: 0 });
-  await expect(
-    backend.sendText({
-      localSessionId: second.localSessionId,
-      instanceId: second.instanceId,
-      text: DUMMY_TEXT,
-    }),
-  ).resolves.toMatchObject({ status: "acknowledged" });
+  const view = readTextView(backend, second.instanceId);
+  expect(view.lastResult).toBeNull();
+  expect(view.stats).toEqual({ attempts: 0, acknowledged: 0, unknown: 0 });
+  await expect(sendTextViaCompanion(backend, second.instanceId, DUMMY_TEXT)).resolves.toMatchObject(
+    { status: "acknowledged" },
+  );
   expect(JSON.stringify(backend.getSnapshot())).not.toContain(DUMMY_TEXT);
 });
 
@@ -333,22 +357,30 @@ test("明示解除は割当て表示を消して送信できなくする", async
   backend.enableAcceptance();
   const provider = await approveConnection(backend);
   await createSessions(backend, provider, [TEXT_SESSION_ID]);
-  const assignment = backend.assignText();
-  expect(assignedLocalSessionId(backend)).toBe(assignment.localSessionId);
+  const assignment = backend.assignPlugin({ pluginKind: "text" });
+  expect(assignedTextOf(backend).localSessionId).toBe(assignment.localSessionId);
 
-  expect(backend.unassignText()).toEqual({ ok: true });
-  expect(backend.getSnapshot().text.localSessionId).toBeNull();
-  expect(backend.getSnapshot().text.instanceId).toBeNull();
+  const released = backend.unassignPlugin({
+    instanceId: assignment.instanceId,
+    localSessionId: assignment.localSessionId,
+    portId: assignment.portId,
+  });
+  expect(released).toEqual({ released: true, issues: [] });
+  expect(
+    backend.getSnapshot().plugins.instances.find((item) => item.pluginKind === "text"),
+  ).toBeUndefined();
   expect(backend.getSnapshot().plugins.assignments).toHaveLength(0);
-  expect(() =>
-    backend.sendText({
-      localSessionId: assignment.localSessionId,
+  expect(() => sendTextViaCompanion(backend, assignment.instanceId, DUMMY_TEXT)).toThrowError(
+    RangeError,
+  );
+  // 回収済みの再解除は未解除として返す（履歴表は作らない）。
+  expect(
+    backend.unassignPlugin({
       instanceId: assignment.instanceId,
-      text: DUMMY_TEXT,
+      localSessionId: assignment.localSessionId,
+      portId: assignment.portId,
     }),
-  ).toThrowError(RangeError);
-  // 未割当ての再解除は拒否する。
-  expect(() => backend.unassignText()).toThrowError(RangeError);
+  ).toEqual({ released: false, issues: [] });
 });
 
 test("診断とテキストは互いを対象外にする", async () => {
@@ -365,13 +397,16 @@ test("診断とテキストは互いを対象外にする", async () => {
 
   // テキスト表示用のセッションに診断は割り当てない。
   expect(() =>
-    backend.assignDiagnostics({ localSessionId: textSession.localSessionId }),
+    backend.assignPlugin({ pluginKind: "diagnostic", localSessionId: textSession.localSessionId }),
   ).toThrowError(RangeError);
   // 他用途のセッションへの診断は通る。
-  const diagnostics = backend.assignDiagnostics({ localSessionId: otherSession.localSessionId });
+  const diagnostics = backend.assignPlugin({
+    pluginKind: "diagnostic",
+    localSessionId: otherSession.localSessionId,
+  });
   expect(diagnostics.portId).toBe("diagnostic");
   // 診断済みがあってもテキスト候補の一件判定は崩れない。
-  const assignment = backend.assignText();
+  const assignment = backend.assignPlugin({ pluginKind: "text" });
   expect(assignment.localSessionId).toBe(textSession.localSessionId);
   expect(assignment.portId).toBe(TEXT_PORT_ID);
 });

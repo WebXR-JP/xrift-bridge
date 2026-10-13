@@ -6,9 +6,9 @@
  * `src/main/instance-rpc.ts` の適合層が担い、ここでは対応付けと照合・
  * 改訂番号だけを担う。単体検証は偽の backend・偽の生存照合で行える。
  *
- * 種別ごとの限定射影・操作への到達は静的登録表（`plugin-companions.ts`）の
- * 記述子に委譲し、ここに種別分岐を持たない。新しい companion の追加は
- * 登録だけで行い、この層の分岐追加は要らない。
+ * 種別ごとの限定射影・操作への到達は backend ごとに生成した登録表
+ * （`plugin-companions.ts`）の記述子に委譲し、ここに種別分岐を持たない。
+ * 新しい companion の追加は登録だけで行い、この層の分岐追加は要らない。
  *
  * 対応付けの方針は以下である。
  * - 対応付けは `mountId` から束縛個体（`instanceId`・種別トークン）への写像だけを持ち、
@@ -20,45 +20,9 @@
  *
  * @packageDocumentation
  */
-import type { TextSendResult } from "bridge-app-core";
-import type { TextInstanceView } from "../plugin-ui/text/contract.ts";
-import type { DiagnosticInstanceView } from "../plugin-ui/diagnostic/contract.ts";
 import type { PluginMountManager } from "./plugin-mounts.ts";
-import {
-  defaultPluginCompanionRegistry,
-  type PluginCompanion,
-  type PluginCompanionRegistry,
-} from "./plugin-companions.ts";
-
-/**
- * 個体別射影の最小口。`GuiBackend` が構造的に満たす。
- *
- * 管理 snapshot 全体・他個体の情報・候補一覧・保留情報は返さない。
- * 現割当てが失効していれば `RangeError` で拒否する。
- */
-export interface InstanceProjectionBackend {
-  /**
-   * 束縛テキスト個体の限定表示を返す。
-   *
-   * @param params - 束縛個体の識別子。main が対応付けから決め、子は指定しない。
-   */
-  getTextInstanceView(params: { instanceId: unknown }): TextInstanceView;
-  /**
-   * 束縛テキスト個体の現割当てへ本文を送る。
-   *
-   * 識別子は main が対応付けから決め、子は本文だけを渡す。
-   *
-   * @param instanceId - 束縛個体の識別子。main が対応付けから決める。
-   * @param params - 送信する本文。文字列であること。
-   */
-  sendTextForInstance(instanceId: unknown, params: { text: unknown }): Promise<TextSendResult>;
-  /**
-   * 束縛診断個体の限定表示を返す。
-   *
-   * @param params - 束縛個体の識別子。main が対応付けから決め、子は指定しない。
-   */
-  getDiagnosticInstanceView(params: { instanceId: unknown }): DiagnosticInstanceView;
-}
+import type { PluginCompanion } from "bridge-gui-plugin-sdk/companion";
+import type { PluginCompanionRegistry } from "./plugin-companions.ts";
 
 /**
  * マウント生存の照合口。段0所有表の読み取り側が実装する。
@@ -136,13 +100,11 @@ export class PluginInstanceBinder {
 
   /**
    * @param liveness - 段0所有表の生存照合口。
-   * @param backend - 個体別射影を持つ backend。companion が不透明に使う。
-   * @param registry - 種別トークンから記述子を引く登録表。省略時は既定の共有表。
+   * @param registry - 種別トークンから記述子を引く登録表。backend ごとに生成して渡す。
    */
   constructor(
     private readonly liveness: MountLiveness,
-    private readonly backend: unknown,
-    private readonly registry: PluginCompanionRegistry = defaultPluginCompanionRegistry,
+    private readonly registry: PluginCompanionRegistry,
   ) {}
 
   /** 対応付け中の件数。記録用である。 */
@@ -173,7 +135,7 @@ export class PluginInstanceBinder {
     const companion = this.requireCompanion(token);
     // ADR: 実在と現割当ての有無は companion の射影に問う。失効していれば
     // ここで拒否し、対応付けを作らない。二重管理の真偽表は持たない。
-    companion.readView(this.backend, instance);
+    companion.readView(instance);
     this.bindings.set(mount, {
       mountId: mount,
       instanceId: instance,
@@ -224,7 +186,7 @@ export class PluginInstanceBinder {
   readSnapshot(kind: string, mountId: string): unknown {
     const record = this.requireBinding(mountId, kind);
     const companion = this.requireCompanion(record.kind);
-    const view = companion.readView(this.backend, record.instanceId);
+    const view = companion.readView(record.instanceId);
     return companion.toSnapshot(view, record.revision);
   }
 
@@ -245,7 +207,7 @@ export class PluginInstanceBinder {
     if (operation === undefined) {
       throw new RangeError("操作口が無い。");
     }
-    return operation(this.backend, record.instanceId, params);
+    return operation(record.instanceId, params);
   }
 
   /**
@@ -264,7 +226,7 @@ export class PluginInstanceBinder {
     if (sink === null) {
       throw new RangeError("子画面の push 口が無い。");
     }
-    const view = companion.readView(this.backend, record.instanceId);
+    const view = companion.readView(record.instanceId);
     record.revision += 1;
     // 通知の外形（`{ revision, snapshot }`）は全 companion で共通であり、
     // 中身の snapshot は記述子が作る。種別分岐は持たない。

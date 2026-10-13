@@ -31,18 +31,14 @@ function prepareRpcStub() {
     approvePairing: vi.fn(async () => ({ status: "APPROVED", connectionId: "c1", origin: "o" })),
     rejectPairing: vi.fn(async () => ({ status: "REJECTED" })),
     disconnectConnection: vi.fn(async () => ({ ok: true as const })),
-    assignDiagnostics: vi.fn(async (localSessionId: string) => ({
-      localSessionId,
+    assignPlugin: vi.fn(async (pluginKind: string, localSessionId?: string) => ({
+      pluginKind,
+      pluginId: pluginKind,
+      localSessionId: localSessionId ?? "s1",
       instanceId: "i1",
-      portId: "diagnostic",
+      portId: pluginKind,
     })),
-    assignText: vi.fn(async () => ({
-      localSessionId: "s1",
-      instanceId: "i1",
-      portId: "text",
-    })),
-    sendText: vi.fn(async () => ({ status: "acknowledged" as const })),
-    unassignText: vi.fn(async () => ({ ok: true as const })),
+    unassignPlugin: vi.fn(async () => ({ released: true, issues: [] as Array<{ stage: string }> })),
     quit: vi.fn(async () => ({ ok: true as const })),
     notifyViewReady: vi.fn(),
     createSpike: vi.fn(async () => ({
@@ -139,23 +135,37 @@ describe("限定操作の処理", () => {
     await service.approvePairing("r1", "041003");
     await service.rejectPairing("r1");
     await service.disconnectConnection("c1");
-    await service.assignDiagnostics("s1");
+    await service.assignPlugin("diagnostic", "s1");
     expect(stub.client.approvePairing).toHaveBeenCalledTimes(1);
     expect(stub.client.rejectPairing).toHaveBeenCalledTimes(1);
     expect(stub.client.disconnectConnection).toHaveBeenCalledTimes(1);
-    expect(stub.client.assignDiagnostics).toHaveBeenCalledTimes(1);
+    expect(stub.client.assignPlugin).toHaveBeenCalledTimes(1);
     expect(stub.client.getSnapshot.mock.calls.length).toBe(baseline + 4);
   });
 
-  it("テキスト割当て・解除は要求後に再取得する", async () => {
+  it("プラグイン割当て・解除は要求後に再取得する", async () => {
     const { service, stub } = prepareService();
     await service.fetchInitial();
     const baseline = stub.client.getSnapshot.mock.calls.length;
-    await service.assignText();
-    await service.unassignText();
-    expect(stub.client.assignText).toHaveBeenCalledTimes(1);
-    expect(stub.client.unassignText).toHaveBeenCalledTimes(1);
+    await service.assignPlugin("text");
+    await service.unassignPlugin("i1", "s1", "text");
+    expect(stub.client.assignPlugin).toHaveBeenCalledTimes(1);
+    expect(stub.client.unassignPlugin).toHaveBeenCalledTimes(1);
     expect(stub.client.getSnapshot.mock.calls.length).toBe(baseline + 2);
+  });
+
+  it("解除の不完全は成功と記録しない", async () => {
+    const { service, stub } = prepareService();
+    stub.client.unassignPlugin.mockResolvedValueOnce({ released: false, issues: [] });
+    await service.unassignPlugin("i1", "s1", "text");
+    expect(service.eventLog().join("\n")).toContain("不完全");
+    expect(service.eventLog().join("\n")).not.toContain("割当てを外した");
+    stub.client.unassignPlugin.mockResolvedValueOnce({
+      released: true,
+      issues: [{ stage: "unassign" }],
+    });
+    await service.unassignPlugin("i1", "s1", "text");
+    expect(service.eventLog().join("\n")).toContain("不完全");
   });
 
   it("終了は要求だけ送り再取得しない", async () => {
@@ -186,26 +196,26 @@ describe("失敗時の表示", () => {
 
   it("テキスト割当ての失敗はカードの説明に出し本文は載せない", async () => {
     const { service, stub } = prepareService();
-    stub.client.assignText.mockRejectedValueOnce(new Error("割当て不可"));
-    await service.assignText();
+    stub.client.assignPlugin.mockRejectedValueOnce(new Error("割当て不可"));
+    await service.assignPlugin("text");
     expect(service.textError()).toContain("割当て不可");
     expect(service.textError()).not.toContain("041003");
-    expect(service.eventLog().join("\n")).toContain("テキスト割当てに失敗");
+    expect(service.eventLog().join("\n")).toContain("プラグイン割当てに失敗");
   });
 
   it("テキスト割当て解除の失敗はカードの説明に出す", async () => {
     const { service, stub } = prepareService();
-    stub.client.unassignText.mockRejectedValueOnce(new Error("解除不可"));
-    await service.unassignText();
+    stub.client.unassignPlugin.mockRejectedValueOnce(new Error("解除不可"));
+    await service.unassignPlugin("i1", "s1", "text");
     expect(service.textError()).toContain("解除不可");
   });
 
   it("テキスト割当ての成功は失敗表示を消す", async () => {
     const { service, stub } = prepareService();
-    stub.client.assignText.mockRejectedValueOnce(new Error("割当て不可"));
-    await service.assignText();
+    stub.client.assignPlugin.mockRejectedValueOnce(new Error("割当て不可"));
+    await service.assignPlugin("text");
     expect(service.textError()).not.toBe("");
-    await service.assignText();
+    await service.assignPlugin("text");
     expect(service.textError()).toBe("");
   });
 });

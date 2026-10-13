@@ -12,6 +12,7 @@ import { afterEach, expect, test } from "vite-plus/test";
 import { formatPairingCode } from "bridge-protocol";
 import { createConnectionRequest, type ReliableSession, type SessionProvider } from "world-client";
 import { GuiBackend } from "../src/main/backend.ts";
+import { registerBundledPlugins } from "../src/composition/bundled-plugins.ts";
 
 const TEST_ORIGIN = "https://gui-test.invalid";
 
@@ -39,7 +40,10 @@ afterEach(async () => {
  * 試験用のバックエンドを生成する。待ち受けは空きポート自動選択である。
  */
 async function startBackend(): Promise<GuiBackend> {
-  const backend = await GuiBackend.create({ port: 0, allowedOrigins: [TEST_ORIGIN] });
+  const backend = await GuiBackend.create(
+    { port: 0, allowedOrigins: [TEST_ORIGIN] },
+    { registerPlugins: registerBundledPlugins },
+  );
   backends.push(backend);
   expect(backend.getSnapshot().backend).toBe("ready");
   return backend;
@@ -194,7 +198,10 @@ test("受付から承認・診断往復・切断・再接続まで通る", async
   const target = sessions[0];
   if (target === undefined) throw new Error("生存セッションが無い。");
 
-  const assignment = backend.assignDiagnostics({ localSessionId: target.localSessionId });
+  const assignment = backend.assignPlugin({
+    pluginKind: "diagnostic",
+    localSessionId: target.localSessionId,
+  });
   expect(assignment.portId).toBe("diagnostic");
   expect(backend.getSnapshot().plugins.assignments).toHaveLength(1);
   expect(backend.getSnapshot().plugins.instances).toHaveLength(1);
@@ -239,7 +246,7 @@ test("受付から承認・診断往復・切断・再接続まで通る", async
   await waitForArrival(() => backend.getSnapshot().sessions.length === 1, "再接続後の公開");
   const target2 = backend.getSnapshot().sessions[0];
   if (target2 === undefined) throw new Error("再接続後のセッションが無い。");
-  backend.assignDiagnostics({ localSessionId: target2.localSessionId });
+  backend.assignPlugin({ pluginKind: "diagnostic", localSessionId: target2.localSessionId });
   const collected2 = collectSession(session2);
   await expect(session2.sendReliable({ op: "ping", id: "gui-p2" })).resolves.toBeUndefined();
   await expect(collected2.waitForPayload((payload) => isPong(payload, "gui-p2"))).resolves.toEqual({
@@ -286,18 +293,26 @@ test("不正な引数と終了中の操作を拒否する", async () => {
   expect(() => backend.approvePairing({ requestId: "無い", code: 123 })).toThrowError(RangeError);
   expect(() => backend.rejectPairing({ requestId: "" })).toThrowError(RangeError);
   expect(() => backend.disconnectConnection({ connectionId: "" })).toThrowError(RangeError);
-  expect(() => backend.assignDiagnostics({ localSessionId: "" })).toThrowError(RangeError);
+  expect(() => backend.assignPlugin({ pluginKind: "diagnostic", localSessionId: "" })).toThrowError(
+    RangeError,
+  );
+  expect(() => backend.assignPlugin({ pluginKind: "" })).toThrowError(RangeError);
   // 形状は正しいが存在しない対象の扱い。判定は server・基盤が行う。
   expect(backend.getPairingView({ requestId: "無い" }).available).toBe(false);
   expect(backend.rejectPairing({ requestId: "無い" }).status).toBe("NOT_PENDING");
   expect(() => backend.disconnectConnection({ connectionId: "無い" })).toThrowError(RangeError);
-  expect(() => backend.assignDiagnostics({ localSessionId: "無い" })).toThrowError(RangeError);
+  expect(() =>
+    backend.assignPlugin({ pluginKind: "diagnostic", localSessionId: "無い" }),
+  ).toThrowError(RangeError);
+  expect(() => backend.assignPlugin({ pluginKind: "無い" })).toThrowError(RangeError);
 
   await backend.close();
   expect(backend.getSnapshot().backend).toBe("stopping");
   // 終了中は新規操作を拒否し、読み取りは続ける。
   expect(() => backend.enableAcceptance()).toThrowError(Error);
-  expect(() => backend.assignDiagnostics({ localSessionId: "無い" })).toThrowError(Error);
+  expect(() =>
+    backend.assignPlugin({ pluginKind: "diagnostic", localSessionId: "無い" }),
+  ).toThrowError(Error);
   expect(backend.getSnapshot().sessions).toHaveLength(0);
 });
 
@@ -309,10 +324,13 @@ test("終了後は待ち受けポートが解放される", async () => {
   expect(port).not.toBe("");
   await backend.close();
   // 同一ポートで起動し直せる（待受が残っていないこと）。
-  const reopened = await GuiBackend.create({
-    port: Number(port),
-    allowedOrigins: [TEST_ORIGIN],
-  });
+  const reopened = await GuiBackend.create(
+    {
+      port: Number(port),
+      allowedOrigins: [TEST_ORIGIN],
+    },
+    { registerPlugins: registerBundledPlugins },
+  );
   backends.push(reopened);
   expect(reopened.getSnapshot().backend).toBe("ready");
   expect(new URL(reopened.getSnapshot().endpoint?.url ?? "").port).toBe(port);

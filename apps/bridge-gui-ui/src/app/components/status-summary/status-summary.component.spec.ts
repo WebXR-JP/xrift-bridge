@@ -55,7 +55,17 @@ describe("状態要約の表示", () => {
       makeSnapshot({
         endpoint: null,
         plugins: {
-          instances: [{ instanceId: "i1", pluginId: "p1" }],
+          kinds: [],
+          instances: [
+            {
+              pluginKind: "diagnostic",
+              pluginId: "diagnostic",
+              instanceId: "i1",
+              localSessionId: "s1",
+              portId: "diagnostic",
+              phase: "active",
+            },
+          ],
           assignments: [{ localSessionId: "s1", instanceId: "i1", portId: "diagnostic" }],
         },
       }),
@@ -65,6 +75,35 @@ describe("状態要約の表示", () => {
     expect(text).toContain("未公開");
     expect(text).toContain("実体 1");
     expect(text).toContain("割当て 1");
+  });
+
+  it("全所有記録の識別子と種別と段階を描画する", async () => {
+    await TestBed.compileComponents();
+    const fixture = TestBed.createComponent(StatusSummaryComponent);
+    fixture.componentRef.setInput(
+      "snapshot",
+      makeSnapshot({
+        plugins: {
+          kinds: [],
+          instances: [
+            {
+              pluginKind: "text",
+              pluginId: "text",
+              instanceId: "i9",
+              localSessionId: "s9",
+              portId: "text",
+              phase: "cleanupFailed",
+            },
+          ],
+          assignments: [],
+        },
+      }),
+    );
+    fixture.detectChanges();
+    const text: string = fixture.nativeElement.textContent ?? "";
+    expect(text).toContain("i9");
+    expect(text).toContain("text");
+    expect(text).toContain("cleanupFailed");
   });
 
   it("未取得の間は未取得と出す", async () => {

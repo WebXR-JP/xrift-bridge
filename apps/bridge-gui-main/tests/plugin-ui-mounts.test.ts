@@ -16,19 +16,31 @@ import {
   type PluginUiChannelFactory,
   type PluginUiChildView,
 } from "../src/main/plugin-ui-mounts.ts";
+import { PluginCompanionRegistry } from "../src/main/plugin-companions.ts";
+import type { PluginCompanion } from "bridge-gui-plugin-sdk/companion";
 import type {
   DiagnosticInstanceSnapshot,
   DiagnosticInstanceView,
 } from "../src/plugin-ui/diagnostic/contract.ts";
 import type { TextInstanceSnapshot, TextInstanceView } from "../src/plugin-ui/text/contract.ts";
-import { buildTextViewUrl } from "../src/plugin-ui/text/contract.ts";
-import { buildDiagnosticViewUrl } from "../src/plugin-ui/diagnostic/contract.ts";
+import {
+  BUNDLED_PLUGIN_ASSETS,
+  getBundledPluginAsset,
+} from "../src/composition/bundled-plugin-assets.ts";
 import {
   buildPluginBlankUrl,
+  buildPluginViewUrl,
   parsePluginMountId,
   pluginMountKindOf,
   PLUGIN_PENDING_TIMEOUT_MS,
 } from "bridge-gui-contract/plugin-instance";
+
+/** 検証用の解決済み view パス。静的 manifest の値を正本とする。 */
+function bundledViewPath(kind: string): string {
+  const entry = getBundledPluginAsset(BUNDLED_PLUGIN_ASSETS, kind);
+  if (entry === undefined) throw new Error(`資産が無い: ${kind}`);
+  return entry.viewPath;
+}
 
 /** 検証用の束縛情報。表示の照合だけに使う。 */
 interface TestBinding {
@@ -37,7 +49,7 @@ interface TestBinding {
   portId: string;
 }
 
-/** 検証用の偽 backend。現割当てと個体別射影の最小口を満たす。 */
+/** 検証用の偽 backend。外部変化の通知口だけを持つ。 */
 class FakeBackend {
   textBinding: TestBinding | null = null;
   diagnostics: TestBinding[] = [];
@@ -52,52 +64,96 @@ class FakeBackend {
   notifyExternalChange(): void {
     this.notified += 1;
   }
+}
 
-  getTextBinding(): TestBinding | null {
-    if (this.textDesiredFails) {
-      throw new Error("テキストの要望読みに失敗した。");
-    }
-    return this.textBinding;
-  }
+/**
+ * 検証用のテキスト companion。材料（FakeBackend）を capture する。
+ */
+function stubTextCompanion(store: FakeBackend): PluginCompanion {
+  return {
+    kind: "text",
+    label: "テキスト",
+    viewPath: bundledViewPath("text"),
+    listDesired: () => {
+      if (store.textDesiredFails) {
+        throw new Error("テキストの要望読みに失敗した。");
+      }
+      const binding = store.textBinding;
+      return binding === null ? [] : [{ ...binding }];
+    },
+    readView: (instanceId: string) => {
+      const view = store.textView;
+      if (view === null || view.instanceId !== instanceId) {
+        throw new RangeError("束縛したテキスト個体ではない。");
+      }
+      if (store.textBinding === null || store.textBinding.instanceId !== instanceId) {
+        throw new RangeError("束縛したテキスト個体ではない。");
+      }
+      return view;
+    },
+    toSnapshot: (view, revision) => ({ ...(view as TextInstanceView), revision }),
+    send: (instanceId: string, params: unknown) => {
+      if (store.textBinding === null || store.textBinding.instanceId !== instanceId) {
+        return Promise.reject(new RangeError("束縛したテキスト個体ではない。"));
+      }
+      // ADR: `as` を使う理由は、操作引数の形状を companion が固定するためである。
+      const table = params as { text: unknown };
+      if (typeof table.text !== "string" || table.text.length === 0) {
+        return Promise.reject(new RangeError("text は空でない文字列であること。"));
+      }
+      return Promise.resolve({ status: "acknowledged" as const, id: "test-1" });
+    },
+    pushMessageName: "textStateChanged",
+    buildRequestHandlers: (mountId: string, env) => ({
+      getTextState: () => {
+        const snapshot = env.readSnapshot("text", mountId);
+        const typed = snapshot as TextInstanceSnapshot;
+        env.markReady(mountId);
+        return typed;
+      },
+      sendText: (params: { text: string }) => {
+        const result = env.send("text", mountId, params);
+        return result as Promise<TextSendResult>;
+      },
+    }),
+  };
+}
 
-  listDiagnosticBindings(): TestBinding[] {
-    if (this.diagnosticDesiredFails) {
-      throw new Error("診断の要望読みに失敗した。");
-    }
-    return [...this.diagnostics];
-  }
-
-  getTextInstanceView(params: { instanceId: unknown }): TextInstanceView {
-    const view = this.textView;
-    if (view === null || view.instanceId !== params.instanceId) {
-      throw new RangeError("束縛したテキスト個体ではない。");
-    }
-    if (this.textBinding === null || this.textBinding.instanceId !== params.instanceId) {
-      throw new RangeError("束縛したテキスト個体ではない。");
-    }
-    return view;
-  }
-
-  sendTextForInstance(instanceId: unknown, params: { text: unknown }): Promise<TextSendResult> {
-    if (this.textBinding === null || this.textBinding.instanceId !== instanceId) {
-      return Promise.reject(new RangeError("束縛したテキスト個体ではない。"));
-    }
-    if (typeof params.text !== "string" || params.text.length === 0) {
-      return Promise.reject(new RangeError("text は空でない文字列であること。"));
-    }
-    return Promise.resolve({ status: "acknowledged" as const, id: "test-1" });
-  }
-
-  getDiagnosticInstanceView(params: { instanceId: unknown }): DiagnosticInstanceView {
-    const view = this.diagnosticView;
-    if (view === null || view.instanceId !== params.instanceId) {
-      throw new RangeError("束縛した診断個体ではない。");
-    }
-    if (!this.diagnostics.some((binding) => binding.instanceId === params.instanceId)) {
-      throw new RangeError("診断の現割当てが無い。");
-    }
-    return view;
-  }
+/**
+ * 検証用の診断 companion。材料（FakeBackend）を capture する。
+ */
+function stubDiagnosticCompanion(store: FakeBackend): PluginCompanion {
+  return {
+    kind: "diagnostic",
+    label: "診断",
+    viewPath: bundledViewPath("diagnostic"),
+    listDesired: () => {
+      if (store.diagnosticDesiredFails) {
+        throw new Error("診断の要望読みに失敗した。");
+      }
+      return store.diagnostics.map((binding) => ({ ...binding }));
+    },
+    readView: (instanceId: string) => {
+      const view = store.diagnosticView;
+      if (view === null || view.instanceId !== instanceId) {
+        throw new RangeError("束縛した診断個体ではない。");
+      }
+      if (!store.diagnostics.some((binding) => binding.instanceId === instanceId)) {
+        throw new RangeError("診断の現割当てが無い。");
+      }
+      return view;
+    },
+    toSnapshot: (view, revision) => ({ ...(view as DiagnosticInstanceView), revision }),
+    pushMessageName: "diagnosticStateChanged",
+    buildRequestHandlers: (mountId: string, env) => ({
+      getDiagnosticState: () => {
+        const snapshot = env.readSnapshot("diagnostic", mountId);
+        const typed = snapshot as DiagnosticInstanceSnapshot;
+        env.markReady(mountId);
+        return typed;
+      },
+    }),
+  };
 }
 
 /** 検証用の偽子画面。破棄と読込みの事実だけを残す。 */
@@ -191,7 +247,10 @@ function setup(options: { failBind?: boolean } = {}): {
   const backend = new FakeBackend();
   const fakes = setupFactory(options);
   let nowMs = 0;
-  const coordinator = new PluginUiCoordinator(7, backend, fakes.factory, () => nowMs);
+  const registry = new PluginCompanionRegistry();
+  registry.register(stubTextCompanion(backend));
+  registry.register(stubDiagnosticCompanion(backend));
+  const coordinator = new PluginUiCoordinator(7, backend, fakes.factory, () => nowMs, registry);
   return {
     backend,
     coordinator,
@@ -205,10 +264,12 @@ function setup(options: { failBind?: boolean } = {}): {
 }
 
 test("実プラグインの識別子は往復しスパイクと混ざらない", () => {
-  const textUrl = buildTextViewUrl("plugin-text-3");
+  // 子画面 URL の組み立ては対応付けが汎用の組み立てで行う。相対 entrypoint の
+  // 宣言と解決済み view パスの対応は資産の同期テストで固定する。
+  const textUrl = buildPluginViewUrl(bundledViewPath("text"), "plugin-text-3");
   expect(parsePluginMountId(textUrl)).toBe("plugin-text-3");
   expect(pluginMountKindOf("plugin-text-3")).toBe("text");
-  const diagnosticUrl = buildDiagnosticViewUrl("plugin-diagnostic-4");
+  const diagnosticUrl = buildPluginViewUrl(bundledViewPath("diagnostic"), "plugin-diagnostic-4");
   expect(parsePluginMountId(diagnosticUrl)).toBe("plugin-diagnostic-4");
   expect(pluginMountKindOf("plugin-diagnostic-4")).toBe("diagnostic");
   expect(parsePluginMountId(buildPluginBlankUrl("plugin-text-3"))).toBe("plugin-text-3");
@@ -264,7 +325,7 @@ test("タグ生成で個体別チャネルを結線する", () => {
   const view = new FakeView(11, 7, placement.initialUrl);
   expect(coordinator.handleTagCreated(view)).toBe(true);
   expect(boundKinds.get(placement.mountId)).toBe("text");
-  expect(view.loaded).toEqual([buildTextViewUrl(placement.mountId)]);
+  expect(view.loaded).toEqual([buildPluginViewUrl(bundledViewPath("text"), placement.mountId)]);
   expect(view.removed).toBe(false);
   const bound = coordinator.listPlacements()[0];
   if (bound === undefined) throw new Error("配置が無い。");
@@ -482,7 +543,9 @@ test("診断の配置・結線・送信 push が通る", () => {
   const view = new FakeView(21, 7, placement.initialUrl);
   expect(coordinator.handleTagCreated(view)).toBe(true);
   expect(boundKinds.get(placement.mountId)).toBe("diagnostic");
-  expect(view.loaded).toEqual([buildDiagnosticViewUrl(placement.mountId)]);
+  expect(view.loaded).toEqual([
+    buildPluginViewUrl(bundledViewPath("diagnostic"), placement.mountId),
+  ]);
   const snapshot = coordinator.readSnapshot(
     "diagnostic",
     placement.mountId,

@@ -12,7 +12,6 @@ import type {
   ConnectionPhase,
   RejectionResult,
 } from "bridge-server";
-import type { TextSendResult, TextStats } from "bridge-app-core";
 import type { PluginMountDto, SpikeMountSummary, SpikePushResult } from "./plugin-spike.ts";
 import type { PluginUiMountFailure, PluginUiMountPlacement } from "./plugin-instance.ts";
 
@@ -105,16 +104,45 @@ export interface ConnectionSummary {
  */
 export type SessionSummary = BridgeSessionInfo;
 
-/** 生成済みプラグインインスタンスの表示状態。 */
-export interface PluginInstanceSummary {
-  /** インスタンスの識別子。再利用しない。 */
-  readonly instanceId: string;
+/** プラグイン種別の表示状態。管理記述子の登録内容の写しである。 */
+export interface PluginKindSummary {
+  /** companion の種別トークン。 */
+  readonly pluginKind: string;
   /** 由来プラグインの識別子。 */
   readonly pluginId: string;
+  /** 失敗表示用の種別名（表示名のみ）。 */
+  readonly label: string;
+  /** 同時所有の上限。`null` は上限なし。 */
+  readonly maxInstances: number | null;
 }
 
-/** 割当ての表示状態。 */
-export interface AssignmentSummary {
+/**
+ * 所有の段階（表示用）。
+ *
+ * main 側の所有段階の写しであり、main の型は import しない。
+ * `initializing`・`releasing` は手続き中、`cleanupFailed` は回収に失敗して
+ * 残ったものであり、最終回収はホストの基盤終了に委ねる。
+ */
+export type PluginOwnershipPhase = "initializing" | "active" | "releasing" | "cleanupFailed";
+
+/** 管理層が所有する個体の表示状態。段階の絞り込みはしない。 */
+export interface OwnedPluginInstanceSummary {
+  /** companion の種別トークン。 */
+  readonly pluginKind: string;
+  /** 由来プラグインの識別子。 */
+  readonly pluginId: string;
+  /** 束縛した実インスタンスの識別子。再利用しない。 */
+  readonly instanceId: string;
+  /** 現割当ての生存セッションのローカル識別子。 */
+  readonly localSessionId: string;
+  /** 束縛した接続口の識別子。 */
+  readonly portId: string;
+  /** 所有の段階。 */
+  readonly phase: PluginOwnershipPhase;
+}
+
+/** 現割当ての表示状態。基盤の割当て一覧の写しである。 */
+export interface PluginAssignmentSummary {
   /** 割り当てた生存セッションのローカル識別子。 */
   readonly localSessionId: string;
   /** 割当て先インスタンスの識別子。 */
@@ -123,42 +151,54 @@ export interface AssignmentSummary {
   readonly portId: string;
 }
 
-/** プラグインのインスタンスと割当ての表示状態。 */
+/** プラグインの種別・所有・割当ての表示状態。 */
 export interface PluginAssignmentState {
-  /** GUI バックエンドが生成・保持するインスタンスの一覧。 */
-  readonly instances: readonly PluginInstanceSummary[];
+  /** 登録済み種別の一覧。 */
+  readonly kinds: readonly PluginKindSummary[];
+  /** 管理層が所有する個体の一覧。段階の絞り込みはしない。 */
+  readonly instances: readonly OwnedPluginInstanceSummary[];
   /** 現在の割当て一覧の写し。 */
-  readonly assignments: readonly AssignmentSummary[];
+  readonly assignments: readonly PluginAssignmentSummary[];
+}
+
+/** 確定した割当ての表示状態。種別と由来・三識別子を持つ。 */
+export interface PluginBindingSummary {
+  /** companion の種別トークン。 */
+  readonly pluginKind: string;
+  /** 由来プラグインの識別子。 */
+  readonly pluginId: string;
+  /** 束縛した実インスタンスの識別子。再利用しない。 */
+  readonly instanceId: string;
+  /** 現割当ての生存セッションのローカル識別子。 */
+  readonly localSessionId: string;
+  /** 束縛した接続口の識別子。 */
+  readonly portId: string;
 }
 
 /**
- * 固定テキスト表示の状態。
+ * 解放時の問題の表示状態。
  *
- * 割当ての有無は識別子で表す。両方が `null` なら未割当て、両方あれば
- * 割当て中であり、片方だけの状態は作らない。本文は含めない（送信時のみ
- * 扱い、snapshot・ログに残さない）。
+ * 失敗した段階だけを持ち、原因・状態は載せない（本文の混入があり得るため）。
  */
-export interface TextDisplayState {
-  /** 割当て中の生存セッションのローカル識別子。未割当てなら `null`。 */
-  readonly localSessionId: string | null;
-  /** 割当て中のテキストインスタンスの識別子。未割当てなら `null`。 */
-  readonly instanceId: string | null;
-  /** 割当てがあり実行中でなければ真。 */
-  readonly canSend: boolean;
-  /** 実行中の要求の相関識別子。待機がなければ `null`。 */
-  readonly pendingId: string | null;
-  /** 直近の決着。未送信なら `null`。 */
-  readonly lastResult: TextSendResult | null;
-  /** インスタンス単位の統計。未割当てなら零値である。 */
-  readonly stats: TextStats;
+export interface PluginReleaseIssueSummary {
+  /** 失敗した段階。 */
+  readonly stage: string;
+}
+
+/** 個体の解放結果の表示状態。 */
+export interface UnassignPluginResult {
+  /** 初回解除なら真。二重解除なら偽。 */
+  readonly released: boolean;
+  /** 回収・通知の過程で起きた問題の一覧。無ければ空配列。 */
+  readonly issues: readonly PluginReleaseIssueSummary[];
 }
 
 /**
  * 管理画面の表示スナップショット。
  *
  * 起動状態・endpoint・受付状態・コードを除く保留一覧・接続一覧と
- * 認可段階・生存セッション一覧・インスタンス識別情報と接続口・割当て状態・
- * 固定テキスト表示の状態を持つ。テキスト本文は含めない。
+ * 認可段階・生存セッション一覧・種別／所有／割当て状態を持つ。
+ * テキスト本文は含めない。
  */
 export interface ManagementSnapshot {
   /** 単調増加の改訂番号。新しいときだけ採用する。 */
@@ -175,10 +215,8 @@ export interface ManagementSnapshot {
   readonly connections: readonly ConnectionSummary[];
   /** 生存セッション一覧。 */
   readonly sessions: readonly SessionSummary[];
-  /** インスタンス／割当て状態。 */
+  /** 種別／所有／割当て状態。 */
   readonly plugins: PluginAssignmentState;
-  /** 固定テキスト表示の状態。本文は含めない。 */
-  readonly text: TextDisplayState;
   /**
    * 実プラグイン子画面の配置一覧。
    *
@@ -193,6 +231,16 @@ export interface ManagementSnapshot {
    * 表示であり、再生成は明示の再試行で行う。本文は含めない。
    */
   readonly pluginMountFailures: readonly PluginUiMountFailure[];
+  /**
+   * 実プラグイン子画面タグの遷移規則。
+   *
+   * backend が登録成功後に登録済み companion の解決済み view パス集合から
+   * `buildPluginNavigationRules` で生成した値の写しである。管理画面は採用中
+   * snapshot のこの値をタグ属性に載せ、旧固定値や全面許可へ fallback しない。
+   * 静的登録のため backend 生存期間中は不変であり、改訂進行で既存タグを
+   * 作り直さない。許可範囲は空ページ＋登録済み全プラグイン scope である。
+   */
+  readonly pluginNavigationRules: readonly string[];
 }
 
 /** main→Webview の状態通知。最新の全状態を送る唯一の通知である。 */
@@ -332,36 +380,28 @@ export type ManagementRpc = {
       /** 指定接続だけを切断する。待ち受けと他接続は維持する。 */
       disconnectConnection: { params: { connectionId: string }; response: OperationAck };
       /**
-       * スパイク専用の診断割当て。reliable Session ごとに診断インスタンスを
-       * 1つ生成し `"diagnostic"` 接続口へ割り当てる。
+       * 汎用プラグインの割当て。種別トークンと生存セッションの指定だけを受け、
+       * 管理記述子に従って割り当てる。
        *
-       * 論理名がテキスト表示用のセッションは対象外である。
+       * `localSessionId` を省略した場合は方針に従い候補から選ぶ。指定した
+       * 場合はその生存セッションへ割り当て、方針の選択結果が指定と一致しな
+       * ければ拒否する。
        */
-      assignDiagnostics: { params: { localSessionId: string }; response: AssignmentSummary };
-      /**
-       * 固定テキスト表示の明示割当て。引数は取らない。
-       *
-       * 論理名がテキスト表示用で未割当ての生存セッションが全接続を通じて
-       * 一件だけある場合に、テキストインスタンスを生成して割り当てる。
-       * 候補ゼロ・複数・割当て中の再要求は理由付きで拒否する。
-       */
-      assignText: { params: {}; response: AssignmentSummary };
-      /**
-       * 固定テキストの送信。画面が認識している割当て識別子を含める。
-       *
-       * 現在の割当てと一致しなければ拒否し、古い画面の要求を新しい割当てへ
-       * 転送しない。本文は送信時のみ扱い、snapshot・ログに残さない。
-       */
-      sendText: {
-        params: { localSessionId: string; instanceId: string; text: string };
-        response: TextSendResult;
+      assignPlugin: {
+        params: { pluginKind: string; localSessionId?: string };
+        response: PluginBindingSummary;
       };
       /**
-       * 固定テキストの明示解除。割当て表示を消し、生成分を回収する。
+       * 汎用プラグインの解除。描画した所有記録の三識別子で照合し、
+       * 完全一致する所有だけを回収する。
        *
-       * 対象セッションの中断は基盤の解除規約に従う。未割当てなら拒否する。
+       * 所有があるのに三識別子が不一致の場合は拒否し、新束縛へ転送しない。
+       * 回収済み・未知の識別子は `{released:false, issues:[]}` とする。
        */
-      unassignText: { params: {}; response: OperationAck };
+      unassignPlugin: {
+        params: { instanceId: string; localSessionId: string; portId: string };
+        response: UnassignPluginResult;
+      };
       /**
        * 段0スパイクの子画面配置。配置用 DTO（識別子＋初期 URL）を返す。
        *

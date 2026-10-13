@@ -5,6 +5,9 @@
  * 追加せず、登録表への登録だけで配置→結線→状態取得→push が通ることを
  * 確かめる。text/diagnostic と異なる要求名・通知名・表示を持つ。
  * 試験用の登録表を使い、既定の共有表を汚さない。
+ * 新 registrar 経路全体の検証は `third-plugin-registration.test.ts` が担い、
+ * ここでは登録表直結の結線単位を固定する（役割分担であり、
+ * 保証内容の重複削除ではない）。
  *
  * @packageDocumentation
  */
@@ -16,12 +19,8 @@ import {
   parsePluginMountId,
   pluginMountKindOf,
 } from "bridge-gui-contract/plugin-instance";
-import {
-  getPluginCompanion,
-  PluginCompanionRegistry,
-  type CompanionRequestEnv,
-  type PluginCompanion,
-} from "../src/main/plugin-companions.ts";
+import { PluginCompanionRegistry } from "../src/main/plugin-companions.ts";
+import type { CompanionRequestEnv, PluginCompanion } from "bridge-gui-plugin-sdk/companion";
 import {
   PluginUiCoordinator,
   type PluginUiChannel,
@@ -57,102 +56,102 @@ interface MemoChangedMessage {
   readonly snapshot: MemoSnapshot;
 }
 
-/** メモの限定射影・操作だけを持つ backend の最小口。 */
-interface MemoBackend {
+/** メモ companion が capture する材料。現割当てと限定表示だけを持つ。 */
+interface MemoStore {
   /** 現在のメモ束縛の一覧。 */
-  listMemoBindings(): Array<{ instanceId: string; localSessionId: string; portId: string }>;
-  /** 束縛メモ個体の限定表示。失効時は `RangeError`。 */
-  getMemoView(params: { instanceId: unknown }): MemoView;
-  /** 束縛メモ個体へメモを追加する。 */
-  appendMemoForInstance(
-    instanceId: unknown,
-    params: { note: unknown },
-  ): Promise<{ ok: true; count: number }>;
+  memoBindings: Array<{ instanceId: string; localSessionId: string; portId: string }>;
+  /** 束縛メモ個体の限定表示。 */
+  memoViews: Map<string, MemoView>;
+  /** 束縛メモ個体へ追加した記録。 */
+  appended: Array<{ instanceId: string; note: string }>;
 }
 
 /**
- * backend をメモの最小口として読む。
- *
- * @param backend - 対応付けが預かる backend。不透明に受け取る。
- * @returns メモの最小口。
- */
-function asMemoBackend(backend: unknown): MemoBackend {
-  // ADR: `as` を使う理由は、登録表が backend を不透明に運び、種別ごとの
-  // 到達口は companion が知るためである。根拠は、この試験で companion と
-  // backend を対にして組み立てることである。
-  return backend as MemoBackend;
-}
-
-/**
- * テスト専用のメモ companion。text/diagnostic と異なる要求名
+ * テスト専用のメモ companion を組み立てる。text/diagnostic と異なる要求名
  * （`getMemoState`・`appendMemo`）と通知名（`memoStateChanged`）を持つ。
+ * 到達は capture した材料だけを使う。
+ *
+ * @param store - companion が capture する材料。
+ * @returns メモ companion の記述子。
  */
-const memoCompanion: PluginCompanion = {
-  kind: MEMO_KIND,
-  label: "メモ",
-  viewPath: MEMO_VIEW_PATH,
-  buildViewUrl(mountId: string): string {
-    return buildPluginViewUrl(MEMO_VIEW_PATH, mountId);
-  },
-  listDesired(backend: unknown): Array<{
-    instanceId: string;
-    localSessionId: string;
-    portId: string;
-  }> {
-    return asMemoBackend(backend).listMemoBindings();
-  },
-  readView(backend: unknown, instanceId: string): InstanceBaseView {
-    return asMemoBackend(backend).getMemoView({ instanceId });
-  },
-  toSnapshot(view: InstanceBaseView, revision: number): unknown {
-    // ADR: `as` を使う理由は、同じ companion の `readView` が作った表示に
-    // 改訂番号だけを付けるためである。
-    const typed = view as MemoView;
-    const snapshot: MemoSnapshot = { ...typed, revision };
-    return snapshot;
-  },
-  send(backend: unknown, instanceId: string, params: unknown): Promise<unknown> {
-    // ADR: `as` を使う理由は、操作引数の形状を companion が固定するためである。
-    const table = params as { note: unknown };
-    return asMemoBackend(backend).appendMemoForInstance(instanceId, { note: table.note });
-  },
-  pushMessageName: "memoStateChanged",
-  buildRequestHandlers(mountId: string, env: CompanionRequestEnv) {
-    return {
-      getMemoState: () => {
-        const snapshot = env.readSnapshot(MEMO_KIND, mountId);
-        // ADR: `as` を使う理由は、対応付けが同一種別の記述子で読んだ表示を
-        // 返すためである。
-        const typed = snapshot as MemoSnapshot;
-        env.markReady(mountId);
-        return typed;
-      },
-      appendMemo: (params: { note: string }) => {
-        const result = env.send(MEMO_KIND, mountId, params);
-        // ADR: `as` を使う理由は、委譲先の解決型を保つためである。
-        return result as Promise<{ ok: true; count: number }>;
-      },
-    };
-  },
-};
+function createMemoCompanion(store: MemoStore): PluginCompanion {
+  return {
+    kind: MEMO_KIND,
+    label: "メモ",
+    viewPath: MEMO_VIEW_PATH,
+    listDesired(): Array<{
+      instanceId: string;
+      localSessionId: string;
+      portId: string;
+    }> {
+      return [...store.memoBindings];
+    },
+    readView(instanceId: string): InstanceBaseView {
+      const view = store.memoViews.get(instanceId);
+      if (view === undefined) {
+        throw new RangeError("束縛したメモ個体ではない。");
+      }
+      if (!store.memoBindings.some((binding) => binding.instanceId === view.instanceId)) {
+        throw new RangeError("メモの現割当てが無い。");
+      }
+      return view;
+    },
+    toSnapshot(view: InstanceBaseView, revision: number): unknown {
+      // ADR: `as` を使う理由は、同じ companion の `readView` が作った表示に
+      // 改訂番号だけを付けるためである。
+      const typed = view as MemoView;
+      const snapshot: MemoSnapshot = { ...typed, revision };
+      return snapshot;
+    },
+    send(instanceId: string, params: unknown): Promise<unknown> {
+      // ADR: `as` を使う理由は、操作引数の形状を companion が固定するためである。
+      const table = params as { note: unknown };
+      if (!store.memoViews.has(instanceId)) {
+        return Promise.reject(new RangeError("束縛したメモ個体ではない。"));
+      }
+      if (typeof table.note !== "string" || table.note.length === 0) {
+        return Promise.reject(new RangeError("note は空でない文字列であること。"));
+      }
+      store.appended.push({ instanceId, note: table.note });
+      return Promise.resolve({ ok: true as const, count: store.appended.length });
+    },
+    pushMessageName: "memoStateChanged",
+    buildRequestHandlers(mountId: string, env: CompanionRequestEnv) {
+      return {
+        getMemoState: () => {
+          const snapshot = env.readSnapshot(MEMO_KIND, mountId);
+          // ADR: `as` を使う理由は、対応付けが同一種別の記述子で読んだ表示を
+          // 返すためである。
+          const typed = snapshot as MemoSnapshot;
+          env.markReady(mountId);
+          return typed;
+        },
+        appendMemo: (params: { note: string }) => {
+          const result = env.send(MEMO_KIND, mountId, params);
+          // ADR: `as` を使う理由は、委譲先の解決型を保つためである。
+          return result as Promise<{ ok: true; count: number }>;
+        },
+      };
+    },
+  };
+}
 
 /**
- * 試験用の登録表を作る。共有表には触らず、使い捨てる。
+ * 試験用の登録表を作る。backend ごとに生成し、使い捨てる。
  *
  * 共通コードへの変更なしに登録する。配置の優先順は登録順である。
  *
- * @returns メモ companion だけを載せた登録表。
+ * @returns 材料とメモ companion だけを載せた登録表。
  */
-function setupMemoRegistry(): PluginCompanionRegistry {
+function setupMemoRegistry(): { backend: FakeMemoBackend; registry: PluginCompanionRegistry } {
+  const backend = new FakeMemoBackend();
   const registry = new PluginCompanionRegistry();
-  registry.register(memoCompanion);
-  return registry;
+  registry.register(createMemoCompanion(backend));
+  return { backend, registry };
 }
 
-/** 検証用の偽 backend。text 段は空にし、メモの現割当てだけを持つ。 */
+/** 検証用の偽 backend。材料と外部変化の通知口だけを持つ。 */
 class FakeMemoBackend {
-  // ADR: text・診断の口は対応付けの型を満たすための最小口であり、
-  // メモだけの登録表では到達しない。到達した場合は配線の不備として拒否する。
   memoBindings: Array<{ instanceId: string; localSessionId: string; portId: string }> = [];
   memoViews = new Map<string, MemoView>();
   appended: Array<{ instanceId: string; note: string }> = [];
@@ -160,60 +159,6 @@ class FakeMemoBackend {
 
   notifyExternalChange(): void {
     this.notified += 1;
-  }
-
-  getTextBinding(): null {
-    return null;
-  }
-
-  listDiagnosticBindings(): Array<{
-    instanceId: string;
-    localSessionId: string;
-    portId: string;
-  }> {
-    return [];
-  }
-
-  getTextInstanceView(_params: { instanceId: unknown }): never {
-    throw new RangeError("束縛したテキスト個体ではない。");
-  }
-
-  sendTextForInstance(_instanceId: unknown, _params: { text: unknown }): Promise<never> {
-    return Promise.reject(new RangeError("束縛したテキスト個体ではない。"));
-  }
-
-  getDiagnosticInstanceView(_params: { instanceId: unknown }): never {
-    throw new RangeError("束縛した診断個体ではない。");
-  }
-
-  listMemoBindings(): Array<{ instanceId: string; localSessionId: string; portId: string }> {
-    return [...this.memoBindings];
-  }
-
-  getMemoView(params: { instanceId: unknown }): MemoView {
-    const view =
-      typeof params.instanceId === "string" ? this.memoViews.get(params.instanceId) : undefined;
-    if (view === undefined) {
-      throw new RangeError("束縛したメモ個体ではない。");
-    }
-    if (!this.memoBindings.some((binding) => binding.instanceId === view.instanceId)) {
-      throw new RangeError("メモの現割当てが無い。");
-    }
-    return view;
-  }
-
-  appendMemoForInstance(
-    instanceId: unknown,
-    params: { note: unknown },
-  ): Promise<{ ok: true; count: number }> {
-    if (typeof instanceId !== "string" || !this.memoViews.has(instanceId)) {
-      return Promise.reject(new RangeError("束縛したメモ個体ではない。"));
-    }
-    if (typeof params.note !== "string" || params.note.length === 0) {
-      return Promise.reject(new RangeError("note は空でない文字列であること。"));
-    }
-    this.appended.push({ instanceId, note: params.note });
-    return Promise.resolve({ ok: true as const, count: this.appended.length });
   }
 }
 
@@ -285,13 +230,13 @@ const MEMO_VIEW: MemoView = {
 };
 
 test("第三の companion を共通コードの変更なしに登録できる", () => {
-  const registry = setupMemoRegistry();
+  const { registry } = setupMemoRegistry();
   // 登録表から引ける。text/diagnostic と異なる通知名を持つ。
   expect(registry.get("memo")?.pushMessageName).toBe("memoStateChanged");
-  // 既定の共有表は汚さない。同梱の二種別だけであり、試験用は載らない。
-  expect(getPluginCompanion("memo")).toBeUndefined();
-  expect(getPluginCompanion("text")?.pushMessageName).toBe("textStateChanged");
-  expect(getPluginCompanion("diagnostic")?.pushMessageName).toBe("diagnosticStateChanged");
+  // backend ごとの登録表は互いを汚さない。別表には試験用は載らない。
+  const other = setupMemoRegistry().registry;
+  expect(other.get("memo")?.pushMessageName).toBe("memoStateChanged");
+  expect(new PluginCompanionRegistry().get("memo")).toBeUndefined();
   // 未登録種別は引けない。呼び出し側が拒否・回収する。
   expect(registry.get("notregistered")).toBeUndefined();
   // 構文は汎用のまま往復する。既知・未登録の判定は登録表が行う。
@@ -300,8 +245,7 @@ test("第三の companion を共通コードの変更なしに登録できる", 
 });
 
 test("第三の companion で配置から結線と状態取得と送信 push が通る", async () => {
-  const registry = setupMemoRegistry();
-  const backend = new FakeMemoBackend();
+  const { backend, registry } = setupMemoRegistry();
   backend.memoBindings = [
     { instanceId: "memo-instance-1", localSessionId: "memo-local-1", portId: "memo" },
   ];
@@ -362,8 +306,7 @@ test("第三の companion で配置から結線と状態取得と送信 push が
 });
 
 test("第三の companion の失効はその対応付けに局所化する", () => {
-  const registry = setupMemoRegistry();
-  const backend = new FakeMemoBackend();
+  const { backend, registry } = setupMemoRegistry();
   backend.memoBindings = [
     { instanceId: "memo-instance-1", localSessionId: "memo-local-1", portId: "memo" },
   ];
@@ -387,8 +330,7 @@ test("第三の companion の失効はその対応付けに局所化する", () 
 });
 
 test("未登録種別の生成は消費せず呼び出し側に返す", () => {
-  const registry = setupMemoRegistry();
-  const backend = new FakeMemoBackend();
+  const { backend, registry } = setupMemoRegistry();
   const fakes = setupMemoFactory(registry);
   const coordinator = new PluginUiCoordinator(7, backend, fakes.factory, () => 0, registry);
   // 所有も退役も無い未登録種別の生成には触らない。

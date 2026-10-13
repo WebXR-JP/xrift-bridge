@@ -12,17 +12,10 @@ function snapshot(revision: number): ManagementSnapshot {
     pending: [],
     connections: [],
     sessions: [],
-    plugins: { instances: [], assignments: [] },
-    text: {
-      localSessionId: null,
-      instanceId: null,
-      canSend: false,
-      pendingId: null,
-      lastResult: null,
-      stats: { attempts: 0, acknowledged: 0, unknown: 0 },
-    },
+    plugins: { kinds: [], instances: [], assignments: [] },
     pluginMounts: [],
     pluginMountFailures: [],
+    pluginNavigationRules: [],
   };
 }
 

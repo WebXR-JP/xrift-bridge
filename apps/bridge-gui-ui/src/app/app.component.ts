@@ -51,9 +51,36 @@ export class AppComponent implements OnInit {
     return this.management.eventLog;
   }
 
+  /** テキスト種別の所有記録。無ければ `null`。 */
+  get textOwned() {
+    return (
+      this.management.snapshot()?.plugins.instances.find((item) => item.pluginKind === "text") ??
+      null
+    );
+  }
+
   /** テキスト操作の失敗表示。 */
   get textError() {
     return this.management.textError;
+  }
+
+  /** 診断種別の現割当て。行ごとの解除ボタンの照合に使う。 */
+  get diagnosticBindings() {
+    const current = this.management.snapshot();
+    if (current === null) {
+      return [];
+    }
+    const ownedKind = new Map(
+      current.plugins.instances.map((item) => [item.instanceId, item.pluginKind] as const),
+    );
+    return current.plugins.assignments.filter(
+      (assignment) => ownedKind.get(assignment.instanceId) === "diagnostic",
+    );
+  }
+
+  /** 表示状態を取得済みの場合に真。 */
+  get fetched() {
+    return this.management.snapshot() !== null;
   }
 
   /** 段0スパイクの所有一覧。 */
@@ -134,22 +161,31 @@ export class AppComponent implements OnInit {
   }
 
   /**
-   * 診断を割り当てる（人間の操作用）。
+   * プラグインを割り当てる（人間の操作用）。
    *
-   * @param localSessionId - 割り当てる生存セッションのローカル識別子。
+   * @param request - 種別トークンと割当て先の生存セッションの識別子（省略可）。
    */
-  async onAssignDiagnostics(localSessionId: string): Promise<void> {
-    await this.management.assignDiagnostics(localSessionId);
+  async onAssignPlugin(request: { pluginKind: string; localSessionId?: string }): Promise<void> {
+    await this.management.assignPlugin(request.pluginKind, request.localSessionId);
   }
 
-  /** テキストを割り当てる（人間の操作用）。 */
-  async onAssignText(): Promise<void> {
-    await this.management.assignText();
-  }
-
-  /** テキストの割当てを外す（人間の操作用）。 */
-  async onUnassignText(): Promise<void> {
-    await this.management.unassignText();
+  /**
+   * プラグインの割当てを外す（人間の操作用）。描画した所有記録の三識別子を渡す。
+   *
+   * クリック後に引き直さず、描画時の識別子を使う。
+   *
+   * @param request - 描画した所有記録の三識別子。
+   */
+  async onUnassignPlugin(request: {
+    instanceId: string;
+    localSessionId: string;
+    portId: string;
+  }): Promise<void> {
+    await this.management.unassignPlugin(
+      request.instanceId,
+      request.localSessionId,
+      request.portId,
+    );
   }
 
   /** アプリを終了する（人間の操作用）。 */

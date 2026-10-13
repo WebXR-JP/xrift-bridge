@@ -1,10 +1,16 @@
 /**
  * GUI バックエンド。同一 main プロセス内で `bridge-server` と
- * `bridge-app-core` を組み立てる。
+ * `bridge-app-core` と汎用管理層を組み立てる。
  *
  * Electron・native API に依存しない。表示状態 DTO（`bridge-gui-contract/management`）
  * と限定操作だけを公開し、テストから直接生成して使える。
  * `BridgeServer` や生の `Session` を Webview へ渡さない。
+ *
+ * 組立は server→core→manager の順に行い、注入された登録関数でプラグインを
+ * 登録する（同梱の選択と登録順は composition root が宣言し、backend は
+ * 汎用の登録口だけを渡す）。登録結果は一時表へ組み立て、全登録成功後に
+ * 公開する。管理 DTO の種別表（`pluginKinds`）は登録内容から生成し、
+ * backend に種別分岐を持たない。
  *
  * @packageDocumentation
  */
@@ -19,43 +25,43 @@ import {
   type RejectionResult,
   type Unsubscribe,
 } from "bridge-server";
-import {
-  createBridgeAppCore,
-  DIAGNOSTIC_PORT_ID,
-  diagnosticPlugin,
-  TEXT_PORT_ID,
-  TEXT_SESSION_ID,
-  textPlugin,
-  type BridgeAppCore,
-  type DiagnosticStats,
-  type PluginInstanceHandle,
-  type TextPluginOperations,
-  type TextPluginState,
-  type TextSendResult,
-} from "bridge-app-core";
+import { createBridgeAppCore, type BridgeAppCore } from "bridge-app-core/core";
 import type {
   AdmissionState,
-  AssignmentSummary,
   BackendStatus,
   ManagementSnapshot,
   OperationAck,
+  OwnedPluginInstanceSummary,
   PairingViewResult,
+  PluginBindingSummary,
+  PluginKindSummary,
   StateChangedMessage,
-  TextDisplayState,
+  UnassignPluginResult,
 } from "bridge-gui-contract/management";
-import type { DiagnosticInstanceView } from "../plugin-ui/diagnostic/contract.ts";
-import type { TextInstanceView } from "../plugin-ui/text/contract.ts";
+import { buildPluginNavigationRules } from "bridge-gui-contract/plugin-instance";
+import { PluginInstanceManager } from "./plugin-instance-manager.ts";
+import type { OwnedPluginInstanceInfo, Stop } from "bridge-gui-plugin-sdk/management";
+import type {
+  GuiPluginRegisterFunction,
+  GuiPluginRegistrar,
+} from "bridge-gui-plugin-sdk/registration";
+import type { PluginManagerSessions } from "./plugin-instance-management.ts";
+import { PluginCompanionRegistry } from "./plugin-companions.ts";
 
 /** 既定の待ち受けポート。 */
 export const DEFAULT_BRIDGE_PORT = 3100;
 
-/**
- * 診断統計の変化検出の間隔（ミリ秒）。
- *
- * 診断プラグインに状態購読が無いため、GUI 側で統計の写しを比べて
- * 変化を検出する周期である。汎用基盤の再設計はしない。
- */
-export const DEFAULT_DIAGNOSTIC_POLL_MS = 500;
+/** `GuiBackend.create` の依存注入口。 */
+export interface GuiBackendDependencies {
+  /**
+   * プラグインの登録関数。同梱の選択と登録順は composition root が宣言する。
+   *
+   * backend は composition root を import せず、受け取った登録関数だけを
+   * 使う。省略時は空構成（登録なし）であり、backend 側で既定の同梱登録を
+   * 持たない。空構成の検証は明示的に空登録関数を渡す。
+   */
+  readonly registerPlugins?: GuiPluginRegisterFunction;
+}
 
 /** `GuiBackend.create` の設定。 */
 export interface GuiBackendOptions {
@@ -76,14 +82,6 @@ export interface GuiBackendOptions {
    * @defaultValue `[PRODUCTION_ORIGIN]`（省略時に生成処理が適用）。
    */
   readonly allowedOrigins?: readonly string[];
-  /**
-   * 診断統計の変化検出の間隔（ミリ秒）。正の有限値であること。
-   *
-   * 試験で短縮する場合に使う。通常は既定のままとする。
-   *
-   * @defaultValue `500`（省略時に生成処理が適用）。
-   */
-  readonly diagnosticPollMs?: number;
 }
 
 /**
@@ -114,54 +112,25 @@ function toAdmission(info: AcceptanceInfo): AdmissionState {
 }
 
 /**
- * テキスト個体の限定表示を作る。管理 snapshot 全体・他個体の情報・
- * 候補一覧・保留情報は載せず、本文も含めない。
+ * 所有記録の表示形を作る。段階の絞り込みはしない。
  *
- * @param handle - 束縛テキスト個体の参照。
- * @param localSessionId - 現割当ての生存セッションのローカル識別子。
- * @returns 子画面へ渡せる限定表示。
+ * @param record - 管理層の所有記録の写し。
+ * @returns 子画面へ渡せる所有の表示状態。
  */
-export function projectTextInstanceView(
-  handle: PluginInstanceHandle<TextPluginState, TextPluginOperations>,
-  localSessionId: string,
-): TextInstanceView {
-  const state = handle.getState();
+function toOwnedSummary(record: OwnedPluginInstanceInfo): OwnedPluginInstanceSummary {
   return {
-    instanceId: handle.instanceId,
-    pluginId: handle.pluginId,
-    portId: TEXT_PORT_ID,
-    localSessionId,
-    canSend: state.canSend,
-    pendingId: state.pendingId,
-    lastResult: state.lastResult,
-    stats: state.stats,
+    pluginKind: record.kind,
+    pluginId: record.pluginId,
+    instanceId: record.instanceId,
+    localSessionId: record.localSessionId,
+    portId: record.portId,
+    phase: record.phase,
   };
 }
 
 /**
- * 診断個体の限定表示を作る。echo／ping 統計だけを持ち、管理 snapshot 全体・
- * 他個体の情報・候補一覧・保留情報は載せない。
- *
- * @param handle - 束縛診断個体の参照。
- * @param localSessionId - 現割当ての生存セッションのローカル識別子。
- * @returns 子画面へ渡せる限定表示。
- */
-export function projectDiagnosticInstanceView(
-  handle: PluginInstanceHandle<DiagnosticStats>,
-  localSessionId: string,
-): DiagnosticInstanceView {
-  return {
-    instanceId: handle.instanceId,
-    pluginId: handle.pluginId,
-    portId: DIAGNOSTIC_PORT_ID,
-    localSessionId,
-    stats: handle.getState(),
-  };
-}
-
-/**
- * GUI バックエンド。`bridge-server` と `bridge-app-core` の組み立てと
- * 表示状態の提供・限定操作の実行を担う。
+ * GUI バックエンド。`bridge-server` と `bridge-app-core` と汎用管理層の
+ * 組み立てと表示状態の提供・限定操作の実行を担う。
  *
  * 生成は {@link GuiBackend.create} で行う。server 起動に失敗しても
  * 例外にせず起動失敗状態で返すため、管理画面は表示と終了を続けられる。
@@ -171,34 +140,21 @@ export class GuiBackend {
   private status: BackendStatus = "starting";
   private server: BridgeServer | null = null;
   private core: BridgeAppCore | null = null;
+  private manager: PluginInstanceManager | null = null;
+  private readonly registry = new PluginCompanionRegistry();
+  private pluginKinds: PluginKindSummary[] = [];
   private managementUnsubscribe: Unsubscribe | null = null;
   private readonly listeners = new Set<(message: StateChangedMessage) => void>();
-  /** 生成した診断インスタンスの handle。表示と合わせて保持する。 */
-  private readonly diagnosticHandles = new Map<string, PluginInstanceHandle<DiagnosticStats>>();
   /**
-   * 診断割当ての対応付け（生存セッションのローカル識別子→生成インスタンスの識別子）。
+   * 管理層の問題記録。段階と識別子だけを持ち、原因・本文は載せない。
    *
-   * セッション終了時の生成分回収用である。終了通知の時点では core の
-   * 割当て失効が先に済んでいるため、割当て表からは引けない。
+   * 表示 DTO には載せず、記録用の上限だけを保つ。
    */
-  private readonly diagnosticSessions = new Map<string, string>();
-  /** 生成したテキストインスタンスの handle。同時に一つのみ持つ。 */
-  private textHandle: PluginInstanceHandle<TextPluginState, TextPluginOperations> | null = null;
-  /** テキスト割当て対象の生存セッションのローカル識別子。未割当てなら null。 */
-  private textLocalSessionId: string | null = null;
-  /** テキスト状態購読の解除口。未購読なら null。 */
-  private textStateUnsubscribe: Unsubscribe | null = null;
-  /** 診断統計の変化検出の間隔（ミリ秒）。生成時に確定する。 */
-  private diagnosticPollMs: number = DEFAULT_DIAGNOSTIC_POLL_MS;
-  /** 診断統計の変化検出タイマー。監視対象が無ければ null。 */
-  private diagnosticPollTimer: ReturnType<typeof setInterval> | null = null;
-  /**
-   * 診断統計の前回値（インスタンス識別子→直列化した統計）。
-   *
-   * 診断プラグインに状態購読が無いため、変化検出の基準として保持する。
-   * 統計以外の情報（本文など）は含めない。
-   */
-  private readonly lastDiagnosticStats = new Map<string, string>();
+  private readonly issueLog: Array<{
+    readonly stage: string;
+    readonly pluginKind: string | null;
+    readonly instanceId: string | null;
+  }> = [];
   private revision = 0;
   private cached: ManagementSnapshot | null = null;
   private notifyScheduled = false;
@@ -212,26 +168,30 @@ export class GuiBackend {
    * GUI バックエンドを生成する。
    *
    * server 起動の成否にかかわらず解決する。失敗時は起動失敗状態となり、
-   * 表示（`getSnapshot`）と終了（`close`）だけを提供する。
+   * 表示（`getSnapshot`）と終了（`close`）だけを提供する。プラグイン登録は
+   * `deps.registerPlugins` で受け、省略時は空構成とする。登録途中の例外では
+   * 部分登録を公開せず、生成済みの資源を回収して失敗状態にする。
    *
    * @param options - 待ち受けポート・許可 Origin の設定。
+   * @param deps - プラグイン登録関数の注入口。省略時は空構成である。
    * @returns 生成したバックエンド。起動失敗時は `startupError` を持つ。
    */
-  static async create(options: GuiBackendOptions = {}): Promise<GuiBackend> {
+  static async create(
+    options: GuiBackendOptions = {},
+    deps?: GuiBackendDependencies,
+  ): Promise<GuiBackend> {
     const backend = new GuiBackend();
     const allowedOrigins = options.allowedOrigins ?? [PRODUCTION_ORIGIN];
-    const diagnosticPollMs = options.diagnosticPollMs ?? DEFAULT_DIAGNOSTIC_POLL_MS;
-    // 不正な指定では既定に戻し、検出自体を止めない。
-    backend.diagnosticPollMs =
-      Number.isFinite(diagnosticPollMs) && diagnosticPollMs > 0
-        ? diagnosticPollMs
-        : DEFAULT_DIAGNOSTIC_POLL_MS;
+    // ADR: 省略時の空関数は既定の同梱登録ではない。同梱の選択は composition root
+    // が担い、backend は受け取った登録関数だけを使う。backend 側に既定登録を
+    // 置くと具象への依存が戻るため、空構成の検証は明示的に空登録関数を渡す。
+    const registerPlugins: GuiPluginRegisterFunction = deps?.registerPlugins ?? ((): void => {});
     try {
       const server = await createBridgeServer({
         port: options.port ?? DEFAULT_BRIDGE_PORT,
         allowedOrigins: [...allowedOrigins],
       });
-      backend.attach(server);
+      await backend.attach(server, registerPlugins);
     } catch (error) {
       backend.markFailed(error);
     }
@@ -244,18 +204,139 @@ export class GuiBackend {
   }
 
   /**
-   * 起動した server と基盤を結び付ける。
+   * backend ごとの companion 登録表。coordinator・channel factory への
+   * 注入用である。起動失敗時は空の表を返す。
+   */
+  get companionRegistry(): PluginCompanionRegistry {
+    return this.registry;
+  }
+
+  /**
+   * 起動した server と基盤・管理層を結び付け、注入された登録関数で
+   * プラグインを登録する。
    *
-   * 基盤の購読を先に core 側で確定してから、後続の管理通知を
-   * バックエンド側で受ける。購読前の既存セッションは core が
-   * 一覧で初期走査するため、取りこぼさない。管理通知の配送順は
-   * 購読順であるため、終了通知では core の失効処理が先に済んでいる。
+   * server→core→manager の順に生成する。基盤の購読を先に core 側で確定して
+   * から、後続の管理通知をバックエンド側で受ける。購読前の既存セッションは
+   * core が一覧で初期走査するため、取りこぼさない。管理通知の配送順は
+   * 購読順である。
+   *
+   * 登録関数へは生 backend・管理層全体ではなく、汎用の登録口だけを持つ
+   * registrar を渡す。登録結果は一時表へ組み立て、全登録成功後に公開する。
+   * 登録途中の例外では部分登録を公開せず、生成済みの manager・core・server
+   * を回収して失敗状態にする。
    *
    * @param server - 起動したブリッジ。
+   * @param registerPlugins - プラグインの登録関数。
    */
-  private attach(server: BridgeServer): void {
+  private async attach(
+    server: BridgeServer,
+    registerPlugins: GuiPluginRegisterFunction,
+  ): Promise<void> {
+    const core = createBridgeAppCore(server);
+    const sessions: PluginManagerSessions = {
+      list: () =>
+        server.listSessions().map((info) => ({
+          localSessionId: info.localSessionId,
+          connectionId: info.connectionId,
+          sessionId: info.sessionId,
+          capability:
+            info.kind === "reliable"
+              ? { kind: "reliable" as const, direction: "bidirectional" as const }
+              : { kind: "latest" as const, direction: "to_server" as const },
+          alive: server.getSession(info.localSessionId)?.isAlive === true,
+        })),
+      onEnded: (listener: (localSessionId: string) => void): Stop => {
+        const unsubscribe = server.onManagementEvent((event) => {
+          if (event.kind === "session-ended") {
+            listener(event.session.localSessionId);
+          }
+        });
+        return () => {
+          try {
+            unsubscribe();
+          } catch {
+            // 購読解除の失敗は管理層を壊さない。
+          }
+        };
+      },
+    };
+    const manager = new PluginInstanceManager({
+      core,
+      sessions,
+      clock: {
+        every: (intervalMs: number, tick: () => void): Stop => {
+          const timer = setInterval(tick, intervalMs);
+          // ADR: `as` で `unref` の有無を主張する理由は、実行系（Node・Bun）で
+          // タイマー型が異なるためである。待機の維持には使わず、単独滞留での
+          // 固着を避けるために外せる場合だけ外す。根拠は Node の `Timeout.unref`
+          // と Bun の互換タイマーであり、無い環境では何もしない。
+          const held = timer as unknown as { unref?: () => void };
+          try {
+            held.unref?.();
+          } catch {
+            // 解除の失敗は監視を止めない。
+          }
+          return () => {
+            clearInterval(timer);
+          };
+        },
+      },
+      onChanged: () => {
+        this.requestNotify();
+      },
+      onIssue: (issue) => {
+        this.recordIssue(issue.stage, issue.binding);
+      },
+    });
+    const stagedRegistry = new PluginCompanionRegistry();
+    const stagedKinds: PluginKindSummary[] = [];
+    const registrar: GuiPluginRegistrar = {
+      registerPlugin(registration) {
+        const access = manager.register(registration.management);
+        const companion = registration.createCompanion(access);
+        if (companion.kind !== registration.management.kind) {
+          throw new Error("companion の種別が管理記述子と一致しない。");
+        }
+        stagedRegistry.register(companion);
+        stagedKinds.push({
+          pluginKind: registration.management.kind,
+          pluginId: registration.management.definition.pluginId,
+          label: companion.label,
+          maxInstances: registration.management.assignment.maxInstances,
+        });
+      },
+    };
+    try {
+      registerPlugins(registrar);
+    } catch (error) {
+      // 部分登録を公開せず、生成済みの資源を回収して失敗状態にする。
+      // 一時表の中身は捨て、公開表・種別表には載せない。
+      try {
+        manager.close();
+      } catch {
+        // 管理層終了の失敗は後始末を止めない。
+      }
+      try {
+        core.close();
+      } catch {
+        // 基盤終了の失敗は待受停止を止めない。
+      }
+      try {
+        await server.close();
+      } catch {
+        // 待受停止の失敗は失敗状態の記録を止めない。
+      }
+      this.markFailed(error);
+      return;
+    }
+    // 全登録成功後に公開する。
     this.server = server;
-    this.core = createBridgeAppCore(server);
+    this.core = core;
+    this.manager = manager;
+    for (const companion of stagedRegistry.list()) {
+      this.registry.register(companion);
+    }
+    this.pluginKinds = stagedKinds;
     this.managementUnsubscribe = server.onManagementEvent((event) => {
       this.handleManagementEvent(event);
     });
@@ -267,6 +348,8 @@ export class GuiBackend {
    * 起動失敗を記録する。
    *
    * server を持たないため、表示は空のまま・操作は拒否・終了は即時成功する。
+   * 登録途中の失敗では呼び出し側で manager・core・server の回収済みであり、
+   * ここでは原因の記録と失敗状態への遷移だけを行う。
    *
    * @param error - 起動失敗の原因。
    */
@@ -277,19 +360,57 @@ export class GuiBackend {
   }
 
   /**
-   * 操作可能な server と基盤を取り出す。
+   * 操作可能な server・基盤・管理層を取り出す。
    *
-   * @returns 操作対象の server と基盤。
+   * @returns 操作対象の server・基盤・管理層。
    * @throws `Error` — 終了中・起動失敗の場合。新規操作を受け付けない。
    */
-  private operable(): { server: BridgeServer; core: BridgeAppCore } {
+  private operable(): {
+    server: BridgeServer;
+    core: BridgeAppCore;
+    manager: PluginInstanceManager;
+  } {
     if (this.status === "stopping" || this.disposed) {
       throw new Error("終了中のため操作を受け付けない。");
     }
-    if (this.server === null || this.core === null || this.status !== "ready") {
+    if (
+      this.server === null ||
+      this.core === null ||
+      this.manager === null ||
+      this.status !== "ready"
+    ) {
       throw new Error("起動に失敗しているため操作を受け付けない。");
     }
-    return { server: this.server, core: this.core };
+    return { server: this.server, core: this.core, manager: this.manager };
+  }
+
+  /**
+   * 管理層の問題を安全に記録する。
+   *
+   * 段階と識別子だけを残し、原因・本文は管理 DTO・開発応答・ログへ
+   * 無条件に流さない（本文の混入があり得るため）。
+   *
+   * @param stage - 失敗した段階。
+   * @param binding - 対象の束縛情報。特定できない場合は `null`。
+   */
+  private recordIssue(
+    stage: string,
+    binding: {
+      readonly kind: string;
+      readonly instanceId: string;
+    } | null,
+  ): void {
+    this.issueLog.push({
+      stage,
+      pluginKind: binding?.kind ?? null,
+      instanceId: binding?.instanceId ?? null,
+    });
+    if (this.issueLog.length > 32) {
+      this.issueLog.splice(0, this.issueLog.length - 32);
+    }
+    console.log(
+      `[bridge-gui] 管理層の問題を記録した: stage=${stage} kind=${binding?.kind ?? "-"} instanceId=${binding?.instanceId ?? "-"}`,
+    );
   }
 
   /**
@@ -335,7 +456,7 @@ export class GuiBackend {
 
   /**
    * 現在の表示状態を返す。読み取りは revision を進めないが、
-   * 保留中の通知は先に確定する。
+   * 保留中の通知は先に確定する。回収の副作用は付けない。
    *
    * @returns 現在の表示スナップショット。
    */
@@ -469,273 +590,73 @@ export class GuiBackend {
   }
 
   /**
-   * スパイク専用の診断割当て。reliable Session ごとに診断プラグインの
-   * インスタンスを1つ生成し `"diagnostic"` 接続口へ割り当てる。
+   * 汎用プラグインの割当て。種別トークンと生存セッションの指定だけを受け、
+   * 管理記述子に従って割り当てる。
    *
-   * 開始通知での自動割当てはしない。恒久採用（自動割当て・統計表示の
-   * 扱い）は別判断とし、ここでは明示操作だけを提供する。
-   * 失敗時は生成分を回収し、半端なインスタンスを残さない。
-   * 論理名がテキスト表示用のセッションは対象外にする（テキスト割当てと排他）。
+   * `localSessionId` を省略した場合は方針に従い候補から選ぶ。指定した
+   * 場合はその生存セッションへ割り当て、方針の選択結果が指定と一致しな
+   * ければ拒否する。割当ての確定後は通知予約を行い、後続の状態は
+   * `stateChanged` で受け取る。
    *
-   * @param params - 割り当てる生存セッションのローカル識別子。
-   * @returns 確定した割当ての表示状態。
-   * @throws `RangeError` — 識別子が空・文字列でない、不明・不適合・
-   * 二重割当て・テキスト表示用の場合。
+   * @param params - 種別トークンと割当て先の生存セッションの識別子（省略可）。
+   * @returns 確定した束縛の表示状態。
+   * @throws `RangeError` — 識別子が不正・候補不足・曖昧・上限超過の場合。
    * @throws `Error` — 終了中・起動失敗の場合。
    */
-  assignDiagnostics(params: { localSessionId: unknown }): AssignmentSummary {
-    const { core, server } = this.operable();
-    const localSessionId = assertId(params.localSessionId, "localSessionId");
-    const info = server
-      .listSessions()
-      .find((candidate) => candidate.localSessionId === localSessionId);
-    if (info !== undefined && info.sessionId === TEXT_SESSION_ID) {
-      throw new RangeError("テキスト表示用のセッションには診断を割り当てない。");
-    }
-    const handle = core.createInstance(diagnosticPlugin);
-    try {
-      core.assign(localSessionId, handle.instanceId, DIAGNOSTIC_PORT_ID);
-    } catch (error) {
-      // 割当てに失敗した Session は残さず、生成したインスタンスだけを片付ける。
-      try {
-        core.removeInstance(handle.instanceId);
-      } catch {
-        // 片付けの失敗は元の失敗を優先し、ここでは無視する。
-      }
-      throw error;
-    }
-    // GUI バックエンドが生成した handle を保持し、表示と合わせて提供する。
-    this.diagnosticHandles.set(handle.instanceId, handle);
-    this.diagnosticSessions.set(localSessionId, handle.instanceId);
-    this.watchDiagnostic(handle.instanceId);
-    this.requestNotify();
-    return { localSessionId, instanceId: handle.instanceId, portId: DIAGNOSTIC_PORT_ID };
-  }
-
-  /**
-   * 固定テキスト表示の明示割当て。引数は取らない。
-   *
-   * テキストインスタンスを生成し、論理名がテキスト表示用で未割当ての
-   * 生存セッションが全接続を通じて一件だけある場合に割り当てる。
-   * 先着順・一件目・Origin 推測による選択はしない。失敗時は生成分を
-   * 回収し、半端なインスタンスを残さない。
-   *
-   * @returns 確定した割当ての表示状態。
-   * @throws `RangeError` — 候補ゼロ・複数・割当て中の再要求の場合。
-   * @throws `Error` — 終了中・起動失敗の場合。
-   */
-  assignText(): AssignmentSummary {
-    const { core, server } = this.operable();
-    if (this.textHandle !== null || this.textLocalSessionId !== null) {
-      throw new RangeError("テキストは既に割当て済みである。");
-    }
-    // ADR: core の割当て表を先に読む。既存の割当て済みセッションは候補から
-    // 外し、一対一検査と合わせる（診断など他用途の割当てと混ぜない）。
-    const assigned = new Set(core.listAssignments().map((assignment) => assignment.localSessionId));
-    const candidates = server
-      .listSessions()
-      .filter(
-        (info) =>
-          !assigned.has(info.localSessionId) &&
-          info.sessionId === TEXT_SESSION_ID &&
-          info.kind === "reliable" &&
-          info.direction === "bidirectional" &&
-          server.getSession(info.localSessionId)?.isAlive === true,
-      );
-    if (candidates.length === 0) {
-      throw new RangeError("テキスト割当ての候補が無い。");
-    }
-    if (candidates.length > 1) {
-      throw new RangeError("テキスト割当ての候補が複数ある。");
-    }
-    const target = candidates[0];
-    if (target === undefined) {
-      throw new RangeError("テキスト割当ての候補が無い。");
-    }
-    const handle = core.createInstance(textPlugin);
-    try {
-      core.assign(target.localSessionId, handle.instanceId, TEXT_PORT_ID);
-    } catch (error) {
-      // 割当てに失敗した Session は残さず、生成したインスタンスだけを片付ける。
-      try {
-        core.removeInstance(handle.instanceId);
-      } catch {
-        // 片付けの失敗は元の失敗を優先し、ここでは無視する。
-      }
-      throw error;
-    }
-    const operations = handle.getOperations?.();
-    if (operations === undefined) {
-      try {
-        core.removeInstance(handle.instanceId);
-      } catch {
-        // 片付けの失敗は無視する。
-      }
-      throw new RangeError("テキストの操作口が無い。");
-    }
-    this.textHandle = handle;
-    this.textLocalSessionId = target.localSessionId;
-    try {
-      // ADR: 状態変化は既存の通知予約経路へ結線する。購読者の例外は
-      // プラグイン側で隔離されるため、ここでは予約だけを行う。
-      this.textStateUnsubscribe = operations.onStateChanged(() => {
-        this.requestNotify();
-      });
-    } catch (error) {
-      this.textHandle = null;
-      this.textLocalSessionId = null;
-      try {
-        core.removeInstance(handle.instanceId);
-      } catch {
-        // 片付けの失敗は元の失敗を優先し、ここでは無視する。
-      }
-      throw error;
-    }
-    this.requestNotify();
+  assignPlugin(params: { pluginKind: unknown; localSessionId?: unknown }): PluginBindingSummary {
+    const { manager } = this.operable();
+    const pluginKind = assertId(params.pluginKind, "pluginKind");
+    const binding =
+      params.localSessionId === undefined
+        ? manager.assign(pluginKind, { mode: "auto" })
+        : manager.assign(pluginKind, {
+            mode: "session",
+            localSessionId: assertId(params.localSessionId, "localSessionId"),
+          });
     return {
-      localSessionId: target.localSessionId,
-      instanceId: handle.instanceId,
-      portId: TEXT_PORT_ID,
+      pluginKind: binding.kind,
+      pluginId: binding.pluginId,
+      instanceId: binding.instanceId,
+      localSessionId: binding.localSessionId,
+      portId: binding.portId,
     };
   }
 
   /**
-   * 固定テキストの送信。画面が認識している割当て識別子を含める。
+   * 汎用プラグインの解除。描画した所有記録の三識別子で照合し、
+   * 完全一致する所有だけを回収する。
    *
-   * 現在の割当てと `localSessionId`・`instanceId` を照合し、一致しなければ
-   * 拒否する。古い画面の要求を新しい割当てへ転送しない。本文の検証は
-   * プラグインが行い、ここでは文字列かだけを検査する。本文は送信時のみ
-   * 扱い、ログ・snapshot に残さない。
+   * 所有があるのに三識別子が不一致の場合は拒否し、新束縛へ転送しない。
+   * 回収済み・未知の識別子は `{released:false, issues:[]}` とする。
+   * `cleanupFailed` は自動再試行しない。解除の成否は戻り値で示し、
+   * 後続の状態は `stateChanged` で受け取る。
    *
-   * 状態の更新通知は購読経路（`operations.onStateChanged`→`requestNotify`）
-   * が担うため、ここでは追加の通知予約をしない。
-   *
-   * @param params - 現在の割当て識別子と送信する本文。
-   * @returns 反映確認または結果不明。送信処理の失敗は `Promise` の拒否で表す。
-   * @throws `RangeError` — 識別子・本文の型が不正、未割当て・不一致の場合（同期的）。
-   * @throws `Error` — 終了中・起動失敗の場合（同期的）。
+   * @param params - 描画した所有記録の三識別子。
+   * @returns 解放結果。問題の原因・状態は載せない。
+   * @throws `RangeError` — 識別子が不正・所有中の三識別子不一致の場合。
+   * @throws `Error` — 終了中・起動失敗の場合。
    */
-  sendText(params: {
-    localSessionId: unknown;
+  unassignPlugin(params: {
     instanceId: unknown;
-    text: unknown;
-  }): Promise<TextSendResult> {
-    this.operable();
-    const localSessionId = assertId(params.localSessionId, "localSessionId");
+    localSessionId: unknown;
+    portId: unknown;
+  }): UnassignPluginResult {
+    const { manager } = this.operable();
     const instanceId = assertId(params.instanceId, "instanceId");
-    if (typeof params.text !== "string") {
-      throw new RangeError("text は文字列であること。");
+    const localSessionId = assertId(params.localSessionId, "localSessionId");
+    const portId = assertId(params.portId, "portId");
+    const owned = manager.listOwned().find((record) => record.instanceId === instanceId);
+    if (owned === undefined) {
+      return { released: false, issues: [] };
     }
-    const handle = this.textHandle;
-    const assignedId = this.textLocalSessionId;
-    if (handle === null || assignedId === null) {
-      throw new RangeError("テキストは割当てられていない。");
+    if (owned.localSessionId !== localSessionId || owned.portId !== portId) {
+      throw new RangeError("現在の所有と識別子が一致しない。");
     }
-    if (localSessionId !== assignedId || instanceId !== handle.instanceId) {
-      throw new RangeError("現在の割当てと識別子が一致しない。");
-    }
-    const operations = handle.getOperations?.();
-    if (operations === undefined) {
-      throw new RangeError("テキストの操作口が無い。");
-    }
-    return operations.sendText(params.text, localSessionId);
-  }
-
-  /**
-   * 固定テキストの明示解除。割当て表示を消し、生成分を回収する。
-   *
-   * 購読解除と表示の消去を先に行ってから基盤を片付ける。対象セッションの
-   * 中断は基盤の解除規約に従う。失効済み（終了通知で回収済み）の場合は
-   * 解除を省略し、生成分の回収だけを行う。
-   *
-   * @returns 受付応答。後続の状態は `stateChanged` で受け取る。
-   * @throws `RangeError` — 未割当ての場合。
-   * @throws `Error` — 終了中・起動失敗の場合。
-   */
-  unassignText(): OperationAck {
-    const { core } = this.operable();
-    const handle = this.textHandle;
-    const localSessionId = this.textLocalSessionId;
-    if (handle === null || localSessionId === null) {
-      throw new RangeError("テキストは割当てられていない。");
-    }
-    this.detachTextSubscription();
-    this.textHandle = null;
-    this.textLocalSessionId = null;
-    const assigned = core
-      .listAssignments()
-      .some((assignment) => assignment.localSessionId === localSessionId);
-    if (assigned) {
-      try {
-        core.unassign(localSessionId);
-      } catch {
-        // 失効競合の失敗は回収を止めない。
-      }
-    }
-    try {
-      core.removeInstance(handle.instanceId);
-    } catch {
-      // 回収の失敗は無視する。
-    }
-    this.requestNotify();
-    return { ok: true };
-  }
-
-  /**
-   * 束縛テキスト個体の限定表示を返す。子画面用の射影であり、管理 snapshot
-   * 全体・他個体の情報・候補一覧・保留情報は含めない。
-   *
-   * 現割当てが失効していれば拒否する。識別子は main の対応付けが決め、
-   * 子からの指定は受け付けない。
-   *
-   * @param params - 束縛個体の識別子。
-   * @returns 子画面へ渡せる限定表示。本文は含めない。
-   * @throws `RangeError` — 識別子が不正・束縛外・現割当て失効の場合。
-   * @throws `Error` — 終了中・起動失敗の場合。
-   */
-  getTextInstanceView(params: { instanceId: unknown }): TextInstanceView {
-    const { handle, localSessionId } = this.requireTextBinding(params.instanceId);
-    return projectTextInstanceView(handle, localSessionId);
-  }
-
-  /**
-   * 束縛テキスト個体の現割当てへ本文を送る。子は本文だけを渡し、
-   * `instanceId`／`localSessionId` の指定は受け付けない。main が束縛した
-   * 個体の現割当てに委譲する。本文は送信時のみ扱い、ログ・snapshot に残さない。
-   *
-   * @param instanceId - 束縛個体の識別子。main の対応付けが決める。
-   * @param params - 送信する本文。
-   * @returns 反映確認または結果不明。送信処理の失敗は `Promise` の拒否で表す。
-   * @throws `RangeError` — 識別子・本文の型が不正、束縛外・現割当て失効の場合（同期的）。
-   * @throws `Error` — 終了中・起動失敗の場合（同期的）。
-   */
-  sendTextForInstance(instanceId: unknown, params: { text: unknown }): Promise<TextSendResult> {
-    const { handle, localSessionId } = this.requireTextBinding(instanceId);
-    if (typeof params.text !== "string") {
-      throw new RangeError("text は文字列であること。");
-    }
-    const operations = handle.getOperations?.();
-    if (operations === undefined) {
-      throw new RangeError("テキストの操作口が無い。");
-    }
-    return operations.sendText(params.text, localSessionId);
-  }
-
-  /**
-   * 束縛診断個体の限定表示を返す。echo／ping 統計だけを持ち、管理 snapshot
-   * 全体・他個体の情報・候補一覧・保留情報は含めない。
-   *
-   * 診断には状態購読が無いため、統計は読み取り時点の取得であり、通知は
-   * 既存の状態通知（`onStateChanged`）の周期で送る。汎用基盤の再設計はしない。
-   *
-   * @param params - 束縛個体の識別子。
-   * @returns 子画面へ渡せる限定表示。
-   * @throws `RangeError` — 識別子が不正・束縛外・現割当て失効の場合。
-   * @throws `Error` — 終了中・起動失敗の場合。
-   */
-  getDiagnosticInstanceView(params: { instanceId: unknown }): DiagnosticInstanceView {
-    const { handle, localSessionId } = this.requireDiagnosticBinding(params.instanceId);
-    return projectDiagnosticInstanceView(handle, localSessionId);
+    const result = manager.unassign(owned.kind, instanceId);
+    return {
+      released: result.released,
+      issues: result.issues.map((issue) => ({ stage: issue.stage })),
+    };
   }
 
   /**
@@ -750,289 +671,29 @@ export class GuiBackend {
   }
 
   /**
-   * 現在のテキスト束縛を返す。子画面配置の対応付け用である。
+   * 管理通知を処理する。種別固有の回収は持たず、`manager.reconcile()` で
+   * 現割当ての無音取消しを回収し、その後の通知予約は既存経路にまとめる。
    *
-   * handle と基盤の現割当ての両方が現在のものでなければ `null` とし、
-   * 古い割当てへの配置は作らない。管理 snapshot 全体・他個体の情報・
-   * 候補一覧・保留情報は返さない。
+   * 読み取り（`getSnapshot`・companion 読取）に回収の副作用は入れない。
    *
-   * @returns 現割当てがある場合の束縛情報。無ければ `null`。
+   * @param _event - サーバーの管理通知。種別を問わず照合するため中身は読まない。
    */
-  getTextBinding(): { instanceId: string; localSessionId: string; portId: string } | null {
-    if (this.status !== "ready" || this.core === null) {
-      return null;
-    }
-    const handle = this.textHandle;
-    const localSessionId = this.textLocalSessionId;
-    if (handle === null || localSessionId === null) {
-      return null;
-    }
-    const assigned = this.core
-      .listAssignments()
-      .some(
-        (assignment) =>
-          assignment.instanceId === handle.instanceId &&
-          assignment.localSessionId === localSessionId &&
-          assignment.portId === TEXT_PORT_ID,
-      );
-    if (!assigned) {
-      return null;
-    }
-    return { instanceId: handle.instanceId, localSessionId, portId: TEXT_PORT_ID };
-  }
-
-  /**
-   * 現在の診断束縛の一覧を返す。子画面配置の対応付け用である。
-   *
-   * 基盤の現割当てと生成分の保持の両方にあるものだけを返し、失効した
-   * 割当てへの配置は作らない。管理 snapshot 全体・他個体の情報・
-   * 候補一覧・保留情報は返さない。
-   *
-   * @returns 現割当てがある束縛情報の一覧。無ければ空配列。
-   */
-  listDiagnosticBindings(): Array<{
-    instanceId: string;
-    localSessionId: string;
-    portId: string;
-  }> {
-    if (this.status !== "ready" || this.core === null) {
-      return [];
-    }
-    const live = new Map<string, string>();
-    for (const assignment of this.core.listAssignments()) {
-      if (assignment.portId !== DIAGNOSTIC_PORT_ID) {
-        continue;
-      }
-      if (!this.diagnosticHandles.has(assignment.instanceId)) {
-        continue;
-      }
-      live.set(assignment.instanceId, assignment.localSessionId);
-    }
-    return [...live].map(([instanceId, localSessionId]) => ({
-      instanceId,
-      localSessionId,
-      portId: DIAGNOSTIC_PORT_ID,
-    }));
-  }
-
-  /**
-   * 診断統計の変化検出を始める。
-   *
-   * 診断プラグインに状態購読が無いため、GUI 側で統計の写しを保持し、
-   * 周期的に比べて変化を検出する。テキストと同程度の最小の購読口であり、
-   * 汎用プラグイン基盤の再設計はしない（`packages/*` は変更しない）。
-   * 監視対象が無くなったらタイマーを止め、残さない。
-   *
-   * @param instanceId - 監視する診断インスタンスの識別子。
-   */
-  private watchDiagnostic(instanceId: string): void {
-    const handle = this.diagnosticHandles.get(instanceId);
-    if (handle === undefined) {
-      return;
-    }
+  private handleManagementEvent(_event: ManagementEvent): void {
     try {
-      this.lastDiagnosticStats.set(instanceId, JSON.stringify(handle.getState()));
+      this.manager?.reconcile();
     } catch {
-      this.lastDiagnosticStats.set(instanceId, "");
-    }
-    if (this.diagnosticPollTimer !== null) {
-      return;
-    }
-    this.diagnosticPollTimer = setInterval(() => {
-      this.pollDiagnosticStats();
-    }, this.diagnosticPollMs);
-    // ADR: `as` で `unref` の有無を主張する理由は、実行系（Node・Bun）で
-    // タイマー型が異なるためである。待機の維持には使わず、単独滞留での
-    // 固着を避けるために外せる場合だけ外す。根拠は Node の `Timeout.unref`
-    // と Bun の互換タイマーであり、無い環境では何もしない。
-    const timer = this.diagnosticPollTimer as unknown as { unref?: () => void };
-    try {
-      timer.unref?.();
-    } catch {
-      // 解除の失敗は検出を止めない。
-    }
-  }
-
-  /** 診断統計の変化検出タイマーを止める。監視対象が無い場合に使う。 */
-  private stopDiagnosticPoll(): void {
-    const timer = this.diagnosticPollTimer;
-    this.diagnosticPollTimer = null;
-    if (timer === null) {
-      return;
-    }
-    clearInterval(timer);
-  }
-
-  /**
-   * 診断統計の変化を検出し、変化があれば状態通知を予約する。
-   *
-   * 取得の失敗は無視し、検出自体を止めない。監視対象が空になったら
-   * タイマーを止める。
-   */
-  private pollDiagnosticStats(): void {
-    if (this.disposed) {
-      return;
-    }
-    let changed = false;
-    for (const [instanceId, handle] of this.diagnosticHandles) {
-      let current: string;
-      try {
-        current = JSON.stringify(handle.getState());
-      } catch {
-        continue;
-      }
-      if (this.lastDiagnosticStats.get(instanceId) !== current) {
-        this.lastDiagnosticStats.set(instanceId, current);
-        changed = true;
-      }
-    }
-    if (changed) {
-      this.requestNotify();
-    }
-    if (this.diagnosticHandles.size === 0) {
-      this.stopDiagnosticPoll();
-    }
-  }
-
-  /**
-   * 束縛テキスト個体を取り出す。handle と現割当ての両方が現在のもので
-   * なければ拒否し、古い割当てへの転送はしない。
-   *
-   * @param instanceId - 照合する束縛個体の識別子。
-   * @throws `RangeError` — 識別子が不正・束縛外・現割当て失効の場合。
-   * @throws `Error` — 終了中・起動失敗の場合。
-   */
-  private requireTextBinding(instanceId: unknown): {
-    handle: PluginInstanceHandle<TextPluginState, TextPluginOperations>;
-    localSessionId: string;
-  } {
-    this.operable();
-    const id = assertId(instanceId, "instanceId");
-    const handle = this.textHandle;
-    const localSessionId = this.textLocalSessionId;
-    if (handle === null || localSessionId === null || handle.instanceId !== id) {
-      throw new RangeError("束縛したテキスト個体ではない。");
-    }
-    return { handle, localSessionId };
-  }
-
-  /**
-   * 束縛診断個体を取り出す。生成分の保持と基盤の現割当ての両方を照合し、
-   * 失効していれば拒否する。
-   *
-   * @param instanceId - 照合する束縛個体の識別子。
-   * @throws `RangeError` — 識別子が不正・束縛外・現割当て失効の場合。
-   * @throws `Error` — 終了中・起動失敗の場合。
-   */
-  private requireDiagnosticBinding(instanceId: unknown): {
-    handle: PluginInstanceHandle<DiagnosticStats>;
-    localSessionId: string;
-  } {
-    const { core } = this.operable();
-    const id = assertId(instanceId, "instanceId");
-    const handle = this.diagnosticHandles.get(id);
-    if (handle === undefined) {
-      throw new RangeError("束縛した診断個体ではない。");
-    }
-    const assignment = core
-      .listAssignments()
-      .find((candidate) => candidate.instanceId === id && candidate.portId === DIAGNOSTIC_PORT_ID);
-    if (assignment === undefined) {
-      throw new RangeError("診断の現割当てが無い。");
-    }
-    return { handle, localSessionId: assignment.localSessionId };
-  }
-
-  /**
-   * 管理通知を処理する。テキスト割当て対象の終了では core の失効後に
-   * 生成分を回収し、診断割当ての終了でも該当の生成分を回収する。
-   * その後の通知予約は既存経路にまとめる。
-   *
-   * プラグインの操作口は失効時に購読を解除するため、後始末を
-   * プラグインの `onEnd` 到達には依存しない（管理通知で駆動する）。
-   *
-   * @param event - サーバーの管理通知。
-   */
-  private handleManagementEvent(event: ManagementEvent): void {
-    if (event.kind === "session-ended") {
-      if (event.session.localSessionId === this.textLocalSessionId) {
-        this.reclaimText();
-      }
-      this.reclaimDiagnostics(event.session.localSessionId);
+      // 照合の失敗は通知を止めない。
     }
     this.requestNotify();
   }
 
   /**
-   * 終了した診断割当ての生成分を回収する。
-   *
-   * core の割当て失効は購読順で先に済んでいるため、生成分の削除だけを
-   * 行う。対象が無ければ何もしない。挙動の他の変更はしない。
-   *
-   * @param localSessionId - 終了した生存セッションのローカル識別子。
-   */
-  private reclaimDiagnostics(localSessionId: string): void {
-    const instanceId = this.diagnosticSessions.get(localSessionId);
-    if (instanceId === undefined) {
-      return;
-    }
-    this.diagnosticSessions.delete(localSessionId);
-    this.diagnosticHandles.delete(instanceId);
-    this.lastDiagnosticStats.delete(instanceId);
-    if (this.diagnosticHandles.size === 0) {
-      this.stopDiagnosticPoll();
-    }
-    if (this.core !== null) {
-      try {
-        this.core.removeInstance(instanceId);
-      } catch {
-        // 回収の失敗は通知を止めない。
-      }
-    }
-  }
-
-  /**
-   * 終了したテキスト割当ての生成分を回収する。
-   *
-   * 購読解除と表示の消去を先に行ってから基盤の生成分を片付ける。
-   * core の割当て失効は購読順で先に済んでいるため、ここでは問わない。
-   * 回収後は再承認・新規セッション・新規の明示割当てを要求し、
-   * 旧操作口・未完了要求・本文を引き継がない。
-   */
-  private reclaimText(): void {
-    const handle = this.textHandle;
-    this.detachTextSubscription();
-    this.textHandle = null;
-    this.textLocalSessionId = null;
-    if (handle !== null && this.core !== null) {
-      try {
-        this.core.removeInstance(handle.instanceId);
-      } catch {
-        // 回収の失敗は通知を止めない。
-      }
-    }
-  }
-
-  /** テキスト状態の購読を外す。未購読なら何もしない。 */
-  private detachTextSubscription(): void {
-    const unsubscribe = this.textStateUnsubscribe;
-    this.textStateUnsubscribe = null;
-    if (unsubscribe === null) {
-      return;
-    }
-    try {
-      unsubscribe();
-    } catch {
-      // 購読解除の失敗は後始末を止めない。
-    }
-  }
-
-  /**
    * 終了する。冪等であり、二度目以降は同じ終了を待つ。
    *
-   * 終了中は新規操作を拒否し、受付の無効化 → 基盤を終了する
-   * （割当ての失効・中断、購読解除）→ server を閉じる（待受停止）の
-   * 順で後始末する。購読・通知予約の解除は最後に行う。
+   * 終了中は新規操作を拒否し、受付の無効化 → `manager.close()` →
+   * 基盤を終了する（割当ての失効・中断、購読解除）→ server を閉じる
+   * （待受停止）の順で後始末する。途中失敗で後続を止めない。
+   * 購読・通知予約の解除は最後に行う。
    */
   close(): Promise<void> {
     if (this.closeTask === null) {
@@ -1055,6 +716,11 @@ export class GuiBackend {
         // 受付無効化の失敗は後始末を止めない。
       }
       try {
+        this.manager?.close();
+      } catch {
+        // 管理層終了の失敗は後始末を止めない。
+      }
+      try {
         this.core?.close();
       } catch {
         // 基盤終了の失敗は待受停止を止めない。
@@ -1067,15 +733,10 @@ export class GuiBackend {
     }
   }
 
-  /** 購読・通知予約・保持 handle を解く。 */
+  /** 購読・通知予約・保持を解く。 */
   private dispose(): void {
     this.disposed = true;
     this.notifyScheduled = false;
-    this.detachTextSubscription();
-    this.textHandle = null;
-    this.textLocalSessionId = null;
-    this.stopDiagnosticPoll();
-    this.lastDiagnosticStats.clear();
     if (this.managementUnsubscribe !== null) {
       try {
         this.managementUnsubscribe();
@@ -1085,14 +746,20 @@ export class GuiBackend {
       this.managementUnsubscribe = null;
     }
     this.listeners.clear();
-    this.diagnosticHandles.clear();
-    this.diagnosticSessions.clear();
+    this.manager = null;
   }
 
   /** 現在の表示スナップショットを組み立てる。比較コード本文は含めない。 */
   private buildSnapshot(): ManagementSnapshot {
     const server = this.server;
     const core = this.core;
+    const manager = this.manager;
+    // 遷移規則は登録成功後の解決済み view パス集合から生成する。静的登録の
+    // ため backend 生存期間中は不変であり、`getSnapshot` と `stateChanged`
+    // の両方に同じ確定経路で載る。登録が無ければ基底（全面拒否＋空ページ）になる。
+    const pluginNavigationRules = buildPluginNavigationRules(
+      this.registry.list().map((companion) => companion.viewPath),
+    );
     return {
       revision: this.revision,
       backend: this.status,
@@ -1114,10 +781,8 @@ export class GuiBackend {
             })),
       sessions: server === null ? [] : [...server.listSessions()],
       plugins: {
-        instances: [...this.diagnosticHandles.values()].map((handle) => ({
-          instanceId: handle.instanceId,
-          pluginId: handle.pluginId,
-        })),
+        kinds: [...this.pluginKinds],
+        instances: manager === null ? [] : manager.listOwned().map(toOwnedSummary),
         assignments:
           core === null
             ? []
@@ -1127,53 +792,11 @@ export class GuiBackend {
                 portId: assignment.portId,
               })),
       },
-      text: this.buildTextState(),
       // 実プラグイン子画面の配置は main 側の対応付けが持ち、backend は
       // 所有しない。ここでは空を返し、RPC 層で対応付けの現在値を載せる。
       pluginMounts: [],
       pluginMountFailures: [],
-    };
-  }
-
-  /**
-   * 固定テキスト表示の状態を組み立てる。本文は含めない。
-   *
-   * 未割当てなら識別子は `null`・統計は零値である。handle 取得の失敗時は
-   * 未割当てとして扱い、表示の組み立てを壊さない。
-   */
-  private buildTextState(): TextDisplayState {
-    const handle = this.textHandle;
-    const localSessionId = this.textLocalSessionId;
-    if (handle === null || localSessionId === null) {
-      return {
-        localSessionId: null,
-        instanceId: null,
-        canSend: false,
-        pendingId: null,
-        lastResult: null,
-        stats: { attempts: 0, acknowledged: 0, unknown: 0 },
-      };
-    }
-    let state: TextPluginState;
-    try {
-      state = handle.getState();
-    } catch {
-      return {
-        localSessionId: null,
-        instanceId: null,
-        canSend: false,
-        pendingId: null,
-        lastResult: null,
-        stats: { attempts: 0, acknowledged: 0, unknown: 0 },
-      };
-    }
-    return {
-      localSessionId,
-      instanceId: handle.instanceId,
-      canSend: state.canSend,
-      pendingId: state.pendingId,
-      lastResult: state.lastResult,
-      stats: state.stats,
+      pluginNavigationRules,
     };
   }
 }

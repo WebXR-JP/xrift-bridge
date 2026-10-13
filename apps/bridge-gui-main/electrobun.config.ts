@@ -1,4 +1,9 @@
 import type { ElectrobunConfig } from "electrobun";
+import {
+  BUNDLED_PLUGIN_ASSETS,
+  buildBundledPluginCopy,
+  buildBundledPluginViews,
+} from "./src/composition/bundled-plugin-assets.ts";
 
 /**
  * 管理画面（Angular）の事前生成物の配置。
@@ -17,6 +22,13 @@ import type { ElectrobunConfig } from "electrobun";
  * ために落とす）。
  */
 const uiSource = process.env.BRIDGE_GUI_UI_DIR?.trim() || "src/mainview-dist/prod";
+
+// プラグイン部分の view・copy 表は静的 manifest から純粋関数で導く。
+// mainview・plugin-host・段0 spike はホスト資産として別扱いであり、
+// ここに直書きしない。config から `bundled-plugins.ts` 全体は import しない
+// （companion factory の具象を build 時に引き込まない）。
+const bundledPluginViews = buildBundledPluginViews(BUNDLED_PLUGIN_ASSETS);
+const bundledPluginCopy = buildBundledPluginCopy(BUNDLED_PLUGIN_ASSETS);
 
 export default {
   app: {
@@ -41,12 +53,7 @@ export default {
       "plugin-spike": {
         entrypoint: "src/plugin-spike/index.ts",
       },
-      "plugin-text": {
-        entrypoint: "src/plugin-ui/text/index.ts",
-      },
-      "plugin-diagnostic": {
-        entrypoint: "src/plugin-ui/diagnostic/index.ts",
-      },
+      ...bundledPluginViews,
     },
     // UI バンドルは Hutch の build.views＋HTML/CSS コピーで足りる。Vite は増やさない。
     copy: {
@@ -59,10 +66,7 @@ export default {
       "src/plugin-spike/index.html": "views/plugin-spike/index.html",
       "src/plugin-spike/index.css": "views/plugin-spike/index.css",
       "src/plugin-host/blank.html": "views/plugin-host/blank.html",
-      "src/plugin-ui/text/index.html": "views/plugin-text/index.html",
-      "src/plugin-ui/text/index.css": "views/plugin-text/index.css",
-      "src/plugin-ui/diagnostic/index.html": "views/plugin-diagnostic/index.html",
-      "src/plugin-ui/diagnostic/index.css": "views/plugin-diagnostic/index.css",
+      ...bundledPluginCopy,
     },
     // CEF・トレイ・更新配信は追加しない。
     mac: {

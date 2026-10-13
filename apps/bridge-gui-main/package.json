@@ -18,6 +18,7 @@
   "dependencies": {
     "bridge-app-core": "workspace:*",
     "bridge-gui-contract": "workspace:*",
+    "bridge-gui-plugin-sdk": "workspace:*",
     "bridge-gui-ui": "workspace:*",
     "bridge-protocol": "workspace:*",
     "bridge-server": "workspace:*"

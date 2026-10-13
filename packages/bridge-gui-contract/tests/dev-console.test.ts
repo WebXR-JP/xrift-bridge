@@ -45,10 +45,8 @@ test("許可操作は固定一覧に載るものだけである", () => {
   expect(isDevOpName("approvePairing")).toBe(true);
   expect(isDevOpName("rejectPairing")).toBe(true);
   expect(isDevOpName("disconnectConnection")).toBe(true);
-  expect(isDevOpName("assignDiagnostics")).toBe(true);
-  expect(isDevOpName("assignText")).toBe(true);
-  expect(isDevOpName("sendText")).toBe(true);
-  expect(isDevOpName("unassignText")).toBe(true);
+  expect(isDevOpName("assignPlugin")).toBe(true);
+  expect(isDevOpName("unassignPlugin")).toBe(true);
   expect(isDevOpName("spikeCreate")).toBe(true);
   expect(isDevOpName("spikeDestroy")).toBe(true);
   expect(isDevOpName("spikePush")).toBe(true);
@@ -57,7 +55,11 @@ test("許可操作は固定一覧に載るものだけである", () => {
   expect(isDevOpName("retryPluginMounts")).toBe(true);
 });
 
-test("終了・任意名は許可操作に含めない", () => {
+test("終了・旧管理操作・任意名は許可操作に含めない", () => {
+  expect(isDevOpName("assignDiagnostics")).toBe(false);
+  expect(isDevOpName("assignText")).toBe(false);
+  expect(isDevOpName("sendText")).toBe(false);
+  expect(isDevOpName("unassignText")).toBe(false);
   expect(isDevOpName("quit")).toBe(false);
   expect(isDevOpName("eval")).toBe(false);
   expect(isDevOpName("")).toBe(false);
@@ -163,11 +165,13 @@ test("業務要約に秘密（本文・payload）が載らない", () => {
       connectionId: "c1",
       origin: "o",
     }),
-    summarizeBusinessResult("sendText", { status: "acknowledged", id: "t1", text: secret }),
-    summarizeBusinessResult("assignText", {
+    summarizeBusinessResult("unassignPlugin", { released: true, issues: [], text: secret }),
+    summarizeBusinessResult("assignPlugin", {
+      pluginKind: "diagnostic",
+      pluginId: "diagnostic",
       localSessionId: "s1",
       instanceId: "i1",
-      portId: "text",
+      portId: "diagnostic",
     }),
     summarizeBusinessResult("spikeCreate", { mountId: "spike-1", initialUrl: secret }),
     summarizeBusinessResult("spikeList", [{ mountId: "spike-1" }]),

@@ -15,8 +15,30 @@
           </span>
           @if (isTextSession(session.sessionId)) {
             <span>診断対象外</span>
+          } @else if (diagnosticBindingOf(session.localSessionId); as bound) {
+            <span>診断割当て中（instanceId {{ bound.instanceId }}）</span>
+            <button
+              type="button"
+              (click)="
+                unassignRequested.emit({
+                  instanceId: bound.instanceId,
+                  localSessionId: bound.localSessionId,
+                  portId: bound.portId,
+                })
+              "
+            >
+              診断の割当てを外す
+            </button>
           } @else {
-            <button type="button" (click)="assignRequested.emit(session.localSessionId)">
+            <button
+              type="button"
+              (click)="
+                assignRequested.emit({
+                  pluginKind: 'diagnostic',
+                  localSessionId: session.localSessionId,
+                })
+              "
+            >
               診断を割り当てる
             </button>
           }

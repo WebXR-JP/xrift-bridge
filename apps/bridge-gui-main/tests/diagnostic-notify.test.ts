@@ -1,16 +1,19 @@
 /**
  * 診断統計の変化通知の検証。
  *
- * 診断プラグインに状態購読が無いため、GUI 側の最小の変化検出が echo／ping
- * 応答の統計変化を状態通知に載せること（テキストと同程度の購読口）を確かめる。
+ * 診断プラグインに状態購読が無いため、管理層の最小の変化検出が echo／ping
+ * 応答の統計変化を状態通知に載せること（既定周期での到達）を確かめる。
  * 実 WebSocket・既存 `ws`・yamux を通し、比較コード本文・業務 payload は
- * 記録に残さない。
+ * 記録に残さない。厳密な周期値は記述子の単体試験で固定する。
  *
  * @packageDocumentation
  */
 import { afterEach, expect, test } from "vite-plus/test";
 import { createConnectionRequest, type ReliableSession, type SessionProvider } from "world-client";
 import { GuiBackend } from "../src/main/backend.ts";
+import { registerBundledPlugins } from "../src/composition/bundled-plugins.ts";
+import type { PluginCompanion } from "bridge-gui-plugin-sdk/companion";
+import type { DiagnosticInstanceView } from "../src/plugin-ui/diagnostic/contract.ts";
 
 const TEST_ORIGIN = "https://gui-diagnostic-notify-test.invalid";
 
@@ -36,14 +39,16 @@ afterEach(async () => {
 
 /**
  * 試験用のバックエンドを生成する。待ち受けは空きポート自動選択であり、
- * 診断の変化検出は短い周期で行う。
+ * 診断の変化検出は記述子の既定周期で行う。
  */
 async function startBackend(): Promise<GuiBackend> {
-  const backend = await GuiBackend.create({
-    port: 0,
-    allowedOrigins: [TEST_ORIGIN],
-    diagnosticPollMs: 20,
-  });
+  const backend = await GuiBackend.create(
+    {
+      port: 0,
+      allowedOrigins: [TEST_ORIGIN],
+    },
+    { registerPlugins: registerBundledPlugins },
+  );
   backends.push(backend);
   expect(backend.getSnapshot().backend).toBe("ready");
   return backend;
@@ -127,6 +132,18 @@ function isEchoOf(payload: unknown, id: string): boolean {
   return record["op"] === "echo" && record["id"] === id;
 }
 
+/**
+ * 束縛診断個体の限定表示を読む。
+ */
+function readDiagnosticView(backend: GuiBackend, instanceId: string): DiagnosticInstanceView {
+  const companion: PluginCompanion | undefined = backend.companionRegistry.get("diagnostic");
+  if (companion === undefined) throw new Error("診断 companion が無い。");
+  // ADR: `as` を使う理由は、汎用口が種別を問わない表示を返し、試験で
+  // 束縛種別の具象表示を取り出すためである。根拠は、対応付けが同一種別の
+  // 記述子で読み・付番を対にすることである。
+  return companion.readView(instanceId) as DiagnosticInstanceView;
+}
+
 test("診断の応答で統計が変わると状態通知が届く", async () => {
   const backend = await startBackend();
   backend.enableAcceptance();
@@ -145,8 +162,11 @@ test("診断の応答で統計が変わると状態通知が届く", async () =>
   const sessions = backend.getSnapshot().sessions;
   const target = sessions[0];
   if (target === undefined) throw new Error("生存セッションが無い。");
-  const assignment = backend.assignDiagnostics({ localSessionId: target.localSessionId });
-  expect(backend.getDiagnosticInstanceView({ instanceId: assignment.instanceId }).stats).toEqual({
+  const assignment = backend.assignPlugin({
+    pluginKind: "diagnostic",
+    localSessionId: target.localSessionId,
+  });
+  expect(readDiagnosticView(backend, assignment.instanceId).stats).toEqual({
     diagnosticEcho: 0,
     diagnosticPing: 0,
   });
@@ -165,9 +185,9 @@ test("診断の応答で統計が変わると状態通知が届く", async () =>
     await expect(
       collected.waitForPayload((payload) => isEchoOf(payload, "gui-n1")),
     ).resolves.toBeDefined();
-    // 応答の統計変化が状態通知に載る。時刻ではなく到達で確定する。
+    // 応答の統計変化が既定周期の検出で状態通知に載る。到達の有無だけを見る。
     await waitForArrival(() => notifiedRevision > baseline, "診断統計の変化通知");
-    expect(backend.getDiagnosticInstanceView({ instanceId: assignment.instanceId }).stats).toEqual({
+    expect(readDiagnosticView(backend, assignment.instanceId).stats).toEqual({
       diagnosticEcho: 1,
       diagnosticPing: 0,
     });

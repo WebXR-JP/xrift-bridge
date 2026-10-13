@@ -1,17 +1,18 @@
 /**
- * 診断 companion が所有する固有契約と表示先。
+ * 診断 companion が所有する固有契約と相対資産の宣言。
  *
  * RPC 契約型・限定 DTO の定義をここに持ち、自己完結させる。共有型
- * （`InstanceBaseView`）と mount 識別子・URL 組み立ての共有手段だけを
- * 共有契約（`bridge-gui-contract/plugin-instance`）から借りる。子画面
- * （`index.ts`）と main 側アダプター（`companion.ts`）はここを参照し、
- * 種別トークン・view パス・URL 組み立てを他に分散させない。
+ * （`InstanceBaseView`）だけを共有契約（`bridge-gui-contract/plugin-instance`）
+ * から借りる。表示先は相対 entrypoint の宣言だけを持ち、絶対 `views://`
+ * パスや子画面 URL の組み立ては持たない。解決（配置先・`views://` パス・
+ * URL 組み立て）はホスト（composition の静的 manifest と対応付け）が行う。
+ * 子画面（`index.ts`）と main 側アダプター（`companion.ts`）はここを参照し、
+ * 種別トークン・相対 entrypoint を他に分散させない。
  *
  * @packageDocumentation
  */
 import type { DiagnosticStats } from "bridge-app-core";
 import type { InstanceBaseView } from "bridge-gui-contract/plugin-instance";
-import { buildPluginViewUrl } from "bridge-gui-contract/plugin-instance";
 
 /**
  * 診断個体の限定表示。echo／ping 統計だけを持ち、本文は持たない。
@@ -69,21 +70,16 @@ export type DiagnosticInstanceRpc = {
 export const DIAGNOSTIC_MOUNT_KIND = "diagnostic";
 
 /**
- * 診断子画面の view パス。
+ * 診断子画面の相対 entrypoint 群。資産ルート（`src/plugin-ui/diagnostic`）起点である。
  *
- * 遷移規則（共有契約の `PLUGIN_NAVIGATION_RULES`）が含む同梱パスの正本と
- * 一致させること。一致は bridge-gui-main の同期テストで固定する。
+ * 解決済み `views://` パス・配置先・コピー表の正本はホストの静的 manifest
+ * （`src/composition/bundled-plugin-assets.ts`）が持ち、ここでは相対名だけを
+ * 宣言する。一致は資産の同期テストで固定する。
  */
-export const DIAGNOSTIC_VIEW_PATH = "views://plugin-diagnostic/index.html";
+export const DIAGNOSTIC_VIEW_ENTRY = "index.html";
 
-/**
- * マウント識別子つきの診断子画面 URL を作る。
- *
- * main が個体別 RPC の結線後に読み込む先であり、画面からの指定は受け付けない。
- *
- * @param mountId - 再利用しないマウント識別子。空でないこと。
- * @returns 診断子画面の URL。
- */
-export function buildDiagnosticViewUrl(mountId: string): string {
-  return buildPluginViewUrl(DIAGNOSTIC_VIEW_PATH, mountId);
-}
+/** 診断子画面の表示スクリプトの相対 entrypoint。 */
+export const DIAGNOSTIC_SCRIPT_ENTRY = "index.ts";
+
+/** 診断子画面の表示様式の相対 entrypoint。 */
+export const DIAGNOSTIC_STYLE_ENTRY = "index.css";
