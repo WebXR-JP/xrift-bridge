@@ -6,26 +6,29 @@
  * `src/main/instance-rpc.ts` の適合層が担い、ここでは対応付けと照合・
  * 改訂番号だけを担う。単体検証は偽の backend・偽の生存照合で行える。
  *
+ * 種別ごとの限定射影・操作への到達は静的登録表（`plugin-companions.ts`）の
+ * 記述子に委譲し、ここに種別分岐を持たない。新しい companion の追加は
+ * 登録だけで行い、この層の分岐追加は要らない。
+ *
  * 対応付けの方針は以下である。
- * - 対応付けは `mountId` から束縛個体（`instanceId`・種別）への写像だけを持ち、
+ * - 対応付けは `mountId` から束縛個体（`instanceId`・種別トークン）への写像だけを持ち、
  *   割当ての実体は backend が持つ。子から任意の `instanceId`／`localSessionId`
  *   を受け取って振り分ける口は作らない。
- * - 要求ごとにマウント生存と種別を照合し、現割当ては backend の射影が
+ * - 要求ごとにマウント生存と種別を照合し、現割当ては companion の射影が
  *   例外で示す。古い（失効した）マウント・割当ての要求は拒否する。
  * - 改訂番号は対応付けごとに進み、読み取りでは進めない。push でのみ進む。
  *
  * @packageDocumentation
  */
 import type { TextSendResult } from "bridge-app-core";
-import type {
-  DiagnosticInstanceChangedMessage,
-  DiagnosticInstanceSnapshot,
-  DiagnosticInstanceView,
-  TextInstanceChangedMessage,
-  TextInstanceSnapshot,
-  TextInstanceView,
-} from "bridge-gui-contract/plugin-instance";
+import type { TextInstanceView } from "../plugin-ui/text/contract.ts";
+import type { DiagnosticInstanceView } from "../plugin-ui/diagnostic/contract.ts";
 import type { PluginMountManager } from "./plugin-mounts.ts";
+import {
+  defaultPluginCompanionRegistry,
+  type PluginCompanion,
+  type PluginCompanionRegistry,
+} from "./plugin-companions.ts";
 
 /**
  * 個体別射影の最小口。`GuiBackend` が構造的に満たす。
@@ -86,41 +89,8 @@ export function asMountLiveness(manager: PluginMountManager): MountLiveness {
   };
 }
 
-/** テキスト個体の push 口。当該マウントの結線だけに送る。 */
-export type TextPushSink = (message: TextInstanceChangedMessage) => void;
-
-/** 診断個体の push 口。当該マウントの結線だけに送る。 */
-export type DiagnosticPushSink = (message: DiagnosticInstanceChangedMessage) => void;
-
-/**
- * 個体別 RPC が main 側へ返す処理。子から識別子の指定は受け付けない。
- *
- * 束縛済み個体以外・失効した対応付けの要求は `RangeError` で拒否する。
- */
-export interface InstanceChannelHooks {
-  /**
-   * 束縛テキスト個体の状態取得に応答する。
-   *
-   * @param mountId - 照合済みのマウント識別子。
-   */
-  handleGetTextState(mountId: string): TextInstanceSnapshot;
-  /**
-   * 束縛テキスト個体の現割当てへ本文を送る。
-   *
-   * @param mountId - 照合済みのマウント識別子。
-   * @param text - 送信する本文。文字列であること。
-   */
-  handleSendText(mountId: string, text: unknown): Promise<TextSendResult>;
-  /**
-   * 束縛診断個体の状態取得に応答する。
-   *
-   * @param mountId - 照合済みのマウント識別子。
-   */
-  handleGetDiagnosticState(mountId: string): DiagnosticInstanceSnapshot;
-}
-
-/** 対応付けの種別。 */
-type BindingKind = "text" | "diagnostic";
+/** 汎用の push 口。当該マウントの結線だけに送る。 */
+export type PushSink = (message: unknown) => void;
 
 /** 対応付けの1行。 */
 interface BindingRecord {
@@ -128,14 +98,12 @@ interface BindingRecord {
   readonly mountId: string;
   /** 束縛した実インスタンスの識別子。 */
   readonly instanceId: string;
-  /** 束縛した個体の種別。 */
-  readonly kind: BindingKind;
+  /** 束縛した個体の種別トークン。登録表の companion を指す。 */
+  readonly kind: string;
   /** 対応付け単位の改訂番号。 */
   revision: number;
-  /** テキスト push 口。未登録・種別外なら `null`。 */
-  textSink: TextPushSink | null;
-  /** 診断 push 口。未登録・種別外なら `null`。 */
-  diagnosticSink: DiagnosticPushSink | null;
+  /** 状態 push 口。未登録なら `null`。 */
+  sink: PushSink | null;
 }
 
 /**
@@ -159,19 +127,22 @@ function assertId(value: unknown, name: string): string {
  * マウントと実インスタンスの対応付け。所有表の操作はすべて同期であり、
  * backend の射影呼び出し自体も同期的である（送信の解決は約束で返す）。
  *
- * 子画面が呼べる要求は `InstanceChannelHooks` の3口だけであり、
- * 受付・保留・承認・接続断・割当て等の管理操作は持たない。
+ * 子画面が呼べる要求は汎用の `readSnapshot`・`send` だけであり、
+ * 種別トークンは companion が決め打ちで渡す。受付・保留・承認・接続断・
+ * 割当て等の管理操作は持たない。
  */
-export class PluginInstanceBinder implements InstanceChannelHooks {
+export class PluginInstanceBinder {
   private readonly bindings = new Map<string, BindingRecord>();
 
   /**
    * @param liveness - 段0所有表の生存照合口。
-   * @param backend - 個体別射影の最小口。
+   * @param backend - 個体別射影を持つ backend。companion が不透明に使う。
+   * @param registry - 種別トークンから記述子を引く登録表。省略時は既定の共有表。
    */
   constructor(
     private readonly liveness: MountLiveness,
-    private readonly backend: InstanceProjectionBackend,
+    private readonly backend: unknown,
+    private readonly registry: PluginCompanionRegistry = defaultPluginCompanionRegistry,
   ) {}
 
   /** 対応付け中の件数。記録用である。 */
@@ -180,30 +151,37 @@ export class PluginInstanceBinder implements InstanceChannelHooks {
   }
 
   /**
-   * マウントにテキスト個体を束縛する。
-   *
-   * マウント生存と実在・現割当てをこの時点で確かめ、失効していれば
-   * 対応付けを作らず拒否する。
+   * マウントに個体を束縛する。種別ごとの実在・現割当ての確認は
+   * 登録表の記述子に委譲し、ここに種別分岐を持たない。
    *
    * @param mountId - 対応付けるマウント識別子。
-   * @param instanceId - 束縛するテキストインスタンスの識別子。
+   * @param kind - 束縛する個体の種別トークン。登録済みであること。
+   * @param instanceId - 束縛する実インスタンスの識別子。
    * @throws `RangeError` — 識別子が不正・対応付け済み・所有表に無い・
-   * 実在しない・現割当てが無い場合。
+   * 未登録種別・実在しない・現割当てが無い場合。
    */
-  bindTextMount(mountId: string, instanceId: string): void {
-    this.bind(mountId, instanceId, "text");
-  }
-
-  /**
-   * マウントに診断個体を束縛する。
-   *
-   * @param mountId - 対応付けるマウント識別子。
-   * @param instanceId - 束縛する診断インスタンスの識別子。
-   * @throws `RangeError` — 識別子が不正・対応付け済み・所有表に無い・
-   * 実在しない・現割当てが無い場合。
-   */
-  bindDiagnosticMount(mountId: string, instanceId: string): void {
-    this.bind(mountId, instanceId, "diagnostic");
+  bindMount(mountId: string, kind: string, instanceId: string): void {
+    const mount = assertId(mountId, "mountId");
+    const token = assertId(kind, "kind");
+    const instance = assertId(instanceId, "instanceId");
+    if (this.bindings.has(mount)) {
+      throw new RangeError("対応付け済みのマウントである。");
+    }
+    if (!this.liveness.isLive(mount)) {
+      throw new RangeError("子画面は利用できない（未結線・破棄済み）。");
+    }
+    const companion = this.requireCompanion(token);
+    // ADR: 実在と現割当ての有無は companion の射影に問う。失効していれば
+    // ここで拒否し、対応付けを作らない。二重管理の真偽表は持たない。
+    companion.readView(this.backend, instance);
+    this.bindings.set(mount, {
+      mountId: mount,
+      instanceId: instance,
+      kind: token,
+      revision: 0,
+      sink: null,
+    });
+    console.log(`[bridge-gui] 個体を対応付けた: mountId=${mount} instanceId=${instance}`);
   }
 
   /**
@@ -217,112 +195,80 @@ export class PluginInstanceBinder implements InstanceChannelHooks {
     const record = this.bindings.get(id);
     if (record !== undefined) {
       this.bindings.delete(id);
-      record.textSink = null;
-      record.diagnosticSink = null;
+      record.sink = null;
       console.log(`[bridge-gui] 個体の対応付けを外した: mountId=${id}`);
     }
     return { ok: true };
   }
 
   /**
-   * テキスト push 口を登録する。更新ハンドラ登録に相当する。
+   * 状態 push 口を登録する。更新ハンドラ登録に相当する。
    *
    * @param mountId - 対応付け済みのマウント識別子。
+   * @param kind - 束縛した個体の種別トークン。対応付けの記録と照合する。
    * @param sink - 当該マウント専用の push 口。
    * @throws `RangeError` — 未対応付け・失効・種別外の場合。
    */
-  setTextSink(mountId: string, sink: TextPushSink): void {
-    this.requireKind(mountId, "text").textSink = sink;
+  setSink(mountId: string, kind: string, sink: PushSink): void {
+    this.requireBinding(mountId, kind).sink = sink;
   }
 
   /**
-   * 診断 push 口を登録する。更新ハンドラ登録に相当する。
+   * 束縛個体の限定表示を改訂番号付きで読む。読み取りは revision を進めない。
+   * 種別ごとの射影は登録表の記述子に委譲し、ここに種別分岐を持たない。
    *
-   * @param mountId - 対応付け済みのマウント識別子。
-   * @param sink - 当該マウント専用の push 口。
-   * @throws `RangeError` — 未対応付け・失効・種別外の場合。
-   */
-  setDiagnosticSink(mountId: string, sink: DiagnosticPushSink): void {
-    this.requireKind(mountId, "diagnostic").diagnosticSink = sink;
-  }
-
-  /**
-   * 束縛テキスト個体の状態取得に応答する。読み取りは revision を進めない。
-   *
+   * @param kind - companion の種別トークン。対応付けの記録と照合する。
    * @param mountId - 照合済みのマウント識別子。
    * @throws `RangeError` — 未対応付け・失効・種別外・現割当て失効の場合。
    */
-  handleGetTextState(mountId: string): TextInstanceSnapshot {
-    const record = this.requireKind(mountId, "text");
-    const view = this.backend.getTextInstanceView({ instanceId: record.instanceId });
-    return { ...view, revision: record.revision };
+  readSnapshot(kind: string, mountId: string): unknown {
+    const record = this.requireBinding(mountId, kind);
+    const companion = this.requireCompanion(record.kind);
+    const view = companion.readView(this.backend, record.instanceId);
+    return companion.toSnapshot(view, record.revision);
   }
 
   /**
-   * 束縛テキスト個体の現割当てへ本文を送る。子からの割当て識別子の
-   * 指定は受け付けず、main が束縛した個体の現割当てに委譲する。
+   * 束縛個体の操作へ委譲する。子からの割当て識別子の指定は受け付けず、
+   * main が束縛した個体の現割当てに委譲する。種別ごとの操作口は
+   * 登録表の記述子に委譲し、ここに種別分岐を持たない。
    *
+   * @param kind - companion の種別トークン。対応付けの記録と照合する。
    * @param mountId - 照合済みのマウント識別子。
-   * @param text - 送信する本文。文字列であること。
-   * @throws `RangeError` — 未対応付け・失効・種別外・現割当て失効の場合（同期的）。
+   * @param params - 操作の引数。
+   * @throws `RangeError` — 未対応付け・失効・種別外・現割当て失効・操作口無しの場合（同期的）。
    */
-  handleSendText(mountId: string, text: unknown): Promise<TextSendResult> {
-    const record = this.requireKind(mountId, "text");
-    return this.backend.sendTextForInstance(record.instanceId, { text });
+  send(kind: string, mountId: string, params: unknown): Promise<unknown> {
+    const record = this.requireBinding(mountId, kind);
+    const companion = this.requireCompanion(record.kind);
+    const operation = companion.send;
+    if (operation === undefined) {
+      throw new RangeError("操作口が無い。");
+    }
+    return operation(this.backend, record.instanceId, params);
   }
 
   /**
-   * 束縛診断個体の状態取得に応答する。読み取りは revision を進めない。
-   *
-   * @param mountId - 照合済みのマウント識別子。
-   * @throws `RangeError` — 未対応付け・失効・種別外・現割当て失効の場合。
-   */
-  handleGetDiagnosticState(mountId: string): DiagnosticInstanceSnapshot {
-    const record = this.requireKind(mountId, "diagnostic");
-    const view = this.backend.getDiagnosticInstanceView({ instanceId: record.instanceId });
-    return { ...view, revision: record.revision };
-  }
-
-  /**
-   * 当該マウントだけにテキスト状態 push を送る。改訂番号を進める。
+   * 当該マウントだけに状態 push を送る。改訂番号を進める。
+   * 種別ごとの射影・通知名は登録表の記述子に委譲し、ここに種別分岐を持たない。
    *
    * @param mountId - 送り先のマウント識別子。
-   * @throws `RangeError` — 識別子が不正・未対応付け・失効・種別外・
+   * @throws `RangeError` — 識別子が不正・未対応付け・失効・
    * push 口未登録・現割当て失効の場合。
    */
-  pushText(mountId: unknown): { revision: number } {
+  push(mountId: unknown): { revision: number } {
     const id = assertId(mountId, "mountId");
-    const record = this.requireKind(id, "text");
-    const sink = record.textSink;
+    const record = this.requireBinding(id, undefined);
+    const companion = this.requireCompanion(record.kind);
+    const sink = record.sink;
     if (sink === null) {
       throw new RangeError("子画面の push 口が無い。");
     }
-    const view = this.backend.getTextInstanceView({ instanceId: record.instanceId });
+    const view = companion.readView(this.backend, record.instanceId);
     record.revision += 1;
-    const snapshot: TextInstanceSnapshot = { ...view, revision: record.revision };
-    sink({ revision: record.revision, snapshot });
-    console.log(`[bridge-gui] 個体へ送った: mountId=${id} revision=${record.revision}`);
-    return { revision: record.revision };
-  }
-
-  /**
-   * 当該マウントだけに診断状態 push を送る。改訂番号を進める。
-   *
-   * @param mountId - 送り先のマウント識別子。
-   * @throws `RangeError` — 識別子が不正・未対応付け・失効・種別外・
-   * push 口未登録・現割当て失効の場合。
-   */
-  pushDiagnostic(mountId: unknown): { revision: number } {
-    const id = assertId(mountId, "mountId");
-    const record = this.requireKind(id, "diagnostic");
-    const sink = record.diagnosticSink;
-    if (sink === null) {
-      throw new RangeError("子画面の push 口が無い。");
-    }
-    const view = this.backend.getDiagnosticInstanceView({ instanceId: record.instanceId });
-    record.revision += 1;
-    const snapshot: DiagnosticInstanceSnapshot = { ...view, revision: record.revision };
-    sink({ revision: record.revision, snapshot });
+    // 通知の外形（`{ revision, snapshot }`）は全 companion で共通であり、
+    // 中身の snapshot は記述子が作る。種別分岐は持たない。
+    sink({ revision: record.revision, snapshot: companion.toSnapshot(view, record.revision) });
     console.log(`[bridge-gui] 個体へ送った: mountId=${id} revision=${record.revision}`);
     return { revision: record.revision };
   }
@@ -331,7 +277,7 @@ export class PluginInstanceBinder implements InstanceChannelHooks {
   listBindings(): Array<{
     readonly mountId: string;
     readonly instanceId: string;
-    readonly kind: BindingKind;
+    readonly kind: string;
     readonly revision: number;
   }> {
     return [...this.bindings.values()].map((record) => ({
@@ -342,38 +288,17 @@ export class PluginInstanceBinder implements InstanceChannelHooks {
     }));
   }
 
-  /**
-   * 対応付けを作る。実在と現割当ては backend の射影で確かめる。
-   */
-  private bind(mountId: string, instanceId: string, kind: BindingKind): void {
-    const mount = assertId(mountId, "mountId");
-    const instance = assertId(instanceId, "instanceId");
-    if (this.bindings.has(mount)) {
-      throw new RangeError("対応付け済みのマウントである。");
+  /** 登録表から記述子を引く。未登録なら拒否する。 */
+  private requireCompanion(kind: string): PluginCompanion {
+    const companion = this.registry.get(kind);
+    if (companion === undefined) {
+      throw new RangeError("未登録の種別である。");
     }
-    if (!this.liveness.isLive(mount)) {
-      throw new RangeError("子画面は利用できない（未結線・破棄済み）。");
-    }
-    // ADR: 実在と現割当ての有無は backend の射影に問う。失効していれば
-    // ここで拒否し、対応付けを作らない。二重管理の真偽表は持たない。
-    if (kind === "text") {
-      this.backend.getTextInstanceView({ instanceId: instance });
-    } else {
-      this.backend.getDiagnosticInstanceView({ instanceId: instance });
-    }
-    this.bindings.set(mount, {
-      mountId: mount,
-      instanceId: instance,
-      kind,
-      revision: 0,
-      textSink: null,
-      diagnosticSink: null,
-    });
-    console.log(`[bridge-gui] 個体を対応付けた: mountId=${mount} instanceId=${instance}`);
+    return companion;
   }
 
   /** 対応付けを取り出し、生存と種別を照合する。 */
-  private requireKind(mountId: string, kind: BindingKind): BindingRecord {
+  private requireBinding(mountId: string, kind: string | undefined): BindingRecord {
     const record = this.bindings.get(mountId);
     if (record === undefined) {
       throw new RangeError("対応付けの無いマウントである。");
@@ -382,53 +307,9 @@ export class PluginInstanceBinder implements InstanceChannelHooks {
     if (!this.liveness.isLive(mountId)) {
       throw new RangeError("子画面は利用できない（未結線・破棄済み）。");
     }
-    if (record.kind !== kind) {
+    if (kind !== undefined && record.kind !== kind) {
       throw new RangeError("束縛した個体の種別と要求が一致しない。");
     }
     return record;
   }
-}
-
-/**
- * テキスト個体 RPC の要求処理を組み立てる。SDK に依存しない。
- *
- * 子画面が呼べる要求はここに載せたものだけであり、受付・保留・承認・
- * 接続断・割当て等の管理操作は載せない。適合層はこの表をそのまま使う。
- *
- * @param mountId - 結び付けるマウント識別子。
- * @param hooks - main 側の応答処理。
- * @returns 要求名から処理への表。
- */
-export function buildTextRequestHandlers(
-  mountId: string,
-  hooks: InstanceChannelHooks,
-): {
-  getTextState: () => TextInstanceSnapshot;
-  sendText: (params: { text: string }) => Promise<TextSendResult>;
-} {
-  return {
-    getTextState: () => hooks.handleGetTextState(mountId),
-    sendText: ({ text }) => hooks.handleSendText(mountId, text),
-  };
-}
-
-/**
- * 診断個体 RPC の要求処理を組み立てる。SDK に依存しない。
- *
- * 子画面が呼べる要求はここに載せたものだけであり、管理操作は載せない。
- * 適合層はこの表をそのまま使う。
- *
- * @param mountId - 結び付けるマウント識別子。
- * @param hooks - main 側の応答処理。
- * @returns 要求名から処理への表。
- */
-export function buildDiagnosticRequestHandlers(
-  mountId: string,
-  hooks: InstanceChannelHooks,
-): {
-  getDiagnosticState: () => DiagnosticInstanceSnapshot;
-} {
-  return {
-    getDiagnosticState: () => hooks.handleGetDiagnosticState(mountId),
-  };
 }

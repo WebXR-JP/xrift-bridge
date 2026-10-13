@@ -8,9 +8,12 @@
  * 子から任意の `instanceId`／`localSessionId` を受け取って振り分ける口は持たず、
  * main が束縛した個体の現割当てだけを使う。実行時の依存を持たない。
  *
+ * 種別ごとの固有契約（限定表示・snapshot・通知・RPC 型・view パス）は各
+ * companion が所有する（`apps/bridge-gui-main/src/plugin-ui/<種別>/contract.ts`）。
+ * ここには全 companion で共通の手段だけを置く。
+ *
  * @packageDocumentation
  */
-import type { DiagnosticStats, TextSendResult, TextStats } from "bridge-app-core";
 
 /**
  * 束縛個体の共通表示。自分の識別情報・接続口・現割当てだけを持つ。
@@ -28,111 +31,6 @@ export interface InstanceBaseView {
   /** 現割当ての生存セッションのローカル識別子。 */
   readonly localSessionId: string;
 }
-
-/**
- * テキスト個体の限定表示。本文は含めない（送信時のみ扱う）。
- */
-export interface TextInstanceView extends InstanceBaseView {
-  /** 割当てがあり実行中でなければ真。 */
-  readonly canSend: boolean;
-  /** 実行中の要求の相関識別子。待機がなければ `null`。 */
-  readonly pendingId: string | null;
-  /** 直近の決着。未送信なら `null`。 */
-  readonly lastResult: TextSendResult | null;
-  /** インスタンス単位の統計。 */
-  readonly stats: TextStats;
-}
-
-/**
- * 診断個体の限定表示。echo／ping 統計だけを持ち、本文は持たない。
- */
-export interface DiagnosticInstanceView extends InstanceBaseView {
-  /** 束縛個体の echo／ping 応答統計。 */
-  readonly stats: DiagnosticStats;
-}
-
-/**
- * テキスト子画面が受け取る snapshot。
- */
-export interface TextInstanceSnapshot extends TextInstanceView {
-  /** 単調増加の改訂番号。新しいときだけ採用する。 */
-  readonly revision: number;
-}
-
-/**
- * 診断子画面が受け取る snapshot。
- */
-export interface DiagnosticInstanceSnapshot extends DiagnosticInstanceView {
-  /** 単調増加の改訂番号。新しいときだけ採用する。 */
-  readonly revision: number;
-}
-
-/** main からテキスト子画面への状態通知。最新の全状態を送る唯一の通知である。 */
-export interface TextInstanceChangedMessage {
-  /** 単調増加の改訂番号。 */
-  readonly revision: number;
-  /** 採用対象の表示状態。 */
-  readonly snapshot: TextInstanceSnapshot;
-}
-
-/** main から診断子画面への状態通知。最新の全状態を送る唯一の通知である。 */
-export interface DiagnosticInstanceChangedMessage {
-  /** 単調増加の改訂番号。 */
-  readonly revision: number;
-  /** 採用対象の表示状態。 */
-  readonly snapshot: DiagnosticInstanceSnapshot;
-}
-
-// ADR: Electrobun の `RPCSchema<I>` は `{requests, messages}` に解決される
-// 構造型であり、`ElectrobunRPCSchema` 制約（`{bun, webview}`）も構造適合で
-// 満たせる。そのため契約ではこの素朴な構造型で表し、`electrobun/rpc` を
-// import しない（契約パッケージのビルドを `.hutch` に依存させない）。
-// 制約が構造型を拒否する場合は bridge-gui-main 側のアダプタで最小の型写像を行う。
-type RpcSchema<Requests, Messages> = {
-  requests: Requests;
-  messages: Messages;
-};
-
-/** テキスト子画面用 RPC の型。main・子画面の両方から参照する。 */
-export type TextInstanceRpc = {
-  bun: RpcSchema<
-    {
-      /** 束縛個体の状態取得。識別子の指定は受け付けない。読み取りは revision を進めない。 */
-      getTextState: { params: {}; response: TextInstanceSnapshot };
-      /**
-       * 束縛個体の現割当てへの本文送信。本文だけを受け、割当て識別子の
-       * 指定は受け付けない。main が束縛した個体の現割当てに委譲する。
-       */
-      sendText: { params: { text: string }; response: TextSendResult };
-    },
-    {}
-  >;
-  webview: RpcSchema<
-    {},
-    {
-      /** main からの状態 push。 */
-      textStateChanged: TextInstanceChangedMessage;
-    }
-  >;
-};
-
-/** 診断子画面用 RPC の型。main・子画面の両方から参照する。 */
-export type DiagnosticInstanceRpc = {
-  bun: RpcSchema<
-    {
-      /** 束縛個体の状態取得。識別子の指定は受け付けない。読み取りは revision を進めない。 */
-      getDiagnosticState: { params: {}; response: DiagnosticInstanceSnapshot };
-    },
-    {}
-  >;
-  webview: RpcSchema<
-    {},
-    {
-      /** main からの状態 push。 */
-      diagnosticStateChanged: DiagnosticInstanceChangedMessage;
-    }
-  >;
-};
 
 /**
  * 受信した個体別表示を採用すべきか判定し、採用すべきものだけを返す。
@@ -168,22 +66,18 @@ export function selectNewerInstanceSnapshot<T extends { readonly revision: numbe
 /** 実プラグイン子画面の配置先（空ページ）。初期配置先であり、検証内容は持たない。 */
 export const PLUGIN_BLANK_PATH = "views://plugin-host/blank.html";
 
-/** テキスト子画面。本文の入力と送信だけを行う。 */
-export const PLUGIN_TEXT_VIEW_PATH = "views://plugin-text/index.html";
-
-/** 診断子画面。自分の割当てと echo／ping 統計の表示だけを行う。 */
-export const PLUGIN_DIAGNOSTIC_VIEW_PATH = "views://plugin-diagnostic/index.html";
-
 /**
  * 実プラグイン子画面タグの遷移規則。全面拒否を先に置き、
  * 空ページと実プラグイン子画面だけを後に許可する（後に一致した規則が勝つ）。
+ *
+ * 同梱パスの文字列は各 companion の view パス（`TEXT_VIEW_PATH`・
+ * `DIAGNOSTIC_VIEW_PATH`）の正本と一致させること。一致は bridge-gui-main の
+ * 同期テストで固定し、ここでの列挙と登録表の二重定義のずれを検出する。
  */
-export const PLUGIN_NAVIGATION_RULES: readonly string[] = [
-  "^*",
-  "views://plugin-host/*",
-  "views://plugin-text/*",
-  "views://plugin-diagnostic/*",
-];
+export const PLUGIN_NAVIGATION_RULES: readonly string[] = buildPluginNavigationRules([
+  "views://plugin-text/index.html",
+  "views://plugin-diagnostic/index.html",
+]);
 
 /** タグの `navigation-rules` 属性に載せる形。 */
 export const PLUGIN_NAVIGATION_RULES_ATTRIBUTE: string = JSON.stringify(PLUGIN_NAVIGATION_RULES);
@@ -220,12 +114,8 @@ export const PLUGIN_INITIAL_FETCH_ATTEMPTS = 3;
  */
 export const PLUGIN_INITIAL_FETCH_RETRY_MS = 1_000;
 
-/** 実プラグイン子画面の種別。 */
-export type PluginUiMountKind =
-  /** テキスト個体に束縛する子画面。 */
-  | "text"
-  /** 診断個体に束縛する子画面。 */
-  | "diagnostic";
+/** 実プラグイン子画面の種別。main の静的登録表にある companion の種別トークンである。 */
+export type PluginUiMountKind = string;
 
 /** 実プラグイン子画面の結線段階。 */
 export type PluginUiMountPhase =
@@ -293,35 +183,40 @@ export function buildPluginBlankUrl(mountId: string): string {
 }
 
 /**
- * マウント識別子つきのテキスト子画面 URL を作る。
+ * マウント識別子つきの子画面 URL を作る。
  *
  * main が個体別 RPC の結線後に `loadURL()` で読み込む先である。
- * 画面からの指定は受け付けない。
+ * 画面からの指定は受け付けない。種別ごとの view パスは各 companion が持つ。
  *
+ * @param viewPath - 同梱子画面の view パス（`views://...`）。
  * @param mountId - 再利用しないマウント識別子。空でないこと。
- * @returns テキスト子画面の URL。
+ * @returns 子画面の URL。
  */
-export function buildPluginTextUrl(mountId: string): string {
-  return `${PLUGIN_TEXT_VIEW_PATH}#mount=${encodeURIComponent(mountId)}`;
+export function buildPluginViewUrl(viewPath: string, mountId: string): string {
+  return `${viewPath}#mount=${encodeURIComponent(mountId)}`;
 }
 
 /**
- * マウント識別子つきの診断子画面 URL を作る。
+ * 実プラグイン子画面タグの遷移規則を作る。全面拒否を先に置き、
+ * 空ページと登録済みの子画面だけを後に許可する（後に一致した規則が勝つ）。
  *
- * main が個体別 RPC の結線後に `loadURL()` で読み込む先である。
- * 画面からの指定は受け付けない。
- *
- * @param mountId - 再利用しないマウント識別子。空でないこと。
- * @returns 診断子画面の URL。
+ * @param viewPaths - 登録済み companion の view パスの一覧。
+ * @returns 遷移規則の一覧。
  */
-export function buildPluginDiagnosticUrl(mountId: string): string {
-  return `${PLUGIN_DIAGNOSTIC_VIEW_PATH}#mount=${encodeURIComponent(mountId)}`;
+export function buildPluginNavigationRules(viewPaths: readonly string[]): readonly string[] {
+  const scopes = viewPaths.map((viewPath) => {
+    const slash = viewPath.indexOf("/", viewPath.indexOf("://") + 3);
+    const scope = slash < 0 ? viewPath : viewPath.slice(0, slash);
+    return `${scope}/*`;
+  });
+  return ["^*", "views://plugin-host/*", ...scopes];
 }
 
 /**
  * URL の断片から実プラグインのマウント識別子を読む。
  *
  * main が発行する `#mount=plugin-<種別>-<連番>` だけを受け付ける。
+ * 種別の既知・未登録はここでは問わず、呼び出し側の登録表が許可する。
  * 段0スパイクの識別子（`spike-<連番>`）は対象外であり、形式外・空は
  * `null` とし、呼び出し側が回収・拒否する。
  *
@@ -345,7 +240,8 @@ export function parsePluginMountId(url: string | null): string | null {
     return null;
   }
   // main の発行形式だけを受け付ける（使い回し・偽装の混入を避ける）。
-  if (!/^plugin-(text|diagnostic)-[1-9][0-9]*$/.test(decoded)) {
+  // 種別トークンは小文字始まりの英数字であり、連番は 0 始まりにしない。
+  if (!/^plugin-[a-z][a-z0-9]*-[1-9][0-9]*$/.test(decoded)) {
     return null;
   }
   return decoded;
@@ -355,16 +251,15 @@ export function parsePluginMountId(url: string | null): string | null {
  * マウント識別子から種別を読む。
  *
  * main が発行した形式だけを受け付け、形式外は `null` とする。
+ * 既知・未登録の判定は main の登録表が行い、ここでは形式だけを見る。
  *
  * @param mountId - 照合するマウント識別子。
- * @returns 種別。形式外なら `null`。
+ * @returns 種別トークン。形式外なら `null`。
  */
 export function pluginMountKindOf(mountId: string): PluginUiMountKind | null {
-  if (/^plugin-text-[1-9][0-9]*$/.test(mountId)) {
-    return "text";
+  const matched = /^plugin-([a-z][a-z0-9]*)-[1-9][0-9]*$/.exec(mountId);
+  if (matched === null) {
+    return null;
   }
-  if (/^plugin-diagnostic-[1-9][0-9]*$/.test(mountId)) {
-    return "diagnostic";
-  }
-  return null;
+  return matched[1] ?? null;
 }

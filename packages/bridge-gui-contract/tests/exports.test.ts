@@ -2,18 +2,15 @@ import { expect, test } from "vite-plus/test";
 import { selectNewer } from "bridge-gui-contract/management";
 import {
   buildPluginBlankUrl,
-  buildPluginDiagnosticUrl,
-  buildPluginTextUrl,
+  buildPluginViewUrl,
   parsePluginMountId,
   PLUGIN_BLANK_PATH,
-  PLUGIN_DIAGNOSTIC_VIEW_PATH,
   PLUGIN_INITIAL_FETCH_ATTEMPTS,
   PLUGIN_INITIAL_FETCH_RETRY_MS,
   PLUGIN_NAVIGATION_RULES,
   PLUGIN_NAVIGATION_RULES_ATTRIBUTE,
   PLUGIN_PENDING_TIMEOUT_MS,
   pluginMountKindOf,
-  PLUGIN_TEXT_VIEW_PATH,
   selectNewerInstanceSnapshot,
   TEXT_SEND_REQUEST_TIMEOUT_MS,
 } from "bridge-gui-contract/plugin-instance";
@@ -39,13 +36,10 @@ test("management の公開値が関数として取り出せる", () => {
 test("plugin-instance の公開表面が欠けておらず規則と属性値が一致する", () => {
   expect(typeof selectNewerInstanceSnapshot).toBe("function");
   expect(typeof buildPluginBlankUrl).toBe("function");
-  expect(typeof buildPluginTextUrl).toBe("function");
-  expect(typeof buildPluginDiagnosticUrl).toBe("function");
+  expect(typeof buildPluginViewUrl).toBe("function");
   expect(typeof parsePluginMountId).toBe("function");
   expect(typeof pluginMountKindOf).toBe("function");
   expect(typeof PLUGIN_BLANK_PATH).toBe("string");
-  expect(typeof PLUGIN_TEXT_VIEW_PATH).toBe("string");
-  expect(typeof PLUGIN_DIAGNOSTIC_VIEW_PATH).toBe("string");
   expect(typeof PLUGIN_NAVIGATION_RULES_ATTRIBUTE).toBe("string");
   expect(typeof TEXT_SEND_REQUEST_TIMEOUT_MS).toBe("number");
   expect(typeof PLUGIN_PENDING_TIMEOUT_MS).toBe("number");

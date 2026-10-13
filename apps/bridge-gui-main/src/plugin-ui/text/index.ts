@@ -14,7 +14,8 @@
 import { Electroview } from "electrobun/view";
 import { validateTextForSend } from "bridge-app-core/text-contract";
 import type { TextSendResult } from "bridge-app-core";
-import type { TextInstanceRpc, TextInstanceSnapshot } from "bridge-gui-contract/plugin-instance";
+import type { TextInstanceRpc, TextInstanceSnapshot } from "./contract.ts";
+import { TEXT_MOUNT_KIND } from "./contract.ts";
 import {
   PLUGIN_INITIAL_FETCH_ATTEMPTS,
   PLUGIN_INITIAL_FETCH_RETRY_MS,
@@ -103,7 +104,7 @@ function describeError(error: unknown): string {
 // 自分のマウント識別子。URL 断片から読む（申告では決めない）。
 const mountId = parsePluginMountId(window.location.href);
 
-if (mountId === null || pluginMountKindOf(mountId) !== "text") {
+if (mountId === null || pluginMountKindOf(mountId) !== TEXT_MOUNT_KIND) {
   show("text-error", "配置識別子が無いため開始できない。不正な URL である。");
 } else {
   // 現在採用中の表示状態。未取得の間は null である。

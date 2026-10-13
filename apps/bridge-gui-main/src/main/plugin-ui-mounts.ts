@@ -1,11 +1,14 @@
 /**
  * 実プラグイン子画面と実インスタンスの対応付け・配置・回収。
  *
- * backend が生成・保持するテキスト個体・診断個体の現割当てを読み、
- * マウント識別子ごとに所有する。Electrobun の SDK 呼び出しは持たない。
- * 生成・破棄・結線の実体は `src/main/instance-rpc.ts` の適合層が
- * `BrowserView` に結び付け、ここでは対応付けと照合・退役だけを担う。
+ * backend の現割当てを読み、マウント識別子ごとに所有する。Electrobun の
+ * SDK 呼び出しは持たない。生成・破棄・結線の実体は `src/main/instance-rpc.ts`
+ * の適合層が `BrowserView` に結び付け、ここでは対応付けと照合・退役だけを担う。
  * 単体検証は偽の子画面・偽チャネル・偽 backend で行える。
+ *
+ * 現割当ての要望読み・子画面 URL・限定射影への到達は静的登録表
+ * （`plugin-companions.ts`）の記述子に委譲し、ここに種別分岐を持たない。
+ * 新しい companion の追加は登録だけで行い、この層の分岐追加は要らない。
  *
  * 対応付けの方針は以下である。
  * - 配置は backend の現割当てへの追随だけが作る。子からの識別子指定は
@@ -26,29 +29,23 @@
  *
  * @packageDocumentation
  */
-import type { TextSendResult } from "bridge-app-core";
 import type {
-  DiagnosticInstanceSnapshot,
   PluginUiMountFailure,
   PluginUiMountKind,
   PluginUiMountPhase,
   PluginUiMountPlacement,
-  TextInstanceSnapshot,
 } from "bridge-gui-contract/plugin-instance";
 import {
   buildPluginBlankUrl,
-  buildPluginDiagnosticUrl,
-  buildPluginTextUrl,
   parsePluginMountId,
   PLUGIN_PENDING_TIMEOUT_MS,
 } from "bridge-gui-contract/plugin-instance";
+import { PluginInstanceBinder, type InstanceProjectionBackend } from "./plugin-instances.ts";
 import {
-  PluginInstanceBinder,
-  type DiagnosticPushSink,
-  type InstanceChannelHooks,
-  type InstanceProjectionBackend,
-  type TextPushSink,
-} from "./plugin-instances.ts";
+  defaultPluginCompanionRegistry,
+  type CompanionRequestEnv,
+  type PluginCompanionRegistry,
+} from "./plugin-companions.ts";
 
 /**
  * 子画面配置の対応付けが読む backend の最小口。`GuiBackend` が満たす。
@@ -107,12 +104,14 @@ export interface PluginUiChildView {
   removeView(): void;
 }
 
-/** 当該マウントの push 口。種別に応じていずれか一方だけを持つ。 */
+/** 当該マウントの push 口。結線済みの対応付けだけに送る。 */
 export interface PluginUiChannel {
-  /** テキスト状態の push 口。種別外なら持たない。 */
-  readonly pushText?: TextPushSink;
-  /** 診断状態の push 口。種別外なら持たない。 */
-  readonly pushDiagnostic?: DiagnosticPushSink;
+  /**
+   * 状態 push を送る。
+   *
+   * @param message - 送り先の改訂番号と snapshot。本文は含めない。
+   */
+  push(message: unknown): void;
 }
 
 /**
@@ -120,15 +119,15 @@ export interface PluginUiChannel {
  *
  * @param view - 照合済みの子画面ハンドル。
  * @param mountId - 結び付けるマウント識別子。
- * @param kind - 束縛する個体の種別。
- * @param hooks - main 側の応答処理。
+ * @param kind - 束縛する個体の種別トークン。登録済みであること。
+ * @param hooks - main 側の汎用口。
  * @returns 当該マウント専用の push 口。
  */
 export type PluginUiChannelFactory = (
   view: PluginUiChildView,
   mountId: string,
-  kind: PluginUiMountKind,
-  hooks: InstanceChannelHooks,
+  kind: string,
+  hooks: CompanionRequestEnv,
 ) => PluginUiChannel;
 
 /** 生成待ちの走査間隔（ミリ秒）。期限超過の回収用である。 */
@@ -138,7 +137,7 @@ const SWEEP_INTERVAL_MS = 2_000;
 interface PluginUiMountRecord {
   /** 再利用しないマウント識別子。 */
   readonly mountId: string;
-  /** 束縛する個体の種別。 */
+  /** 束縛する個体の種別トークン。登録表の companion を指す。 */
   readonly kind: PluginUiMountKind;
   /** 発行した初期 URL。生成照合の鍵である。 */
   readonly initialUrl: string;
@@ -174,10 +173,11 @@ function describeFailure(error: unknown): string {
  * 実プラグイン子画面と実インスタンスの対応付け。所有表の操作はすべて同期で
  * あり、backend の射影呼び出し自体も同期的である（送信の解決は約束で返す）。
  *
- * 子画面が呼べる要求は `InstanceChannelHooks` の3口だけであり、
- * 受付・保留・承認・接続断・割当て等の管理操作は持たない。
+ * 子画面が呼べる要求は汎用の `readSnapshot`・`send`・`markReady` だけであり、
+ * 種別トークンは companion が決め打ちで渡す。受付・保留・承認・接続断・
+ * 割当て等の管理操作は持たない。
  */
-export class PluginUiCoordinator implements InstanceChannelHooks {
+export class PluginUiCoordinator implements CompanionRequestEnv {
   private readonly binder: PluginInstanceBinder;
   private sequence = 0;
   private readonly mounts = new Map<string, PluginUiMountRecord>();
@@ -196,14 +196,20 @@ export class PluginUiCoordinator implements InstanceChannelHooks {
    * @param backend - 現割当てと個体別射影の最小口。
    * @param createChannel - 個体別チャネルの工場。SDK 依存はここに閉じる。
    * @param now - 時刻取得。生成待ち・準備完了待ちの期限用であり、試験で差し替える。
+   * @param registry - 種別トークンから記述子を引く登録表。省略時は既定の共有表。
    */
   constructor(
     private readonly parentWebviewId: number,
     private readonly backend: PluginUiBindingBackend & InstanceProjectionBackend,
     private readonly createChannel: PluginUiChannelFactory,
     private readonly now: () => number = Date.now,
+    private readonly registry: PluginCompanionRegistry = defaultPluginCompanionRegistry,
   ) {
-    this.binder = new PluginInstanceBinder({ isLive: (mountId) => this.isLive(mountId) }, backend);
+    this.binder = new PluginInstanceBinder(
+      { isLive: (mountId) => this.isLive(mountId) },
+      backend,
+      registry,
+    );
   }
 
   /** 対応付け中の件数。記録用である。 */
@@ -233,6 +239,8 @@ export class PluginUiCoordinator implements InstanceChannelHooks {
    * 終了した割当ての対応付けを回収し、新しい現割当てに配置を作り、
    * 生成待ち・準備完了待ちの期限超過を失敗表示に回す。変化があれば backend の
    * 共有時計へ通知を予約する。backend の取得失敗では何も変えない。
+   * 要望読みに失敗した種別は不明として扱い、その種別の既存対応付けの
+   * 解放も新規配置も行わない（不明と終了を区別する）。
    *
    * @returns 対応付け・失敗表示を変えた場合に真。
    */
@@ -241,12 +249,17 @@ export class PluginUiCoordinator implements InstanceChannelHooks {
       return false;
     }
     let changed = false;
-    const desired = this.readDesired();
-    if (desired === null) {
+    const read = this.readDesired();
+    if (read === null) {
       return false;
     }
+    const { desired, failedKinds } = read;
     for (const record of this.mounts.values()) {
       // ADR: 走査中の削除は当該の1行だけであり、`Map` の反復は壊さない。
+      // 取得に失敗した種別は要望不明であり、割当て終了とみなさない。
+      if (failedKinds.has(record.kind)) {
+        continue;
+      }
       const want = desired.get(record.instanceId);
       if (
         want === undefined ||
@@ -288,6 +301,12 @@ export class PluginUiCoordinator implements InstanceChannelHooks {
       // 失敗した実インスタンスは明示の再試行まで再配置しない。
       // 同一識別子の使い回しは無く、新規割当ては新しい識別子で来る。
       if (this.failedInstances.has(want.instanceId)) {
+        continue;
+      }
+      // ADR: 要望読みに失敗した種別は要望不明であり、新規配置も行わない。
+      // 失敗種別は要望に載らないため通常は到達しないが、終了との区別を
+      // 解放側と対称に保つ。
+      if (failedKinds.has(want.kind)) {
         continue;
       }
       this.createPending(want);
@@ -347,16 +366,13 @@ export class PluginUiCoordinator implements InstanceChannelHooks {
       return;
     }
     // ADR: 走査中の削除は当該の1行だけであり、`Map` の反復は壊さない。
+    // 送り先の種別は対応付けの記録から記述子を引く。種別分岐は持たない。
     for (const record of this.mounts.values()) {
       if (record.phase !== "bound") {
         continue;
       }
       try {
-        if (record.kind === "text") {
-          this.binder.pushText(record.mountId);
-        } else {
-          this.binder.pushDiagnostic(record.mountId);
-        }
+        this.binder.push(record.mountId);
       } catch (error: unknown) {
         this.failMount(record, `状態の送信に失敗したため回収した: ${describeFailure(error)}`);
       }
@@ -364,56 +380,38 @@ export class PluginUiCoordinator implements InstanceChannelHooks {
   }
 
   /**
-   * 束縛テキスト個体の状態取得に応答する。読み取りは改訂を進めない。
+   * 束縛個体の限定表示を改訂番号付きで読む。読み取りは改訂を進めない。
+   * 種別ごとの射影は登録表の記述子に委譲し、ここに種別分岐を持たない。
    *
    * 現割当てが失効していれば対応付けを回収し、失敗表示に回す。
    *
+   * @param kind - companion の種別トークン。対応付けの記録と照合する。
    * @param mountId - 照合済みのマウント識別子。
    * @throws `RangeError` — 未対応付け・失効・種別外・現割当て失効の場合。
    */
-  handleGetTextState(mountId: string): TextInstanceSnapshot {
+  readSnapshot(kind: string, mountId: string): unknown {
     try {
-      const snapshot = this.binder.handleGetTextState(mountId);
-      this.markReady(mountId);
-      return snapshot;
+      return this.binder.readSnapshot(kind, mountId);
     } catch (error: unknown) {
-      this.reclaimStaleOnRequest(mountId, error, "テキスト");
+      this.reclaimStaleOnRequest(mountId, error, this.labelOf(kind));
       throw error;
     }
   }
 
   /**
-   * 束縛テキスト個体の現割当てへ本文を送る。子からの割当て識別子の
-   * 指定は受け付けず、main が束縛した個体の現割当てに委譲する。
+   * 束縛個体の操作へ委譲する。子からの割当て識別子の指定は受け付けず、
+   * main が束縛した個体の現割当てに委譲する。
    *
    * 送信の検証失敗では対応付けを回収しない（入力の問題であり、
    * 結線の失効ではない）。失効は状態取得と送信 push の経路で回収する。
    *
+   * @param kind - companion の種別トークン。対応付けの記録と照合する。
    * @param mountId - 照合済みのマウント識別子。
-   * @param text - 送信する本文。文字列であること。
+   * @param params - 操作の引数。
    * @throws `RangeError` — 未対応付け・失効・種別外・現割当て失効の場合（同期的）。
    */
-  handleSendText(mountId: string, text: unknown): Promise<TextSendResult> {
-    return this.binder.handleSendText(mountId, text);
-  }
-
-  /**
-   * 束縛診断個体の状態取得に応答する。読み取りは改訂を進めない。
-   *
-   * 現割当てが失効していれば対応付けを回収し、失敗表示に回す。
-   *
-   * @param mountId - 照合済みのマウント識別子。
-   * @throws `RangeError` — 未対応付け・失効・種別外・現割当て失効の場合。
-   */
-  handleGetDiagnosticState(mountId: string): DiagnosticInstanceSnapshot {
-    try {
-      const snapshot = this.binder.handleGetDiagnosticState(mountId);
-      this.markReady(mountId);
-      return snapshot;
-    } catch (error: unknown) {
-      this.reclaimStaleOnRequest(mountId, error, "診断");
-      throw error;
-    }
+  send(kind: string, mountId: string, params: unknown): Promise<unknown> {
+    return this.binder.send(kind, mountId, params);
   }
 
   /** 配置中の対応付け一覧を返す。表示用である。 */
@@ -501,37 +499,52 @@ export class PluginUiCoordinator implements InstanceChannelHooks {
    * 現割当ての要望一覧を読む。backend の取得失敗では `null` とし、
    * 対応付けを変えない。
    *
-   * @returns 実インスタンス識別子から要望への写像。取得失敗なら `null`。
+   * 要望は登録済み companion から集め、種別分岐を持たない。取得に失敗した
+   * companion はその種別だけ置き、他に波及させない。失敗した種別は集合で
+   * 返し、呼び出し側はその種別の解放・新規作成の対象外にする（不明と
+   * 終了を区別する）。全種別で失敗した場合は `null` とし、何も変えない。
+   *
+   * @returns 要望の写像と取得に失敗した種別の集合。何も読めなければ `null`。
    */
-  private readDesired(): Map<
-    string,
-    { kind: PluginUiMountKind; instanceId: string; localSessionId: string; portId: string }
-  > | null {
-    let text: { instanceId: string; localSessionId: string; portId: string } | null;
-    let diagnostics: Array<{ instanceId: string; localSessionId: string; portId: string }>;
-    try {
-      text = this.backend.getTextBinding();
-      diagnostics = this.backend.listDiagnosticBindings();
-    } catch {
-      return null;
-    }
+  private readDesired(): {
+    desired: Map<
+      string,
+      { kind: PluginUiMountKind; instanceId: string; localSessionId: string; portId: string }
+    >;
+    failedKinds: Set<string>;
+  } | null {
     const desired = new Map<
       string,
       { kind: PluginUiMountKind; instanceId: string; localSessionId: string; portId: string }
     >();
-    if (text !== null) {
-      desired.set(text.instanceId, { kind: "text", ...text });
-    }
-    for (const binding of diagnostics) {
-      if (!desired.has(binding.instanceId)) {
-        desired.set(binding.instanceId, { kind: "diagnostic", ...binding });
+    const failedKinds = new Set<string>();
+    let listed = false;
+    for (const companion of this.registry.list()) {
+      let bindings: Array<{ instanceId: string; localSessionId: string; portId: string }>;
+      try {
+        bindings = companion.listDesired(this.backend);
+      } catch {
+        // 取得の失敗はその種別だけ置き、対応付けの整理を止めない。
+        // 呼び出し側がこの種別を対象外にするため、ここで記録する。
+        failedKinds.add(companion.kind);
+        continue;
+      }
+      listed = true;
+      for (const binding of bindings) {
+        if (!desired.has(binding.instanceId)) {
+          desired.set(binding.instanceId, { kind: companion.kind, ...binding });
+        }
       }
     }
-    return desired;
+    if (!listed) {
+      return null;
+    }
+    return { desired, failedKinds };
   }
 
   /**
    * 現割当てに配置を作る。識別子は単調な連番で発行し、使い回さない。
+   * 子画面 URL は登録表の記述子が作り、種別分岐を持たない。
    *
    * @param want - 配置する現割当ての要望。
    */
@@ -545,9 +558,15 @@ export class PluginUiCoordinator implements InstanceChannelHooks {
     // `resetAll`・`dispose` でも巻き戻さず、古い割当てとの混線を避ける。
     this.sequence += 1;
     const mountId = `plugin-${want.kind}-${this.sequence}`;
+    // 要望は登録表の記述子から作るため、記述子は必ずある。
+    // 無ければ実装の不備であり、黙って配置を作らない。到達不能の前提であり、
+    // 束縛側の拒否（`requireCompanion`）と例外の種類を揃える。
+    const companion = this.registry.get(want.kind);
+    if (companion === undefined) {
+      throw new RangeError(`未登録の種別への配置である: ${want.kind}`);
+    }
     const initialUrl = buildPluginBlankUrl(mountId);
-    const viewUrl =
-      want.kind === "text" ? buildPluginTextUrl(mountId) : buildPluginDiagnosticUrl(mountId);
+    const viewUrl = companion.buildViewUrl(mountId);
     this.mounts.set(mountId, {
       mountId,
       kind: want.kind,
@@ -592,21 +611,10 @@ export class PluginUiCoordinator implements InstanceChannelHooks {
     }
     record.phase = "bound";
     try {
-      if (record.kind === "text") {
-        this.binder.bindTextMount(record.mountId, record.instanceId);
-        const push = channel.pushText;
-        if (push === undefined) {
-          throw new RangeError("テキストの push 口が無い。");
-        }
-        this.binder.setTextSink(record.mountId, push);
-      } else {
-        this.binder.bindDiagnosticMount(record.mountId, record.instanceId);
-        const push = channel.pushDiagnostic;
-        if (push === undefined) {
-          throw new RangeError("診断の push 口が無い。");
-        }
-        this.binder.setDiagnosticSink(record.mountId, push);
-      }
+      this.binder.bindMount(record.mountId, record.kind, record.instanceId);
+      this.binder.setSink(record.mountId, record.kind, (message: unknown) => {
+        channel.push(message);
+      });
     } catch (error: unknown) {
       this.failMount(record, `個体の束縛に失敗した: ${describeFailure(error)}`);
       return;
@@ -628,11 +636,11 @@ export class PluginUiCoordinator implements InstanceChannelHooks {
    * 対応付けに結び付かない生成を回収する。
    *
    * 初期化完了前の DOM 削除が native 生成を止めない SDK 挙動があるため、
-   * 退役済み・重複の遅延生成は main が回収する。他名前空間の生成には
-   * 触らず、呼び出し側が処理する。
+   * 退役済み・重複の遅延生成は main が回収する。他名前空間の生成と
+   * 未登録種別・由来不明の生成には触らず、`false` を返して呼び出し側が処理する。
    *
    * @param view - 生成された子画面ハンドル。
-   * @returns 回収した場合に真。他名前空間なら偽。
+   * @returns 回収した場合に真。他名前空間・未登録種別なら偽。
    */
   private reclaimOrphan(view: PluginUiChildView): boolean {
     const claimed = parsePluginMountId(view.currentUrl);
@@ -674,8 +682,13 @@ export class PluginUiCoordinator implements InstanceChannelHooks {
     this.failMount(record, `${label}の初期取得に失敗したため回収した。割当てを確認すること。`);
   }
 
+  /** 失敗表示用の種別名を引く。未登録なら種別トークン自体を使う。 */
+  private labelOf(kind: string): string {
+    return this.registry.get(kind)?.label ?? kind;
+  }
+
   /** 初期状態取得を受けた記録。変化があれば通知を予約する。 */
-  private markReady(mountId: string): void {
+  markReady(mountId: string): void {
     const record = this.mounts.get(mountId);
     if (record === undefined || record.ready) {
       return;

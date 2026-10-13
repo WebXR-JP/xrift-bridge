@@ -43,7 +43,8 @@ import type {
   StateChangedMessage,
   TextDisplayState,
 } from "bridge-gui-contract/management";
-import type { DiagnosticInstanceView, TextInstanceView } from "bridge-gui-contract/plugin-instance";
+import type { DiagnosticInstanceView } from "../plugin-ui/diagnostic/contract.ts";
+import type { TextInstanceView } from "../plugin-ui/text/contract.ts";
 
 /** 既定の待ち受けポート。 */
 export const DEFAULT_BRIDGE_PORT = 3100;

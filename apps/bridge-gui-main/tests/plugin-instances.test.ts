@@ -28,22 +28,26 @@ import {
 } from "../src/main/backend.ts";
 import {
   asMountLiveness,
-  buildDiagnosticRequestHandlers,
-  buildTextRequestHandlers,
   PluginInstanceBinder,
   type InstanceProjectionBackend,
 } from "../src/main/plugin-instances.ts";
+import { textCompanion } from "../src/plugin-ui/text/companion.ts";
+import { diagnosticCompanion } from "../src/plugin-ui/diagnostic/companion.ts";
+import type { CompanionRequestEnv } from "../src/main/plugin-companions.ts";
 import {
   PluginMountManager,
   type MountChildView,
   type SpikeChannelFactory,
 } from "../src/main/plugin-mounts.ts";
 import type {
-  DiagnosticInstanceView,
   TextInstanceChangedMessage,
   TextInstanceSnapshot,
   TextInstanceView,
-} from "bridge-gui-contract/plugin-instance";
+} from "../src/plugin-ui/text/contract.ts";
+import type {
+  DiagnosticInstanceSnapshot,
+  DiagnosticInstanceView,
+} from "../src/plugin-ui/diagnostic/contract.ts";
 import { selectNewerInstanceSnapshot } from "bridge-gui-contract/plugin-instance";
 
 /** 送信に使うダミー本文。表示・記録に残らないことを確かめる目印である。 */
@@ -151,6 +155,23 @@ function setup(): {
   return { backend, live, binder };
 }
 
+/**
+ * 対応付けを companion の要求口（本番経路）に結線する試験用の汎用口。
+ *
+ * 読み・送信は対応付けに委譲する。準備完了の記録は行わない
+ * （binder 側に準備完了の保持が無く、対応付けの照合対象外であるため）。
+ *
+ * @param binder - 読み・送信の委譲先。
+ * @returns companion の要求表組み立てに渡す汎用口。
+ */
+function toRequestEnv(binder: PluginInstanceBinder): CompanionRequestEnv {
+  return {
+    readSnapshot: (kind, mountId) => binder.readSnapshot(kind, mountId),
+    send: (kind, mountId, params) => binder.send(kind, mountId, params),
+    markReady: () => {},
+  };
+}
+
 /** テキスト・診断を1件ずつ束縛した組み立て。 */
 function bindBoth(): {
   backend: FakeProjectionBackend;
@@ -162,8 +183,8 @@ function bindBoth(): {
   assembled.backend.addDiagnostic(DIAGNOSTIC_VIEW);
   assembled.live.add("spike-1");
   assembled.live.add("spike-2");
-  assembled.binder.bindTextMount("spike-1", TEXT_VIEW.instanceId);
-  assembled.binder.bindDiagnosticMount("spike-2", DIAGNOSTIC_VIEW.instanceId);
+  assembled.binder.bindMount("spike-1", "text", TEXT_VIEW.instanceId);
+  assembled.binder.bindMount("spike-2", "diagnostic", DIAGNOSTIC_VIEW.instanceId);
   return assembled;
 }
 
@@ -209,65 +230,72 @@ test("子画面の要求口に管理操作が無い", () => {
   ]) {
     expect(surface[name]).toBeUndefined();
   }
-  // 子画面が呼べる要求は限定口だけである。
-  expect(Object.keys(buildTextRequestHandlers("spike-1", binder)).sort()).toEqual([
+  // 子画面が呼べる要求は限定口だけであり、本番経路（companion の要求表）で確かめる。
+  const env = toRequestEnv(binder);
+  expect(Object.keys(textCompanion.buildRequestHandlers("spike-1", env)).sort()).toEqual([
     "getTextState",
     "sendText",
   ]);
-  expect(Object.keys(buildDiagnosticRequestHandlers("spike-2", binder))).toEqual([
+  expect(Object.keys(diagnosticCompanion.buildRequestHandlers("spike-2", env))).toEqual([
     "getDiagnosticState",
   ]);
 });
 
 test("束縛した個体以外の情報を取得できない", () => {
   const { binder } = bindBoth();
-  const text = binder.handleGetTextState("spike-1");
+  // ADR: `as` を使う理由は、汎用口が種別を問わない `unknown` を返し、試験で
+  // 束縛種別の具象表示を取り出すためである。根拠は、対応付けが同一種別の
+  // 記述子で読み・付番を対にすることである。
+  const text = binder.readSnapshot("text", "spike-1") as TextInstanceSnapshot;
   expect(text.instanceId).toBe(TEXT_VIEW.instanceId);
   expect(text.localSessionId).toBe(TEXT_VIEW.localSessionId);
-  const diagnostic = binder.handleGetDiagnosticState("spike-2");
+  const diagnostic = binder.readSnapshot("diagnostic", "spike-2") as DiagnosticInstanceSnapshot;
   expect(diagnostic.instanceId).toBe(DIAGNOSTIC_VIEW.instanceId);
   // 種別外の口では取れない（テキスト束縛で診断取得・逆も拒否）。
-  expect(() => binder.handleGetDiagnosticState("spike-1")).toThrow(RangeError);
-  expect(() => binder.handleGetTextState("spike-2")).toThrow(RangeError);
-  expect(() => binder.handleSendText("spike-2", DUMMY_TEXT)).toThrow(RangeError);
+  expect(() => binder.readSnapshot("diagnostic", "spike-1")).toThrow(RangeError);
+  expect(() => binder.readSnapshot("text", "spike-2")).toThrow(RangeError);
+  expect(() => binder.send("text", "spike-2", { text: DUMMY_TEXT })).toThrow(RangeError);
   // 取得に識別子の指定口は無く、自分の個体だけが返る。
-  expect(buildTextRequestHandlers("spike-1", binder).getTextState().instanceId).toBe(
-    TEXT_VIEW.instanceId,
-  );
+  const getTextState = textCompanion.buildRequestHandlers("spike-1", toRequestEnv(binder))[
+    "getTextState"
+  ] as () => TextInstanceSnapshot;
+  expect(getTextState().instanceId).toBe(TEXT_VIEW.instanceId);
 });
 
 test("失効したマウントの要求を拒否する", () => {
   const { live, binder } = bindBoth();
   // push 口の未登録も拒否する。
-  expect(() => binder.pushText("spike-1")).toThrow(RangeError);
-  binder.setTextSink("spike-1", () => {});
+  expect(() => binder.push("spike-1")).toThrow(RangeError);
+  binder.setSink("spike-1", "text", () => {});
   // 所有表から消えた（破棄相当）後の要求は全て拒否する。
   live.delete("spike-1");
-  expect(() => binder.handleGetTextState("spike-1")).toThrow(RangeError);
-  expect(() => binder.handleSendText("spike-1", DUMMY_TEXT)).toThrow(RangeError);
-  expect(() => binder.pushText("spike-1")).toThrow(RangeError);
+  expect(() => binder.readSnapshot("text", "spike-1")).toThrow(RangeError);
+  expect(() => binder.send("text", "spike-1", { text: DUMMY_TEXT })).toThrow(RangeError);
+  expect(() => binder.push("spike-1")).toThrow(RangeError);
   // 生存側は使える。
-  expect(binder.handleGetDiagnosticState("spike-2").instanceId).toBe(DIAGNOSTIC_VIEW.instanceId);
+  expect(
+    (binder.readSnapshot("diagnostic", "spike-2") as DiagnosticInstanceSnapshot).instanceId,
+  ).toBe(DIAGNOSTIC_VIEW.instanceId);
   // 対応付けを外した後も拒否する（購読の残存を使えない）。
   binder.unbindMount("spike-2");
-  expect(() => binder.handleGetDiagnosticState("spike-2")).toThrow(RangeError);
+  expect(() => binder.readSnapshot("diagnostic", "spike-2")).toThrow(RangeError);
   // 未対応付け・空識別子の要求も拒否する。
-  expect(() => binder.handleGetTextState("spike-9")).toThrow(RangeError);
-  expect(() => binder.pushText("")).toThrow(RangeError);
+  expect(() => binder.readSnapshot("text", "spike-9")).toThrow(RangeError);
+  expect(() => binder.push("")).toThrow(RangeError);
   expect(() => binder.unbindMount("")).toThrow(RangeError);
 });
 
 test("現割当てが失効した要求を拒否する", async () => {
   const { backend, binder } = bindBoth();
-  binder.setTextSink("spike-1", () => {});
+  binder.setSink("spike-1", "text", () => {});
   backend.lapse(TEXT_VIEW.instanceId);
   // 失効後の取得・送信・push は拒否し、古い割当てへ転送しない。
-  expect(() => binder.handleGetTextState("spike-1")).toThrow(RangeError);
-  await expect(binder.handleSendText("spike-1", DUMMY_TEXT)).rejects.toThrow(RangeError);
-  expect(() => binder.pushText("spike-1")).toThrow(RangeError);
+  expect(() => binder.readSnapshot("text", "spike-1")).toThrow(RangeError);
+  await expect(binder.send("text", "spike-1", { text: DUMMY_TEXT })).rejects.toThrow(RangeError);
+  expect(() => binder.push("spike-1")).toThrow(RangeError);
   // 失効した個体への束縛し直しも拒否する。
   binder.unbindMount("spike-1");
-  expect(() => binder.bindTextMount("spike-1", TEXT_VIEW.instanceId)).toThrow(RangeError);
+  expect(() => binder.bindMount("spike-1", "text", TEXT_VIEW.instanceId)).toThrow(RangeError);
 });
 
 test("対応付けは結線済みの所有だけを生存とする", () => {
@@ -287,14 +315,18 @@ test("対応付けは結線済みの所有だけを生存とする", () => {
 
 test("テキスト送信が束縛個体の現割当てに委譲される", async () => {
   const { backend, binder } = bindBoth();
-  const handlers = buildTextRequestHandlers("spike-1", binder);
-  const result = await handlers.sendText({ text: DUMMY_TEXT });
+  const handlers = textCompanion.buildRequestHandlers("spike-1", toRequestEnv(binder));
+  // ADR: `as` を使う理由は、要求表が種別を問わない汎用表であり、試験で
+  // 束縛種別の具象口を取り出すためである。根拠は、対応付けが同一種別の
+  // 記述子で結線・送信を対にすることである。
+  const sendText = handlers["sendText"] as (params: { text: string }) => Promise<TextSendResult>;
+  const result = await sendText({ text: DUMMY_TEXT });
   expect(result.status).toBe("acknowledged");
   // 束縛個体に委譲され、別個体には届かない。
   expect(backend.sentTextsOf(TEXT_VIEW.instanceId)).toEqual([DUMMY_TEXT]);
   expect(backend.sentTextsOf(DIAGNOSTIC_VIEW.instanceId)).toEqual([]);
   // 余分な識別子を付けても束縛個体に届く（振り分け口は無い）。
-  await handlers.sendText({
+  await sendText({
     text: "ダミー本文-002",
     instanceId: DIAGNOSTIC_VIEW.instanceId,
     localSessionId: "別",
@@ -315,23 +347,26 @@ test("push は改訂を進めて当該マウントだけに届く", () => {
   assembled.backend.addText(secondView);
   assembled.live.add("spike-1");
   assembled.live.add("spike-2");
-  assembled.binder.bindTextMount("spike-1", firstView.instanceId);
-  assembled.binder.bindTextMount("spike-2", secondView.instanceId);
+  assembled.binder.bindMount("spike-1", "text", firstView.instanceId);
+  assembled.binder.bindMount("spike-2", "text", secondView.instanceId);
   const { binder } = assembled;
   const first: TextInstanceChangedMessage[] = [];
   const second: TextInstanceChangedMessage[] = [];
-  binder.setTextSink("spike-1", (message) => {
-    first.push(message);
+  // ADR: `as` を使う理由は、汎用 push 口が `unknown` で運ぶ通知を試験で
+  // 種別の具象形として集めるためである。根拠は、対応付けが同一種別の
+  // 記述子で作った通知を変えずに運ぶことである。
+  binder.setSink("spike-1", "text", (message) => {
+    first.push(message as TextInstanceChangedMessage);
   });
-  binder.setTextSink("spike-2", (message) => {
-    second.push(message);
+  binder.setSink("spike-2", "text", (message) => {
+    second.push(message as TextInstanceChangedMessage);
   });
   // 初期取得は改訂 0 で、読み取りでは進まない。
-  const initial = binder.handleGetTextState("spike-1");
+  const initial = binder.readSnapshot("text", "spike-1") as TextInstanceSnapshot;
   expect(initial.revision).toBe(0);
-  expect(binder.handleGetTextState("spike-1").revision).toBe(0);
+  expect((binder.readSnapshot("text", "spike-1") as TextInstanceSnapshot).revision).toBe(0);
   // 当該マウントだけに push が届き、改訂が進む。
-  expect(binder.pushText("spike-1")).toEqual({ revision: 1 });
+  expect(binder.push("spike-1")).toEqual({ revision: 1 });
   expect(first).toHaveLength(1);
   expect(second).toHaveLength(0);
   const pushed = first[0];

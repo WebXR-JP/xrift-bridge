@@ -10,10 +10,8 @@
  * 子は push を数えるだけである。汎用プラグイン基盤の再設計はしない。
  */
 import { Electroview } from "electrobun/view";
-import type {
-  DiagnosticInstanceRpc,
-  DiagnosticInstanceSnapshot,
-} from "bridge-gui-contract/plugin-instance";
+import type { DiagnosticInstanceRpc, DiagnosticInstanceSnapshot } from "./contract.ts";
+import { DIAGNOSTIC_MOUNT_KIND } from "./contract.ts";
 import {
   PLUGIN_INITIAL_FETCH_ATTEMPTS,
   PLUGIN_INITIAL_FETCH_RETRY_MS,
@@ -38,7 +36,7 @@ function show(id: string, value: string): void {
 // 自分のマウント識別子。URL 断片から読む（申告では決めない）。
 const mountId = parsePluginMountId(window.location.href);
 
-if (mountId === null || pluginMountKindOf(mountId) !== "diagnostic") {
+if (mountId === null || pluginMountKindOf(mountId) !== DIAGNOSTIC_MOUNT_KIND) {
   show("diagnostic-error", "配置識別子が無いため開始できない。不正な URL である。");
 } else {
   // 現在採用中の表示状態。未取得の間は null である。
