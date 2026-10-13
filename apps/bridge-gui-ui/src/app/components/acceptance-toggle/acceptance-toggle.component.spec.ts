@@ -2,7 +2,7 @@ import { provideZonelessChangeDetection } from "@angular/core";
 import { TestBed } from "@angular/core/testing";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 import { AcceptanceToggleComponent } from "./acceptance-toggle.component.ts";
-import { makeSnapshot } from "./snapshot-fixture.ts";
+import { makeSnapshot } from "../../snapshot-fixture.ts";
 
 // 受付操作部品。押せるかは表示状態の有無で決まることを確かめる。
 

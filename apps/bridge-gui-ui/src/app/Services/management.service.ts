@@ -26,9 +26,9 @@ import type { PluginUiMountPlacement } from "bridge-gui-contract/plugin-instance
 import { SPIKE_NAVIGATION_RULES_ATTRIBUTE } from "bridge-gui-contract/plugin-spike";
 import type { SpikeMountSummary } from "bridge-gui-contract/plugin-spike";
 import { ManagementRpcClient } from "./rpc.ts";
-import { buildNgDebugProbeResult } from "./ng-probe.ts";
-import { buildNgDevObserveResult, DEV_OBSERVE_TARGETS } from "./dev-observe.ts";
-import type { DevObserveElementInput } from "./dev-observe.ts";
+import { buildNgDebugProbeResult } from "../ng-probe.ts";
+import { buildNgDevObserveResult, DEV_OBSERVE_TARGETS } from "../dev-observe.ts";
+import type { DevObserveElementInput } from "../dev-observe.ts";
 
 /**
  * main の JS 実行標識の合言葉。本文・payload ではなく到達確認用の固定値である。

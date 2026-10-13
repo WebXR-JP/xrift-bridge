@@ -1,7 +1,7 @@
 import { provideZonelessChangeDetection } from "@angular/core";
 import { TestBed } from "@angular/core/testing";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
-import { makeSnapshot } from "./snapshot-fixture.ts";
+import { makeSnapshot } from "../../snapshot-fixture.ts";
 import { StatusSummaryComponent } from "./status-summary.component.ts";
 
 // 採用中の表示状態の要約描画。件数・改訂番号だけを確かめる。

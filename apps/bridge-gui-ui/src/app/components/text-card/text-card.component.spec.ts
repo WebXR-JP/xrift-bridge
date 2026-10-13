@@ -1,7 +1,7 @@
 import { provideZonelessChangeDetection } from "@angular/core";
 import { TestBed } from "@angular/core/testing";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
-import { makeSnapshot } from "./snapshot-fixture.ts";
+import { makeSnapshot } from "../../snapshot-fixture.ts";
 import { TextCardComponent } from "./text-card.component.ts";
 
 // 固定テキストカードの描画。割当て／解除の可否と直近結果・統計を示す。

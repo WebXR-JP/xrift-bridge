@@ -3,7 +3,7 @@ import type { PairingViewResult } from "bridge-gui-contract/management";
 import type { SpikeMountSummary } from "bridge-gui-contract/plugin-spike";
 import { ManagementService } from "./management.service.ts";
 import type { ManagementRpcClient, StateChangedHandler } from "./rpc.ts";
-import { makeSnapshot } from "./snapshot-fixture.ts";
+import { makeSnapshot } from "../snapshot-fixture.ts";
 
 // 表示状態の採用と限定操作。RPC は代役に差し替え、実接続は作らない。
 // 比較コード本文・業務 payload・テキスト本文は代役にも載せない。

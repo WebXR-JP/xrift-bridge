@@ -7,8 +7,8 @@
  */
 import { Component, input, output } from "@angular/core";
 import type { PairingViewResult, PendingEntry } from "bridge-gui-contract/management";
-import { PendingRowComponent } from "./pending-row.component.ts";
-import type { ApproveRequest } from "./pending-row.component.ts";
+import { PendingRowComponent } from "../pending-row/pending-row.component.ts";
+import type { ApproveRequest } from "../pending-row/pending-row.component.ts";
 
 @Component({
   selector: "app-pending-list",

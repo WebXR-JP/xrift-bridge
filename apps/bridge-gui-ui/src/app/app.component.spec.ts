@@ -2,7 +2,7 @@ import { provideZonelessChangeDetection, signal } from "@angular/core";
 import { TestBed } from "@angular/core/testing";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { AppComponent } from "./app.component.ts";
-import { ManagementService } from "./management.service.ts";
+import { ManagementService } from "./Services/management.service.ts";
 import { makeSnapshot } from "./snapshot-fixture.ts";
 
 // 入れ物の起動時の振る舞い。初回取得と準備完了通知だけを行い、

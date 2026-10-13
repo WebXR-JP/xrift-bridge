@@ -7,17 +7,17 @@
  */
 import { Component, ElementRef, ViewChild } from "@angular/core";
 import type { OnInit } from "@angular/core";
-import { AcceptanceToggleComponent } from "./acceptance-toggle.component.ts";
-import { ConnectionListComponent } from "./connection-list.component.ts";
-import { EventLogComponent } from "./event-log.component.ts";
-import { ManagementService } from "./management.service.ts";
-import { PendingListComponent } from "./pending-list.component.ts";
-import type { ApproveRequest } from "./pending-row.component.ts";
-import { PluginMountsComponent } from "./plugin-mounts.component.ts";
-import { SessionListComponent } from "./session-list.component.ts";
-import { SpikeSectionComponent } from "./spike-section.component.ts";
-import { StatusSummaryComponent } from "./status-summary.component.ts";
-import { TextCardComponent } from "./text-card.component.ts";
+import { AcceptanceToggleComponent } from "./components/acceptance-toggle/acceptance-toggle.component.ts";
+import { ConnectionListComponent } from "./components/connection-list/connection-list.component.ts";
+import { EventLogComponent } from "./components/event-log/event-log.component.ts";
+import { ManagementService } from "./Services/management.service.ts";
+import { PendingListComponent } from "./components/pending-list/pending-list.component.ts";
+import type { ApproveRequest } from "./components/pending-row/pending-row.component.ts";
+import { PluginMountsComponent } from "./components/plugin-mounts/plugin-mounts.component.ts";
+import { SessionListComponent } from "./components/session-list/session-list.component.ts";
+import { SpikeSectionComponent } from "./components/spike-section/spike-section.component.ts";
+import { StatusSummaryComponent } from "./components/status-summary/status-summary.component.ts";
+import { TextCardComponent } from "./components/text-card/text-card.component.ts";
 
 @Component({
   selector: "app-root",
