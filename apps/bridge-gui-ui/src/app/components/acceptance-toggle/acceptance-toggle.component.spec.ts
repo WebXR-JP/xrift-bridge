@@ -53,6 +53,28 @@ describe("受付操作の表示", () => {
     expect(text).toContain("受付中");
   });
 
+  it("受付中は緑のドットで示す", async () => {
+    await TestBed.compileComponents();
+    const fixture = TestBed.createComponent(AcceptanceToggleComponent);
+    fixture.componentRef.setInput("snapshot", makeSnapshot({ admission: { accepting: true } }));
+    fixture.detectChanges();
+    const dot = (fixture.nativeElement as HTMLElement).querySelector(
+      ".rounded-full",
+    ) as HTMLElement | null;
+    expect(dot?.getAttribute("style")).toContain("var(--success)");
+  });
+
+  it("受付停止中は赤のドットで示す", async () => {
+    await TestBed.compileComponents();
+    const fixture = TestBed.createComponent(AcceptanceToggleComponent);
+    fixture.componentRef.setInput("snapshot", makeSnapshot({ admission: { accepting: false } }));
+    fixture.detectChanges();
+    const dot = (fixture.nativeElement as HTMLElement).querySelector(
+      ".rounded-full",
+    ) as HTMLElement | null;
+    expect(dot?.getAttribute("style")).toContain("var(--destructive)");
+  });
+
   it("押すと有効化の要求が出る", async () => {
     await TestBed.compileComponents();
     const fixture = TestBed.createComponent(AcceptanceToggleComponent);

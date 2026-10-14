@@ -38,7 +38,7 @@
           } @else {
             <span
               class="inline-block h-2 w-2 rounded-full"
-              style="background: var(--success)"
+              [style.background]="status().accepting ? 'var(--success)' : 'var(--destructive)'"
             ></span>
             <span>{{ status().accepting ? "受付中" : "受付停止中" }}</span>
           }

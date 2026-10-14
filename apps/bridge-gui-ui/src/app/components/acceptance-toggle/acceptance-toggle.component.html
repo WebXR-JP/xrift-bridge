@@ -7,7 +7,10 @@
       @if (snapshot() === null) {
         <span>—</span>
       } @else {
-        <span class="inline-block h-2 w-2 rounded-full" style="background: var(--success)"></span>
+        <span
+          class="inline-block h-2 w-2 rounded-full"
+          [style.background]="accepting ? 'var(--success)' : 'var(--destructive)'"
+        ></span>
         <span>{{ accepting ? "受付中" : "受付停止中" }}</span>
       }
     </span>

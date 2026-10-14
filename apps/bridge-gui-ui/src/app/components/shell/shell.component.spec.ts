@@ -105,6 +105,19 @@ describe("シェルのナビとヘッダ", () => {
     expect(text).toContain("—");
   });
 
+  it("受付中は緑・受付停止中は赤のドットで示す", async () => {
+    const accepting = await prepareShell({ status: statusOf({ accepting: true }) });
+    const stopping = await prepareShell({ status: statusOf({ accepting: false }) });
+    const acceptingDot = (accepting.nativeElement as HTMLElement).querySelector(
+      'section[aria-label="状態"] .rounded-full',
+    );
+    const stoppingDot = (stopping.nativeElement as HTMLElement).querySelector(
+      'section[aria-label="状態"] .rounded-full',
+    );
+    expect(acceptingDot?.getAttribute("style")).toContain("var(--success)");
+    expect(stoppingDot?.getAttribute("style")).toContain("var(--destructive)");
+  });
+
   it("選択中の項目だけにaria-currentを付ける", async () => {
     const fixture = await prepareShell({ selectedKey: "sessions" });
     const root = fixture.nativeElement as HTMLElement;
