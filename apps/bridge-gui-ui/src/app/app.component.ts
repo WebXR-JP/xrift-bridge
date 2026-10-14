@@ -14,12 +14,16 @@ import { ManagementService } from "./Services/management.service.ts";
 import { PendingListComponent } from "./components/pending-list/pending-list.component.ts";
 import type { ApproveRequest } from "./components/pending-row/pending-row.component.ts";
 import { PluginMountsComponent } from "./components/plugin-mounts/plugin-mounts.component.ts";
+import { PluginListComponent } from "./components/plugin-list/plugin-list.component.ts";
 import { SessionListComponent } from "./components/session-list/session-list.component.ts";
 import { ShellComponent } from "./components/shell/shell.component.ts";
 import type { ShellStatus } from "./components/shell/shell.component.ts";
 import { SpikeSectionComponent } from "./components/spike-section/spike-section.component.ts";
 import { StatusSummaryComponent } from "./components/status-summary/status-summary.component.ts";
-import { TextCardComponent } from "./components/text-card/text-card.component.ts";
+import type {
+  PluginAssignRequest,
+  PluginUnassignRequest,
+} from "./components/plugin-list/plugin-list.component.ts";
 import { DEFAULT_VIEW_KEY, VIEW_DEFINITIONS } from "./view-config.ts";
 import type { ViewKey } from "./view-config.ts";
 
@@ -31,12 +35,12 @@ import type { ViewKey } from "./view-config.ts";
     ConnectionListComponent,
     EventLogComponent,
     PendingListComponent,
+    PluginListComponent,
     PluginMountsComponent,
     SessionListComponent,
     ShellComponent,
     SpikeSectionComponent,
     StatusSummaryComponent,
-    TextCardComponent,
   ],
   templateUrl: "./app.component.html",
 })
@@ -63,33 +67,6 @@ export class AppComponent implements OnInit {
   /** 受信記録。 */
   get eventLog() {
     return this.management.eventLog;
-  }
-
-  /** テキスト種別の所有記録。無ければ `null`。 */
-  get textOwned() {
-    return (
-      this.management.snapshot()?.plugins.instances.find((item) => item.pluginKind === "text") ??
-      null
-    );
-  }
-
-  /** テキスト操作の失敗表示。 */
-  get textError() {
-    return this.management.textError;
-  }
-
-  /** 診断種別の現割当て。行ごとの解除ボタンの照合に使う。 */
-  get diagnosticBindings() {
-    const current = this.management.snapshot();
-    if (current === null) {
-      return [];
-    }
-    const ownedKind = new Map(
-      current.plugins.instances.map((item) => [item.instanceId, item.pluginKind] as const),
-    );
-    return current.plugins.assignments.filter(
-      (assignment) => ownedKind.get(assignment.instanceId) === "diagnostic",
-    );
   }
 
   /** 表示状態を取得済みの場合に真。 */
@@ -226,9 +203,9 @@ export class AppComponent implements OnInit {
   /**
    * プラグインを割り当てる（人間の操作用）。
    *
-   * @param request - 種別トークンと割当て先の生存セッションの識別子（省略可）。
+   * @param request - 種別トークンと割当て先の生存セッションの識別子。
    */
-  async onAssignPlugin(request: { pluginKind: string; localSessionId?: string }): Promise<void> {
+  async onAssignPlugin(request: PluginAssignRequest): Promise<void> {
     await this.management.assignPlugin(request.pluginKind, request.localSessionId);
   }
 
@@ -239,11 +216,7 @@ export class AppComponent implements OnInit {
    *
    * @param request - 描画した所有記録の三識別子。
    */
-  async onUnassignPlugin(request: {
-    instanceId: string;
-    localSessionId: string;
-    portId: string;
-  }): Promise<void> {
+  async onUnassignPlugin(request: PluginUnassignRequest): Promise<void> {
     await this.management.unassignPlugin(
       request.instanceId,
       request.localSessionId,

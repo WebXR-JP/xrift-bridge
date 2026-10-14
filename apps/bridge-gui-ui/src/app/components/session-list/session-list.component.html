@@ -1,47 +1,24 @@
-<section class="card">
-  <h2>生存セッション</h2>
+<!-- セッション一覧（表示専用。操作ボタンは置かない）。 -->
+<section class="flex flex-col gap-3">
+  <h2 class="m-0" style="font-size: 16px; font-weight: 700; color: var(--foreground)">
+    セッション一覧
+  </h2>
   @if (sessions().length === 0) {
-    <ul class="entries">
-      <li>生存セッションは無い</li>
-    </ul>
+    <p class="m-0" style="font-size: 14px; color: var(--muted-foreground)">生存セッションは無い</p>
   } @else {
-    <ul class="entries">
+    <ul class="m-0 flex list-none flex-col p-0">
       @for (session of sessions(); track session.localSessionId) {
-        <li>
-          <span
-            >{{ session.localSessionId }}（論理名 {{ session.sessionId }}・{{ session.kind }}・{{
-              session.direction
-            }}・接続 {{ session.connectionId }}）
-          </span>
-          @if (isTextSession(session.sessionId)) {
-            <span>診断対象外</span>
-          } @else if (diagnosticBindingOf(session.localSessionId); as bound) {
-            <span>診断割当て中（instanceId {{ bound.instanceId }}）</span>
-            <button
-              type="button"
-              (click)="
-                unassignRequested.emit({
-                  instanceId: bound.instanceId,
-                  localSessionId: bound.localSessionId,
-                  portId: bound.portId,
-                })
-              "
-            >
-              診断の割当てを外す
-            </button>
-          } @else {
-            <button
-              type="button"
-              (click)="
-                assignRequested.emit({
-                  pluginKind: 'diagnostic',
-                  localSessionId: session.localSessionId,
-                })
-              "
-            >
-              診断を割り当てる
-            </button>
-          }
+        <li
+          class="m-0 flex min-w-0 flex-col gap-0.5"
+          style="border-bottom: 1px solid var(--border); padding: 12px 0"
+        >
+          <span style="font-size: 14px; font-weight: 500; color: var(--foreground)">{{
+            session.localSessionId
+          }}</span>
+          <span style="font-size: 12px; color: var(--muted-foreground)"
+            >論理名 {{ session.sessionId }}・{{ session.kind }}・{{ session.direction }}・接続
+            {{ session.connectionId }}</span
+          >
         </li>
       }
     </ul>

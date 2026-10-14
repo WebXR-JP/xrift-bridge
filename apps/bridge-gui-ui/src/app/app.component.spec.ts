@@ -18,7 +18,6 @@ function prepareServiceStub() {
     snapshot: signal(makeSnapshot({ revision: 5 })),
     pairingViews: signal(new Map()),
     eventLog: signal([] as readonly string[]),
-    textError: signal(""),
     spikeMounts: signal([] as readonly never[]),
     fetchInitial: vi.fn(async () => {}),
     notifyReady: vi.fn(),
@@ -80,7 +79,8 @@ describe("入れ物の起動", () => {
     expect(text).toContain("保留");
     expect(text).toContain("接続");
     expect(text).toContain("生存セッション");
-    expect(text).toContain("テキスト送信");
+    expect(text).toContain("使用可能なプラグイン");
+    expect(text).toContain("起動中のプラグイン");
     expect(text).toContain("終了");
     expect(text).toContain("受信記録");
   });
@@ -161,6 +161,16 @@ describe("画面選択とパネル切替", () => {
     expect(panelOf(fixture, "log").classList.contains("hidden")).toBe(false);
     expect(panelOf(fixture, "connections").classList.contains("hidden")).toBe(true);
     expect(root.querySelector("header h1")?.textContent).toContain("受信記録");
+  });
+
+  it("pluginsパネルがプラグイン一覧を描画する", async () => {
+    const { fixture } = await prepareRoot();
+    selectView(fixture, "plugins");
+    const panel = panelOf(fixture, "plugins");
+    expect(panel.querySelector("app-plugin-list")).not.toBe(null);
+    expect(panel.querySelector("app-text-card")).toBe(null);
+    expect(panel.textContent).toContain("使用可能なプラグイン");
+    expect(panel.textContent).toContain("起動中のプラグイン");
   });
 
   it("パネル切替が業務RPCを送らない", async () => {

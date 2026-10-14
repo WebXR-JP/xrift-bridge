@@ -1,0 +1,198 @@
+<!-- プラグイン一覧（左：使用可能な種別／右：起動中の個体）。 -->
+<div class="flex gap-4">
+  <section
+    class="flex shrink-0 flex-col gap-3"
+    style="
+      width: 300px;
+      background: var(--muted);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 16px;
+    "
+    aria-label="使用可能なプラグイン"
+  >
+    <h2 class="m-0" style="font-size: 16px; font-weight: 700; color: var(--foreground)">
+      使用可能なプラグイン
+    </h2>
+    @if (kinds().length === 0) {
+      <p class="m-0" style="font-size: 12px; color: var(--muted-foreground)">
+        使用可能なプラグインは無い
+      </p>
+    } @else {
+      @for (kind of kinds(); track kind.pluginKind) {
+        <div
+          class="flex flex-col gap-3"
+          style="
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 12px;
+          "
+        >
+          <div class="flex items-center gap-3">
+            <span
+              class="flex shrink-0 items-center justify-center"
+              style="width: 32px; height: 32px; border-radius: 8px; background: var(--accent)"
+            >
+              <ng-icon
+                [name]="displayFor(kind).iconName"
+                style="font-size: 16px; color: var(--accent-foreground)"
+              />
+            </span>
+            <span class="flex min-w-0 flex-1 flex-col">
+              <span style="font-size: 14px; font-weight: 500; color: var(--foreground)">{{
+                displayFor(kind).name
+              }}</span>
+              <span style="font-size: 12px; color: var(--muted-foreground)">{{
+                displayFor(kind).description
+              }}</span>
+            </span>
+            <button
+              hlmBtn
+              variant="ghost"
+              size="icon"
+              type="button"
+              [disabled]="isFull(kind)"
+              (click)="onToggleAdd(kind)"
+              [attr.aria-label]="displayFor(kind).name + 'を追加する'"
+            >
+              <ng-icon name="lucidePlus" style="font-size: 16px; color: var(--success)" />
+            </button>
+          </div>
+          @if (isFull(kind)) {
+            <p class="m-0" style="font-size: 12px; color: var(--muted-foreground)">
+              同時所有の上限に達した（最終判定は本体が行う）。
+            </p>
+          }
+          @if (isExpanded(kind)) {
+            @if (candidates().length === 0) {
+              <p class="m-0" style="font-size: 12px; color: var(--muted-foreground)">
+                割り当て可能なセッションは無い
+              </p>
+              <button hlmBtn variant="outline" type="button" (click)="onCancel(kind)">
+                閉じる
+              </button>
+            } @else {
+              <label
+                class="flex flex-col gap-1"
+                style="font-size: 12px; color: var(--muted-foreground)"
+              >
+                接続先セッション
+                <select
+                  hlmInput
+                  [value]="draftFor(kind.pluginKind)"
+                  (change)="onDraftChange(kind, $any($event.target).value)"
+                >
+                  <option value="">セッションを選ぶ</option>
+                  @for (session of candidates(); track session.localSessionId) {
+                    <option [value]="session.localSessionId">
+                      {{ candidateText(session) }}
+                    </option>
+                  }
+                </select>
+              </label>
+              <div class="flex gap-2">
+                <button
+                  hlmBtn
+                  variant="default"
+                  type="button"
+                  [disabled]="!canConfirm(kind)"
+                  (click)="onConfirm(kind)"
+                >
+                  起動して割り当てる
+                </button>
+                <button hlmBtn variant="outline" type="button" (click)="onCancel(kind)">
+                  キャンセル
+                </button>
+              </div>
+            }
+          }
+        </div>
+      }
+    }
+  </section>
+
+  <section class="flex min-w-0 flex-1 flex-col gap-3" aria-label="起動中のプラグイン">
+    <h2 class="m-0" style="font-size: 16px; font-weight: 700; color: var(--foreground)">
+      起動中のプラグイン
+    </h2>
+    @if (instances().length === 0) {
+      <p class="m-0" style="font-size: 14px; color: var(--muted-foreground)">
+        起動中のプラグインは無い
+      </p>
+    } @else {
+      @for (item of instances(); track item.instanceId) {
+        <div
+          class="flex flex-col gap-3"
+          style="
+            background: var(--card);
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px;
+          "
+        >
+          <div class="flex items-center gap-3">
+            <span
+              class="flex shrink-0 items-center justify-center"
+              style="width: 32px; height: 32px; border-radius: 8px; background: var(--accent)"
+            >
+              <ng-icon
+                [name]="instanceDisplayFor(item).iconName"
+                style="font-size: 16px; color: var(--accent-foreground)"
+              />
+            </span>
+            <span class="flex min-w-0 flex-1 flex-col">
+              <span style="font-size: 14px; font-weight: 500; color: var(--foreground)">{{
+                instanceDisplayFor(item).name
+              }}</span>
+              <span class="flex items-center gap-1.5">
+                <span
+                  class="inline-block rounded-full"
+                  style="width: 7px; height: 7px"
+                  [style.background]="
+                    item.phase === 'active' ? 'var(--success)' : 'var(--muted-foreground)'
+                  "
+                ></span>
+                <span style="font-size: 12px; color: var(--muted-foreground)">{{
+                  phaseText(item.phase)
+                }}</span>
+              </span>
+            </span>
+            <button
+              hlmBtn
+              variant="ghost"
+              size="icon"
+              type="button"
+              (click)="onRemove(item)"
+              [attr.aria-label]="instanceDisplayFor(item).name + 'の割り当てを外す'"
+            >
+              <ng-icon name="lucideX" style="font-size: 16px; color: var(--destructive)" />
+            </button>
+          </div>
+          <hlm-separator hlmSeparator orientation="horizontal"></hlm-separator>
+          <div class="flex min-w-0 flex-col gap-1">
+            <span style="font-size: 12px; color: var(--muted-foreground)">接続先セッション</span>
+            @if (sessionOf(item.localSessionId); as target) {
+              <span style="font-size: 14px; color: var(--foreground)"
+                >{{ item.localSessionId }}（論理名 {{ target.sessionId }}）</span
+              >
+            } @else {
+              <span style="font-size: 14px; color: var(--foreground)"
+                >{{ item.localSessionId }}（セッション不明）</span
+              >
+            }
+            @if (assignmentOf(item) === null) {
+              <span style="font-size: 12px; color: var(--muted-foreground)">割当て不明</span>
+            }
+            <span style="font-size: 12px; color: var(--muted-foreground)"
+              >変更には解除と新規セッションが必要</span
+            >
+          </div>
+          <p class="m-0" style="font-size: 12px; color: var(--muted-foreground)">
+            解除は対象セッションを中断する
+          </p>
+        </div>
+      }
+    }
+  </section>
+</div>

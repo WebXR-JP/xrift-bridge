@@ -30,20 +30,16 @@
   </section>
 
   <section data-panel="sessions" [class.hidden]="selectedKey() !== 'sessions'">
-    <app-session-list
-      [sessions]="snapshot()?.sessions ?? []"
-      [diagnosticBindings]="diagnosticBindings"
-      (assignRequested)="onAssignPlugin($event)"
-      (unassignRequested)="onUnassignPlugin($event)"
-    />
+    <app-session-list [sessions]="snapshot()?.sessions ?? []" />
   </section>
 
   <section data-panel="plugins" [class.hidden]="selectedKey() !== 'plugins'">
-    <app-text-card
-      [owned]="textOwned"
-      [fetched]="fetched"
-      [error]="textError()"
-      (assignRequested)="onAssignPlugin({ pluginKind: 'text' })"
+    <app-plugin-list
+      [kinds]="snapshot()?.plugins.kinds ?? []"
+      [instances]="snapshot()?.plugins.instances ?? []"
+      [assignments]="snapshot()?.plugins.assignments ?? []"
+      [sessions]="snapshot()?.sessions ?? []"
+      (assignRequested)="onAssignPlugin($event)"
       (unassignRequested)="onUnassignPlugin($event)"
     />
   </section>
