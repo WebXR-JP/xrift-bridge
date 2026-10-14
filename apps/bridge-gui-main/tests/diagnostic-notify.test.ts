@@ -148,9 +148,7 @@ test("診断の応答で統計が変わると状態通知が届く", async () =>
   const backend = await startBackend();
   backend.enableAcceptance();
   const pairing = await receivePairing(backend);
-  expect(backend.approvePairing({ requestId: pairing.requestId, code: pairing.code }).status).toBe(
-    "APPROVED",
-  );
+  expect(backend.approvePairing({ requestId: pairing.requestId }).status).toBe("APPROVED");
   const provider = await pairing.sessionProvider;
   providers.push(provider);
   const session = await provider.tryCreateSession({

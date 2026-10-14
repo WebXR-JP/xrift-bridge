@@ -17,8 +17,8 @@ node dist/index.mjs --dev --origin http://localhost:5173
 
 - 待ち受けは `127.0.0.1` に明示 bind する（`0.0.0.0`/`::` は使わない）。
 - 正規 endpoint は `ws://127.0.0.1:3100/v1`。ポート競合時は探索せず失敗する。
-- 対話命令: `accept enable` / `accept disable` / `pending` / `approve <requestId> <code>` / `reject <requestId>` / `status` / `connections` / `disconnect <connectionId>` / `quit`。
-- 接続の流れ: ワールド側で接続を開始するとブリッジが数字6桁の比較コードを発行して両画面に表示し、人間が `pending` で照合して `approve <requestId> <code>` で承認する。切断で認可は失効し、再接続は再承認である。
+- 対話命令: `accept enable` / `accept disable` / `pending` / `approve <requestId>` / `reject <requestId>` / `status` / `connections` / `disconnect <connectionId>` / `quit`。
+- 接続の流れ: ワールド側で接続を開始するとブリッジが数字6桁の比較コードを発行して両画面に表示し、人間が `pending` で目視して `approve <requestId>` で承認する。承認は要求 ID だけを指定し、比較コードの入力・照合は行わない。切断で認可は失効し、再接続は再承認である。
 - `status` と `connections` は接続ID・Origin・認証状態の一覧を出す。比較コードは `pending` の明示表示にだけ出し、接続一覧には出さない。
 - `disconnect <connectionId>` は指定接続だけを `1008`・固定 reason `operator disconnect` で切断する。待ち受けと他接続は維持する。不明IDは明示エラーとし、全切断へは fallback しない。
 - 診断ログは標準エラーへ JSON 1行で出す。比較コードは標準出力の `pending` 表示にだけ出し、ログ・URL・query・永続保存には出さない。

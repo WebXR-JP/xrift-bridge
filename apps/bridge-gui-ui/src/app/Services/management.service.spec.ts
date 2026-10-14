@@ -179,8 +179,7 @@ describe("受信記録の時刻表示", () => {
       makeSnapshot({ revision: 3, pending: [{ requestId: "r1" }] }),
     );
     await service.fetchInitial();
-    await service.showPairingView("r1");
-    await service.approvePairing("r1", "041003");
+    await service.approvePairing("r1");
     const dumped = JSON.stringify(service.eventLog());
     expect(dumped).not.toContain("041003");
     expect(dumped).not.toContain("041 003");
@@ -223,15 +222,25 @@ describe("限定操作の処理", () => {
     const { service, stub } = prepareService();
     await service.fetchInitial();
     const baseline = stub.client.getSnapshot.mock.calls.length;
-    await service.approvePairing("r1", "041003");
+    await service.approvePairing("r1");
     await service.rejectPairing("r1");
     await service.disconnectConnection("c1");
     await service.assignPlugin("diagnostic", "s1");
     expect(stub.client.approvePairing).toHaveBeenCalledTimes(1);
+    expect(stub.client.approvePairing).toHaveBeenCalledWith("r1");
     expect(stub.client.rejectPairing).toHaveBeenCalledTimes(1);
     expect(stub.client.disconnectConnection).toHaveBeenCalledTimes(1);
     expect(stub.client.assignPlugin).toHaveBeenCalledTimes(1);
     expect(stub.client.getSnapshot.mock.calls.length).toBe(baseline + 4);
+  });
+
+  it("承認は要求識別子だけを送り比較コードを載せない", async () => {
+    const { service, stub } = prepareService();
+    await service.approvePairing("r1");
+    expect(stub.client.approvePairing).toHaveBeenCalledTimes(1);
+    expect(stub.client.approvePairing).toHaveBeenCalledWith("r1");
+    // 要求識別子以外の引数は送らない。
+    expect(stub.client.approvePairing.mock.calls[0]?.length).toBe(1);
   });
 
   it("プラグイン割当て・解除は要求後に再取得する", async () => {
@@ -355,8 +364,8 @@ describe("二重操作の抑止", () => {
       },
     );
     stub.client.approvePairing.mockReturnValueOnce(gate);
-    const first = service.approvePairing("r1", "041003");
-    const second = service.approvePairing("r1", "041003");
+    const first = service.approvePairing("r1");
+    const second = service.approvePairing("r1");
     release();
     await Promise.all([first, second]);
     expect(stub.client.approvePairing).toHaveBeenCalledTimes(1);
@@ -380,14 +389,78 @@ describe("二重操作の抑止", () => {
 });
 
 describe("保留コードの一時状態", () => {
-  it("取得した表示は保留行の一時状態に残る", async () => {
+  it("初回採用で比較コードを自動取得し承認RPCは送らない", async () => {
     const { service, stub } = prepareService();
     stub.client.getSnapshot.mockResolvedValueOnce(
       makeSnapshot({ revision: 3, pending: [{ requestId: "r1" }] }),
     );
     await service.fetchInitial();
-    await service.showPairingView("r1");
+    expect(stub.client.getPairingView).toHaveBeenCalledTimes(1);
+    expect(stub.client.getPairingView).toHaveBeenCalledWith("r1");
     expect(service.pairingViews().get("r1")?.available).toBe(true);
+    expect(service.pairingCodeStateFor("r1")).toBe("ready");
+    // 取得から承認は自動で送らない。
+    expect(stub.client.approvePairing).not.toHaveBeenCalled();
+  });
+
+  it("複数保留は行ごとに一度だけ自動取得する", async () => {
+    const { service, stub } = prepareService();
+    stub.client.getSnapshot.mockResolvedValueOnce(
+      makeSnapshot({ revision: 3, pending: [{ requestId: "r1" }, { requestId: "r2" }] }),
+    );
+    await service.fetchInitial();
+    expect(stub.client.getPairingView).toHaveBeenCalledTimes(2);
+    expect(service.pairingViews().get("r1")?.available).toBe(true);
+    expect(service.pairingViews().get("r2")?.available).toBe(true);
+    expect(service.pairingCodeStateFor("r1")).toBe("ready");
+    expect(service.pairingCodeStateFor("r2")).toBe("ready");
+    expect(stub.client.approvePairing).not.toHaveBeenCalled();
+  });
+
+  it("新しい保留IDだけを追加で自動取得する", async () => {
+    const { service, stub } = prepareService();
+    stub.client.getSnapshot.mockResolvedValueOnce(
+      makeSnapshot({ revision: 3, pending: [{ requestId: "r1" }] }),
+    );
+    await service.fetchInitial();
+    expect(stub.client.getPairingView).toHaveBeenCalledTimes(1);
+    // 同じ ID の snapshot 更新では再取得しない。
+    stub.pushHandler()?.({
+      revision: 4,
+      snapshot: makeSnapshot({ revision: 4, pending: [{ requestId: "r1" }] }),
+    });
+    expect(stub.client.getPairingView).toHaveBeenCalledTimes(1);
+    // 新しい ID の採用時にその分だけ追加で取得する。
+    stub.pushHandler()?.({
+      revision: 5,
+      snapshot: makeSnapshot({ revision: 5, pending: [{ requestId: "r1" }, { requestId: "r2" }] }),
+    });
+    expect(stub.client.getPairingView).toHaveBeenCalledTimes(2);
+    expect(stub.client.getPairingView).toHaveBeenLastCalledWith("r2");
+    expect(stub.client.approvePairing).not.toHaveBeenCalled();
+  });
+
+  it("実行中の重複取得は抑止する", async () => {
+    const { service, stub } = prepareService();
+    stub.client.getPairingView.mockRejectedValueOnce(new Error("取得不可"));
+    stub.client.getSnapshot.mockResolvedValueOnce(
+      makeSnapshot({ revision: 3, pending: [{ requestId: "r1" }] }),
+    );
+    await service.fetchInitial();
+    expect(service.pairingCodeStateFor("r1")).toBe("failed");
+    let release!: (value: PairingViewResult) => void;
+    const gate = new Promise<PairingViewResult>((resolve) => {
+      release = resolve;
+    });
+    stub.client.getPairingView.mockReturnValueOnce(gate);
+    const first = service.retryPairingView("r1");
+    const second = service.retryPairingView("r1");
+    expect(service.pairingCodeStateFor("r1")).toBe("fetching");
+    release(makePairingView("r1"));
+    await Promise.all([first, second]);
+    // 初回失敗の1回＋再試行の1回であり、重複分は送らない。
+    expect(stub.client.getPairingView).toHaveBeenCalledTimes(2);
+    expect(service.pairingCodeStateFor("r1")).toBe("ready");
   });
 
   it("保留が消えたら一時状態を破棄する", async () => {
@@ -396,29 +469,55 @@ describe("保留コードの一時状態", () => {
       makeSnapshot({ revision: 3, pending: [{ requestId: "r1" }] }),
     );
     await service.fetchInitial();
-    await service.showPairingView("r1");
     expect(service.pairingViews().has("r1")).toBe(true);
     stub.pushHandler()?.({ revision: 4, snapshot: makeSnapshot({ revision: 4, pending: [] }) });
     expect(service.pairingViews().has("r1")).toBe(false);
+    expect(service.pairingFetchFailed()).not.toContain("r1");
   });
 
   it("保留消滅後の遅延応答は再表示しない", async () => {
     const { service, stub } = prepareService();
-    stub.client.getSnapshot.mockResolvedValueOnce(
-      makeSnapshot({ revision: 3, pending: [{ requestId: "r1" }] }),
-    );
-    await service.fetchInitial();
     let release!: (value: PairingViewResult) => void;
     const gate = new Promise<PairingViewResult>((resolve) => {
       release = resolve;
     });
     stub.client.getPairingView.mockReturnValueOnce(gate);
-    const shown = service.showPairingView("r1");
-    // 応答待ちの間に保留が消える。
+    stub.client.getSnapshot.mockResolvedValueOnce(
+      makeSnapshot({ revision: 3, pending: [{ requestId: "r1" }] }),
+    );
+    const fetched = service.fetchInitial();
+    await fetched;
+    // 自動取得の応答待ちの間に保留が消える。
     stub.pushHandler()?.({ revision: 4, snapshot: makeSnapshot({ revision: 4, pending: [] }) });
     release(makePairingView("r1"));
-    await shown;
+    // 自動取得は待ち合わせないため、遅延応答の破棄を待つ。
+    await new Promise((resolve) => setTimeout(resolve, 0));
     expect(service.pairingViews().has("r1")).toBe(false);
+    expect(
+      service
+        .eventLog()
+        .map((entry) => entry.message)
+        .join("\n"),
+    ).toContain("破棄");
+  });
+
+  it("別保留の遅延応答は破棄する", async () => {
+    const { service, stub } = prepareService();
+    let release!: (value: PairingViewResult) => void;
+    const gate = new Promise<PairingViewResult>((resolve) => {
+      release = resolve;
+    });
+    stub.client.getPairingView.mockReturnValueOnce(gate);
+    stub.client.getSnapshot.mockResolvedValueOnce(
+      makeSnapshot({ revision: 3, pending: [{ requestId: "r1" }] }),
+    );
+    const fetched = service.fetchInitial();
+    await fetched;
+    release(makePairingView("r2"));
+    // 自動取得は待ち合わせないため、遅延応答の破棄を待つ。
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(service.pairingViews().has("r1")).toBe(false);
+    expect(service.pairingViews().has("r2")).toBe(false);
     expect(
       service
         .eventLog()
@@ -429,25 +528,66 @@ describe("保留コードの一時状態", () => {
 
   it("取得不能時は理由だけを残し本文は載せない", async () => {
     const { service, stub } = prepareService();
-    stub.client.getSnapshot.mockResolvedValueOnce(
-      makeSnapshot({ revision: 3, pending: [{ requestId: "r1" }] }),
-    );
-    await service.fetchInitial();
     stub.client.getPairingView.mockResolvedValueOnce({
       available: false,
       reason: "承認済みのため取得できない",
     });
-    await service.showPairingView("r1");
+    stub.client.getSnapshot.mockResolvedValueOnce(
+      makeSnapshot({ revision: 3, pending: [{ requestId: "r1" }] }),
+    );
+    await service.fetchInitial();
     expect(service.pairingViews().get("r1")).toEqual({
       available: false,
       reason: "承認済みのため取得できない",
     });
+    expect(service.pairingCodeStateFor("r1")).toBe("failed");
     expect(
       service
         .eventLog()
         .map((entry) => entry.message)
         .join("\n"),
     ).toContain("取得できない");
+  });
+
+  it("取得RPCの失敗は再試行できる状態を残し自動では取り直さない", async () => {
+    const { service, stub } = prepareService();
+    stub.client.getPairingView.mockRejectedValueOnce(new Error("取得不可"));
+    stub.client.getSnapshot.mockResolvedValueOnce(
+      makeSnapshot({ revision: 3, pending: [{ requestId: "r1" }] }),
+    );
+    await service.fetchInitial();
+    expect(service.pairingViews().has("r1")).toBe(false);
+    expect(service.pairingFetchFailed()).toContain("r1");
+    expect(service.pairingCodeStateFor("r1")).toBe("failed");
+    // 同じ ID の更新では自動リトライしない。
+    stub.pushHandler()?.({
+      revision: 4,
+      snapshot: makeSnapshot({ revision: 4, pending: [{ requestId: "r1" }] }),
+    });
+    expect(stub.client.getPairingView).toHaveBeenCalledTimes(1);
+    // 明示の再試行で取り直す。
+    await service.retryPairingView("r1");
+    expect(stub.client.getPairingView).toHaveBeenCalledTimes(2);
+    expect(service.pairingViews().get("r1")?.available).toBe(true);
+    expect(service.pairingFetchFailed()).not.toContain("r1");
+    expect(service.pairingCodeStateFor("r1")).toBe("ready");
+  });
+
+  it("取得不能の再試行で取り直す", async () => {
+    const { service, stub } = prepareService();
+    stub.client.getPairingView.mockResolvedValueOnce({
+      available: false,
+      reason: "承認済みのため取得できない",
+    });
+    stub.client.getSnapshot.mockResolvedValueOnce(
+      makeSnapshot({ revision: 3, pending: [{ requestId: "r1" }] }),
+    );
+    await service.fetchInitial();
+    expect(service.pairingCodeStateFor("r1")).toBe("failed");
+    await service.retryPairingView("r1");
+    expect(stub.client.getPairingView).toHaveBeenCalledTimes(2);
+    expect(service.pairingViews().get("r1")?.available).toBe(true);
+    expect(service.pairingCodeStateFor("r1")).toBe("ready");
   });
 });
 
@@ -458,8 +598,7 @@ describe("秘密の非記録", () => {
       makeSnapshot({ revision: 3, pending: [{ requestId: "r1" }] }),
     );
     await service.fetchInitial();
-    await service.showPairingView("r1");
-    await service.approvePairing("r1", "041003");
+    await service.approvePairing("r1");
     const log = service
       .eventLog()
       .map((entry) => entry.message)
@@ -474,9 +613,20 @@ describe("秘密の非記録", () => {
       makeSnapshot({ revision: 3, pending: [{ requestId: "r1" }] }),
     );
     await service.fetchInitial();
-    await service.showPairingView("r1");
     expect(JSON.stringify(service.snapshot())).not.toContain("041003");
     expect(JSON.stringify(service.snapshot())).not.toContain("041 003");
+  });
+
+  it("比較コード本文が段階観測の応答に載らない", async () => {
+    const { service, stub } = prepareService();
+    stub.client.getSnapshot.mockResolvedValueOnce(
+      makeSnapshot({ revision: 3, pending: [{ requestId: "r1" }] }),
+    );
+    await service.fetchInitial();
+    const observed = service.buildDevObservation();
+    const dumped = JSON.stringify(observed);
+    expect(dumped).not.toContain("041003");
+    expect(dumped).not.toContain("041 003");
   });
 });
 

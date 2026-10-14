@@ -84,7 +84,7 @@ export function createManagementRpc(
         enableAcceptance: () => backend.enableAcceptance(),
         disableAcceptance: () => backend.disableAcceptance(),
         getPairingView: ({ requestId }) => backend.getPairingView({ requestId }),
-        approvePairing: ({ requestId, code }) => backend.approvePairing({ requestId, code }),
+        approvePairing: ({ requestId }) => backend.approvePairing({ requestId }),
         rejectPairing: ({ requestId }) => backend.rejectPairing({ requestId }),
         disconnectConnection: ({ connectionId }) => backend.disconnectConnection({ connectionId }),
         assignPlugin: ({ pluginKind, localSessionId }) =>

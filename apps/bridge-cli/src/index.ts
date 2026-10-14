@@ -12,7 +12,7 @@
  * @packageDocumentation
  */
 import { createInterface } from "node:readline";
-import { formatPairingCode, isPairingCode } from "bridge-protocol";
+import { formatPairingCode } from "bridge-protocol";
 import type { DiagnosticStats } from "bridge-app-core";
 import { createBridgeServer, PRODUCTION_ORIGIN, type BridgeServer } from "bridge-server";
 import { startDiagnostics, type BridgeDiagnostics } from "./diagnostics.ts";
@@ -57,7 +57,7 @@ export function parseArgs(argv: readonly string[]): CliOptions {
       process.stdout.write(
         "使い方: bridge-cli [--port N] [--dev] [--origin ORIGIN]...\n" +
           "  --origin は --dev 指定時のみ受け付ける。\n" +
-          "対話命令: accept enable / accept disable / pending / approve <requestId> <code> / reject <requestId> / status / connections / disconnect <connectionId> / quit\n",
+          "対話命令: accept enable / accept disable / pending / approve <requestId> / reject <requestId> / status / connections / disconnect <connectionId> / quit\n",
       );
       process.exit(0);
     } else {
@@ -136,18 +136,19 @@ export function handleCommand(
     return false;
   }
   if (command === "approve") {
+    // 承認は要求 ID だけを受け付ける。比較コードは両画面への表示と
+    // 人間による目視照合にだけ使い、引数には含めない。
+    // 旧式 `approve <id> <code>` の余剰引数は黙って受け付けず使い方を示す。
+    if (rest.length !== 1) {
+      out.write("使い方: approve <requestId>\n");
+      return false;
+    }
     const requestId = rest[0];
-    const code = rest[1];
-    // コードは文字列のまま扱い数値化しない。先頭ゼロ保持のため `Number` 変換はしない。
-    if (requestId === undefined || requestId === "" || code === undefined || code === "") {
-      out.write("使い方: approve <requestId> <6桁コード>\n");
+    if (requestId === undefined || requestId === "") {
+      out.write("使い方: approve <requestId>\n");
       return false;
     }
-    if (!isPairingCode(code)) {
-      out.write("approve 失敗: コードは ASCII 数字6文字であること。\n");
-      return false;
-    }
-    const result = server.approvePairing(requestId, code);
+    const result = server.approvePairing(requestId);
     if (result.status === "APPROVED") {
       out.write(`approved ${requestId} connection=${result.connectionId}\n`);
     } else {
@@ -257,7 +258,7 @@ async function main(): Promise<void> {
   const diagnostics: BridgeDiagnostics = startDiagnostics(server);
   process.stdout.write(`listening ${server.endpoint}\n`);
   process.stdout.write(
-    "命令: accept enable / accept disable / pending / approve <requestId> <code> / reject <requestId> / status / connections / disconnect <connectionId> / quit\n",
+    "命令: accept enable / accept disable / pending / approve <requestId> / reject <requestId> / status / connections / disconnect <connectionId> / quit\n",
   );
   const rl = createInterface({ input: process.stdin, output: process.stdout });
   rl.on("line", (line: string) => {

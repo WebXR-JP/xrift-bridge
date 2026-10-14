@@ -7,7 +7,7 @@
 ```mermaid
 flowchart LR
     S["生存セッション<br/>(bridge-server が公開)"] -->|"割当て"| P["プラグインインスタンス<br/>(bridge-app-core が管理)"]
-    P -->|"埋込み表示"| G["管理画面・比較コード照合<br/>(bridge-gui-ui + bridge-gui-main)"]
+    P -->|"埋込み表示"| G["管理画面・比較コード表示と承認<br/>(bridge-gui-ui + bridge-gui-main)"]
     G --- B["GUIバックエンド<br/>(両者を組み立て)"]
     B --- S
     G --- C["契約<br/>(bridge-gui-contract)"]
@@ -26,7 +26,7 @@ flowchart LR
 | `apps/bridge-gui-main/src/plugin-ui/<種別>` | プラグイン所有の GUI companion（固有RPC契約・限定DTO・子画面UI・main側アダプター・管理記述子）。`contract.ts`・`companion.ts`・`management.ts`・子画面（`index.ts/html/css`）を一組で持つ                                                                    |
 | `apps/bridge-gui-main/src/composition`      | 同梱 composition root。同梱の選択と登録順の宣言（`bundled-plugins.ts`。`plugin-ui` を import してよいのはここだけ）と静的資産 manifest（`bundled-plugin-assets.ts`。platform・companion factory を import しない）を持つ                                     |
 | `apps/bridge-gui-ui`                        | 管理画面（mainview）の Angular 実装。契約だけを参照する                                                                                                                                                                                                      |
-| `apps/bridge-gui-main`                      | 起動・終了、比較コード照合、Angular 画面の包装・表示、プラグインUIの埋込み、デスクトップ機能、画面との通信                                                                                                                                                   |
+| `apps/bridge-gui-main`                      | 起動・終了、比較コード表示と承認操作、Angular 画面の包装・表示、プラグインUIの埋込み、デスクトップ機能、画面との通信                                                                                                                                         |
 
 - `bridge-app-core` はサーバー管理境界を受け取り、GUIライブラリを参照しない。GUIのバックエンドが両者を組み立てる。
 - 埋込み画面（Webview）へ `BridgeServer` や生の `Session` を渡さない。表示用データと限定した操作だけを渡す。
@@ -106,7 +106,7 @@ mainview を Angular に本移行する。本節が設計変更の正本であ�
 - 移行方針：既定の管理画面は Angular であり、vanilla 製の旧管理画面は削除済みである。恒久的な二重実装・フォールバックは残さない。
 - 契約境界：共有契約（DTO・限定操作・純粋な微少ランタイム＝`selectNewer`、汎用URL組立て／解析、navigation-rules 生成等）を `packages/bridge-gui-contract` へ切り出す。管理契約は汎用操作（`assignPlugin`／`unassignPlugin`）だけを持ち、テキスト固有 DTO・固有操作は持たない。固有の表示・操作は companion に置く。開発専用操作も汎用操作だけを通す。依存方向・禁止は「三層の責務」節を正本とする。
 - ビルド：Angular 成果物は UI パッケージ自身の `dist` に生成する（`dist/dev/browser`・`dist/prod/browser` の分離で混在させない）。再帰 `build` に Angular production AOT を含める（`tsc --noEmit` だけではテンプレートを検証できない）。GUI から UI への `workspace:*` ビルド依存を明示する。URL は `views://mainview/index.html` に統一し、Hutch stub＋生成物の写しのコピーとする。成果物が無ければ失敗させる。コピーは生成された chunks／assets を含める。
-- Angular 構造：RPC アダプター（接続・型付き request／push。表示状態や DOM を持たない）／状態・操作サービス（signals で snapshot 採用、初期同期、共通操作処理、実行中／失敗表示、安全な受信記録）／表示コンポーネント（状態要約＋受付＋終了、保留一覧・行、接続一覧、表示専用のセッション一覧、割当て管理を行うプラグイン一覧。固有の統計・送信は子画面に限る）／子画面ホスト（登録表駆動の実プラグイン配置・失敗・再試行。共通の対応付け・結線に種別分岐を持たない。タグ同一性保持。段0スパイクを持たない）／開発専用デバッグアダプター。汎用ストア・ルーターは追加しない。比較コードは保留行の一時状態だけに置き、消滅後の遅延取得は再表示しない。子画面は安定領域へ命令的に追加・削除し、revision 更新で再生成しない。
+- Angular 構造：RPC アダプター（接続・型付き request／push。表示状態や DOM を持たない）／状態・操作サービス（signals で snapshot 採用、初期同期、共通操作処理、実行中／失敗表示、安全な受信記録）／表示コンポーネント（状態要約＋受付＋終了、保留一覧・行、接続一覧、表示専用のセッション一覧、割当て管理を行うプラグイン一覧。固有の統計・送信は子画面に限る）／子画面ホスト（登録表駆動の実プラグイン配置・失敗・再試行。共通の対応付け・結線に種別分岐を持たない。タグ同一性保持。段0スパイクを持たない）／開発専用デバッグアダプター。汎用ストア・ルーターは追加しない。比較コードは保留が出た時点で自動取得して常時表示し、表示用ボタン・入力欄は置かない。取得成功まで承認不可とし、取得中は「比較コードを取得しています…」、失敗時は短い失敗表示と再試行を出す。消滅後の遅延応答は破棄して再表示しない。承認は要求 ID だけを指定する明示操作（管理RPC `approvePairing`）とし、取得・表示・通知クリックから自動承認しない。対応付けは人間の目視であり真正性の証明ではなく、承認時の照合を行わない分だけ安全性は従来と完全同一ではない。比較コード本文は snapshot・通知・受信記録・ログ・URL・永続保存に載せず、コードを載せない `PendingEntry` と表示用取得 `getPairingView` は維持する。形状・型・値はコードを正本とする。子画面は安定領域へ命令的に追加・削除し、revision 更新で再生成しない。
 - AI 観測口：開発ビルド＋明示 opt-in＋隔離実行の三条件で有効化する。経路は AI → loopback 接続口 → Bun main → 限定 Webview RPC → 共通操作サービス → 既存管理 RPC → backend とする。`127.0.0.1`・実行ごとランダム token・Origin／Host 制限・入力検証・サイズ／期限制限を設け、ブラウザ向け CORS は開かない。stable は環境変数を設定しても待受けを開かない。許可操作と DTO だけを通し、任意 JS・関数名・DOM 全文・実体取得口は持たない。`ng.*` は可否・件数等の補助観測だけに使う。操作受付・業務結果・snapshot 採用・Angular の DOM 反映は別々に返す（RPC 成功や rAF を描画完了と呼ばない）。native 画素観測は自動化の対象外とし、ここでは扱わない。比較コード取得からの自動承認はしない。汎用ジョブ履歴・再送基盤は作らない。
 - 描画確認：native 画素観測（`Screen.captureRegion()` 等）と実入力送信（cliclick／System Events 等）の自動化は行わない（非目標）。`Screen.captureRegion()` はデスクトップ矩形で Webview 単体捕獲ではないため採用しない。自動観測は開発専用の操作・観測口による DOM 観測までとし、固定要素キー・矩形・表示／disabled・`document.hasFocus()`・activeElement キーだけを返し、入力値・本文は返さない。描画・フォーカス・操作フローの最終確認は人間の GUI セッションで行う。
 - 確認済み：Hutch のディレクトリコピーは package 内配置で成立する（生成物の写しディレクトリ→`views/mainview/`。`index.html`・`main.js`・`styles.css` の同梱を実測）。package 外の直接指定は `UnsafeOutputPath` で却下されるため、UI の `dist` からの写しを経由する。`@angular/build:unit-test`（Vitest runner）は現 Vite+ override 下で動作し（`ng test --watch=false` が緑）、再帰 `test` に組込済みである。native 画素観測・実入力送信の自動化は非目標として確定し、本項目の対象外とする。

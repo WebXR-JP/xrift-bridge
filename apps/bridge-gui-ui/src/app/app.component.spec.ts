@@ -19,6 +19,8 @@ function prepareServiceStub() {
   return {
     snapshot: signal(makeSnapshot({ revision: 5 })),
     pairingViews: signal(new Map()),
+    pairingFetchPending: signal([] as readonly string[]),
+    pairingFetchFailed: signal([] as readonly string[]),
     eventLog: signal([] as readonly EventLogEntry[]),
     pluginError: signal(""),
     pluginViewStateFor: vi.fn((_instanceId: string | null): PluginViewState => ({
@@ -30,8 +32,8 @@ function prepareServiceStub() {
     setPluginViewState: vi.fn((_visible: boolean, _activeInstanceId: string | null) => {}),
     enableAcceptance: vi.fn(async () => {}),
     disableAcceptance: vi.fn(async () => {}),
-    showPairingView: vi.fn(async (_requestId: string) => {}),
-    approvePairing: vi.fn(async (_requestId: string, _code: string) => {}),
+    retryPairingView: vi.fn(async (_requestId: string) => {}),
+    approvePairing: vi.fn(async (_requestId: string) => {}),
     rejectPairing: vi.fn(async (_requestId: string) => {}),
     disconnectConnection: vi.fn(async (_connectionId: string) => {}),
     assignPlugin: vi.fn(async (_pluginKind: string, _localSessionId?: string) => {}),
@@ -201,7 +203,7 @@ describe("画面選択とパネル切替", () => {
     expect(stub.fetchInitial).toHaveBeenCalledTimes(1);
     expect(stub.enableAcceptance).not.toHaveBeenCalled();
     expect(stub.disableAcceptance).not.toHaveBeenCalled();
-    expect(stub.showPairingView).not.toHaveBeenCalled();
+    expect(stub.retryPairingView).not.toHaveBeenCalled();
     expect(stub.approvePairing).not.toHaveBeenCalled();
     expect(stub.rejectPairing).not.toHaveBeenCalled();
     expect(stub.disconnectConnection).not.toHaveBeenCalled();

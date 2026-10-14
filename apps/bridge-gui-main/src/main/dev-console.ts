@@ -220,7 +220,7 @@ export async function runDevOperation(
     case "getPairingView":
       return backend.getPairingView({ requestId: params["requestId"] });
     case "approvePairing":
-      return backend.approvePairing({ requestId: params["requestId"], code: params["code"] });
+      return backend.approvePairing({ requestId: params["requestId"] });
     case "rejectPairing":
       return backend.rejectPairing({ requestId: params["requestId"] });
     case "disconnectConnection":

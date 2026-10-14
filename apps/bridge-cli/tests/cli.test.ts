@@ -202,14 +202,14 @@ test("CLIでaccept enable・pending・approve・reject・statusが動く", async
   expect(pendingText).toContain("000 042");
   expect(pendingText).toContain(DEV_ORIGIN);
 
-  // 引数不足・書式不正は厳密に弾く。数値化で先頭ゼロを落とさない。
+  // 引数不足・余剰引数（旧式 `approve <id> <code>`）は厳密に弾く。
   handleCommand("approve", server, out);
   expect(captured.output.join("")).toContain("使い方: approve");
-  handleCommand(`approve ${cliRequestId} 42`, server, out);
-  expect(captured.output.join("")).toContain("approve 失敗");
+  handleCommand(`approve ${cliRequestId} 000042`, server, out);
+  expect(captured.output.join("")).toContain("使い方: approve");
   expect(server.listPending()).toHaveLength(1);
 
-  handleCommand(`approve ${cliRequestId} 000042`, server, out);
+  handleCommand(`approve ${cliRequestId}`, server, out);
   expect(captured.output.join("")).toContain(`approved ${cliRequestId}`);
   const ok = await collector.waitForType("auth_ok");
   expect(ok.message.type).toBe("auth_ok");
@@ -236,6 +236,27 @@ test("CLIでaccept enable・pending・approve・reject・statusが動く", async
   handleCommand("pending", server, out);
   expect(captured.output.join("")).toContain("pending: (none)");
   expect(handleCommand("quit", server, out)).toBe(true);
+});
+
+test("CLIのapproveは余剰引数を黙って受け付けず承認しない", async () => {
+  const server = await startServer({ generateCode: () => "000042" });
+  const captured = captureOutput();
+  const out = captured.out;
+  handleCommand("accept enable", server, out);
+  const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
+  socket.send(pairingStartMessage());
+  const pending = await collector.waitForType("pairing_pending");
+  if (pending.message.type !== "pairing_pending") throw new Error("保留通知ではない。");
+  const requestId = pending.message.requestId;
+  // 旧式の2引数は使い方の表示に留め、承認も切断もしない。
+  handleCommand(`approve ${requestId} 000042`, server, out);
+  expect(captured.output.join("")).toContain("使い方: approve");
+  expect(server.listPending()).toHaveLength(1);
+  // 要求 ID だけでは承認が成立する。
+  handleCommand(`approve ${requestId}`, server, out);
+  expect(captured.output.join("")).toContain(`approved ${requestId}`);
+  const ok = await collector.waitForType("auth_ok");
+  expect(ok.message.type).toBe("auth_ok");
 });
 
 test("CLIのstatusは受付状態・各接続数・理由別拒否集計を出す", async () => {

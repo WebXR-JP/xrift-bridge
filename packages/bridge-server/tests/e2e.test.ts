@@ -102,7 +102,7 @@ async function connectApproved(
   expect(pairing.code).toMatch(/^[0-9]{6}$/);
   expect(typeof pairing.requestId).toBe("string");
   // テスト用の承認。ローカル管理境界の API であり設計どおり。
-  const approved = server.approvePairing(pairing.requestId, pairing.code);
+  const approved = server.approvePairing(pairing.requestId);
   expect(approved.status).toBe("APPROVED");
   if (approved.status !== "APPROVED") throw new Error("承認できない。");
   const provider = await request.sessionProvider;

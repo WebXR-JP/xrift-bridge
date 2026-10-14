@@ -118,7 +118,7 @@ export function formatDiagnosticLines(
     `進行 ${phaseLabel(snapshot.phase)} / 接続 ${snapshot.connectionState}`,
   ];
   if (snapshot.pairing !== null) {
-    lines.push(`比較コード ${formatPairingCode(snapshot.pairing.code)} 照合して承認`);
+    lines.push(`比較コード ${formatPairingCode(snapshot.pairing.code)} 目視で対応付けて承認`);
   }
   if (snapshot.lastError === null) {
     lines.push("エラーなし");

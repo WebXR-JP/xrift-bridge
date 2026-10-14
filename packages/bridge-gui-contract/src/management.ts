@@ -367,9 +367,9 @@ export type ManagementRpc = {
       disableAcceptance: { params: {}; response: AdmissionState };
       /** 選択した保留の比較コードを表示用に取得する。承認はしない。 */
       getPairingView: { params: { requestId: string }; response: PairingViewResult };
-      /** 保留を比較コード照合で承認する。結果の成否は server が決める。 */
+      /** 保留を要求 ID だけで承認する。比較コードは表示専用（snapshot に載せない）。結果の成否は server が決める。 */
       approvePairing: {
-        params: { requestId: string; code: string };
+        params: { requestId: string };
         response: ApprovalResult;
       };
       /** 保留を取り下げ、対象の接続を終了する。 */

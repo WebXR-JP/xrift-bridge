@@ -181,12 +181,6 @@ export function errorHint(code: string): string | undefined {
   if (code === "NOT_PENDING") {
     return "対象の承認待ちが見当たらない。既に失効・処理済みのため新規に接続開始すること。";
   }
-  if (code === "INVALID_CODE") {
-    return "比較コードの書式が正しくない。正しい6桁で承認し直すか、新規に接続開始すること。";
-  }
-  if (code === "CODE_MISMATCH") {
-    return "比較コードが一致しない。両画面のコードを照合し、正しいコードで承認し直すこと。";
-  }
   if (code === "CONNECTION_GONE") {
     return "承認対象の接続が失われた。新規に接続開始すること。";
   }

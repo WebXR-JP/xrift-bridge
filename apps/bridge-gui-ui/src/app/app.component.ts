@@ -12,7 +12,6 @@ import { ConnectionListComponent } from "./components/connection-list/connection
 import { EventLogComponent } from "./components/event-log/event-log.component.ts";
 import { ManagementService } from "./Services/management.service.ts";
 import { PendingListComponent } from "./components/pending-list/pending-list.component.ts";
-import type { ApproveRequest } from "./components/pending-row/pending-row.component.ts";
 import { PluginListComponent } from "./components/plugin-list/plugin-list.component.ts";
 import { PluginOperationsComponent } from "./components/plugin-operations/plugin-operations.component.ts";
 import { PluginViewFallbackComponent } from "./components/plugin-view-fallback/plugin-view-fallback.component.ts";
@@ -72,6 +71,16 @@ export class AppComponent implements OnInit {
   /** 保留行の一時状態。 */
   get pairingViews() {
     return this.management.pairingViews;
+  }
+
+  /** 比較コードを取得中の保留の要求識別子一覧。 */
+  get pairingFetchPending() {
+    return this.management.pairingFetchPending;
+  }
+
+  /** 比較コードの取得に失敗した保留の要求識別子一覧。 */
+  get pairingFetchFailed() {
+    return this.management.pairingFetchFailed;
   }
 
   /** 受信記録。 */
@@ -230,21 +239,23 @@ export class AppComponent implements OnInit {
   }
 
   /**
-   * 比較コード表示を取得する（人間の操作用）。承認はしない。
+   * 比較コードの取得を再試行する（人間の操作用）。承認はしない。
+   *
+   * 自動取得はサービス側で駆動するため、画面からの明示取得は再試行だけである。
    *
    * @param requestId - 照合対象の要求識別子。
    */
-  async onShowCode(requestId: string): Promise<void> {
-    await this.management.showPairingView(requestId);
+  async onRetryPairingView(requestId: string): Promise<void> {
+    await this.management.retryPairingView(requestId);
   }
 
   /**
    * 保留を承認する（人間の操作用）。承認可否は server が決める。
    *
-   * @param request - 承認要求（要求識別子と入力欄の比較コード）。
+   * @param requestId - 承認対象の要求識別子。
    */
-  async onApprove(request: ApproveRequest): Promise<void> {
-    await this.management.approvePairing(request.requestId, request.code);
+  async onApprove(requestId: string): Promise<void> {
+    await this.management.approvePairing(requestId);
   }
 
   /**

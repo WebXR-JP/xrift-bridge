@@ -54,7 +54,7 @@ node apps/bridge-cli/dist/index.mjs --dev --origin http://localhost:5173
 vp run diagnostic-world#dev
 ```
 
-ブラウザで `http://localhost:5173` を開き、パネルで接続を開始するとワールド画面に比較コードが表示される。ブリッジの `pending` 表示と照合し、ブリッジ側で `approve <requestId> <code>` を入力して承認する。
+ブラウザで `http://localhost:5173` を開き、パネルで接続を開始するとワールド画面に比較コードが表示される。ブリッジの `pending` 表示と目視し、ブリッジ側で `approve <requestId>` を入力して承認する。
 保留は承認・拒否・切断まで残る。拒否・切断後は新規に接続を開始すること（再接続の自動承認はしない）。
 
 ## 検証

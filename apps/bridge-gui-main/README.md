@@ -194,7 +194,7 @@ apps/bridge-gui-main/
 - 段2: `GuiBackend`（同一 main プロセス内で `createBridgeServer` 既定 port 3100・
   `PRODUCTION_ORIGIN` → `createBridgeAppCore`）で最小実結線した。
   `tests/backend.test.ts`（backend 直接・実 WebSocket・既存 `ws`・yamux）が通る:
-  受付→比較コード取得→誤コード拒否→承認→Session 生成→診断割当て→
+  受付→比較コード取得→要求 ID だけの承認→Session 生成→診断割当て→
   echo 同形返送・ping→pong→運用切断で一覧除外→再接続で新要求・再承認
   （承認前の管理口未解決を含む）、未割当て reliable への送信中断、
   引数・終了中検証、終了後の同一ポート再束縛（待受解放の証明）。

@@ -12,7 +12,8 @@
  *
  * 比較コードの扱い: この記録器自体はコードを保持するが、構造化ログ・URL・
  * 永続保存に出す経路は作らない。呼び出し側（サーバ・CLI）もコードを
- * ログ・URL・永続保存に出さず、両画面への表示と照合にだけ使うこと。
+ * ログ・URL・永続保存に出さず、両画面への表示と人間による目視照合にだけ
+ * 使い、承認の照合・資格情報には使わないこと。
  * 製品 API や CLI に固定コード機能は設けず、乱数は試験用の注入に限る。
  *
  * @packageDocumentation
@@ -280,7 +281,8 @@ export class PairingRateLimiter {
  * 保留中のペアリング要求の公開内容。
  *
  * 比較コードを含む。呼び出し側はログ・URL・永続保存に出さず、両画面への
- * 表示と照合にだけ使うこと。時間での失効を持たない。
+ * 表示と人間による目視照合にだけ使い、承認の照合・資格情報には使わないこと。
+ * 時間での失効を持たない。
  */
 export interface PendingPairing {
   /** 再利用しないペアリング要求の識別子。 */
@@ -328,12 +330,7 @@ export type PairingApproveResult =
       readonly origin: string;
     }
   | {
-      readonly status:
-        | "NOT_PENDING"
-        | "INVALID_CODE"
-        | "CODE_MISMATCH"
-        | "CONNECTION_GONE"
-        | "CONNECTION_CHECK_ERROR";
+      readonly status: "NOT_PENDING" | "CONNECTION_GONE" | "CONNECTION_CHECK_ERROR";
     };
 
 /**
@@ -492,8 +489,11 @@ export class PairingStore {
   }
 
   /**
-   * 保留を承認する。ID 一致・コード一致・接続生存のすべてを確認して
+   * 保留を承認する。要求 ID の一致と接続生存だけを確認して
    * 一度だけ成功する（原子性。途中で `await` しない）。
+   *
+   * 比較コードの照合は行わない。コードの生成・両画面への表示・
+   * 人間による目視照合は維持するが、承認操作の引数には含めない。
    *
    * 無効化で失効した世代の要求は `NOT_PENDING` とし、再有効化しても復活
    * しない。生存判定が例外を投げた場合は承認せず、対象要求を内部エラー
@@ -501,23 +501,15 @@ export class PairingStore {
    * と断定しない）。
    *
    * 生存確認の後に、対象が同じ保留として残っていることを再確認してから
-   * 承認する（確認中の切断・無効化で不正承認を成立させない）。コード不一致
-   * では保留を残す。
+   * 承認する（確認中の切断・無効化で不正承認を成立させない）。
    *
    * @param requestId - 承認する要求の識別子。
-   * @param code - 照合する比較コード。
    * @returns 承認結果。
    */
-  approve(requestId: string, code: string): PairingApproveResult {
+  approve(requestId: string): PairingApproveResult {
     const entry = this.entries.get(requestId);
     if (entry === undefined) {
       return { status: "NOT_PENDING" };
-    }
-    if (!isPairingCode(code)) {
-      return { status: "INVALID_CODE" };
-    }
-    if (entry.code !== code) {
-      return { status: "CODE_MISMATCH" };
     }
     let alive: boolean;
     try {

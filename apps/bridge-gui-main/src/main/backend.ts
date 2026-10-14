@@ -541,18 +541,19 @@ export class GuiBackend {
   }
 
   /**
-   * 保留を比較コード照合で承認する。承認可否は常に server が決める。
+   * 保留を要求 ID だけで承認する。承認可否は常に server が決める。
    *
-   * @param params - 承認する要求の識別子と比較コード（文字列のまま）。
+   * 比較コードは表示専用であり、承認の引数にしない。
+   *
+   * @param params - 承認する要求の識別子。
    * @returns 承認結果。
-   * @throws `RangeError` — 識別子・コードが空・文字列でない場合。
+   * @throws `RangeError` — 識別子が空・文字列でない場合。
    * @throws `Error` — 終了中・起動失敗の場合。
    */
-  approvePairing(params: { requestId: unknown; code: unknown }): ApprovalResult {
+  approvePairing(params: { requestId: unknown }): ApprovalResult {
     const { server } = this.operable();
     const requestId = assertId(params.requestId, "requestId");
-    const code = assertId(params.code, "code");
-    const result = server.approvePairing(requestId, code);
+    const result = server.approvePairing(requestId);
     this.requestNotify();
     return result;
   }

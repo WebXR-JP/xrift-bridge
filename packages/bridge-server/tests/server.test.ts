@@ -278,7 +278,7 @@ async function authorizeCollected(
   if (listed === undefined) throw new Error("保留一覧に見えない。");
   // ワールド画面と管理画面のコードは一致すること。
   expect(listed.code).toBe(pendingCode);
-  const approved = server.approvePairing(pendingRequestId, listed.code);
+  const approved = server.approvePairing(pendingRequestId);
   expect(approved.status).toBe("APPROVED");
   const ok = await collector.waitForType("auth_ok");
   if (ok.message.type !== "auth_ok") throw new Error("認可応答ではない。");
@@ -463,7 +463,7 @@ test("受付有効後のpairing_pending通知と承認後にauth_okが返る", a
   const listed = server.listPending();
   expect(listed).toHaveLength(1);
   expect(listed[0]?.requestId).toBe(pending.message.requestId);
-  const approved = server.approvePairing(pending.message.requestId, pending.message.code);
+  const approved = server.approvePairing(pending.message.requestId);
   expect(approved).toEqual({
     status: "APPROVED",
     connectionId: expect.any(String),
@@ -597,7 +597,7 @@ test("2回目の開始はDUPLICATE_PAIRING_STARTで終了し再通知しない",
   expect(result.code).toBe(1008);
   // コード再生成・再通知をしない。保留は終わっている。
   expect(server.listPending()).toHaveLength(0);
-  expect(server.approvePairing(firstRequestId, pending.message.code).status).toBe("NOT_PENDING");
+  expect(server.approvePairing(firstRequestId).status).toBe("NOT_PENDING");
 });
 
 test("開始待ちは時間で終了せず開始メッセージを待ち続ける", async () => {
@@ -686,7 +686,7 @@ test("保留超過は実際に踏みPENDING_FULLで終了する", async () => {
   expect(server.listPending()).toHaveLength(1);
   const listed = server.listPending()[0];
   if (listed === undefined) throw new Error("保留がない。");
-  expect(server.approvePairing(listed.requestId, listed.code).status).toBe("APPROVED");
+  expect(server.approvePairing(listed.requestId).status).toBe("APPROVED");
   const ok = await first.collector.waitForType("auth_ok");
   expect(ok.message.type).toBe("auth_ok");
 });
@@ -813,7 +813,7 @@ test("切断で保留が失効し承認は未保留になる", async () => {
   if (pending.message.type !== "pairing_pending") throw new Error("保留通知ではない。");
   socket.terminate();
   await waitForCondition(() => server.listPending().length === 0);
-  expect(server.approvePairing(pending.message.requestId, pending.message.code)).toEqual({
+  expect(server.approvePairing(pending.message.requestId)).toEqual({
     status: "NOT_PENDING",
   });
 });
@@ -830,34 +830,23 @@ test("保留は時間で失効せず遅れて承認できる", async () => {
   expect(server.listPending()).toHaveLength(1);
   const listed = server.listPending()[0];
   if (listed === undefined) throw new Error("保留がない。");
-  expect(server.approvePairing(listed.requestId, listed.code).status).toBe("APPROVED");
+  expect(server.approvePairing(listed.requestId).status).toBe("APPROVED");
   const ok = await collector.waitForType("auth_ok");
   expect(ok.message.type).toBe("auth_ok");
 });
 
-test("二重承認は2回目が未保留になりコード不一致は保留を残す", async () => {
+test("二重承認は2回目が未保留になる", async () => {
   const server = await startServer();
   server.enableAcceptance();
   const { socket, collector } = await openCollected(server.endpoint, DEV_ORIGIN);
   socket.send(pairingStartMessage());
   const pending = await collector.waitForType("pairing_pending");
   if (pending.message.type !== "pairing_pending") throw new Error("保留通知ではない。");
-  const wrong = pending.message.code === "000000" ? "111111" : "000000";
-  expect(server.approvePairing(pending.message.requestId, wrong)).toEqual({
-    status: "CODE_MISMATCH",
-  });
-  // 不一致では保留が残り、正しいコードで承認できる。
-  expect(server.listPending()).toHaveLength(1);
-  expect(server.approvePairing(pending.message.requestId, "12")).toEqual({
-    status: "INVALID_CODE",
-  });
-  expect(server.listPending()).toHaveLength(1);
-  const listed = server.listPending()[0];
-  if (listed === undefined) throw new Error("保留がない。");
-  expect(server.approvePairing(pending.message.requestId, listed.code).status).toBe("APPROVED");
+  // 要求 ID だけで承認が成立する。
+  expect(server.approvePairing(pending.message.requestId).status).toBe("APPROVED");
   await collector.waitForType("auth_ok");
   // 二重承認は未保留になる。
-  expect(server.approvePairing(pending.message.requestId, listed.code)).toEqual({
+  expect(server.approvePairing(pending.message.requestId)).toEqual({
     status: "NOT_PENDING",
   });
   expect(server.getStats().pairingSuccess).toBe(1);
@@ -873,7 +862,6 @@ test("再起動で保留と認可は失効する", async () => {
   const keeper = await openCollected(first.endpoint, DEV_ORIGIN);
   await authorizeAndMux(first, keeper.socket, keeper.collector);
   const oldRequestId = pending.message.requestId;
-  const oldCode = pending.message.code;
   await first.close();
   servers.splice(servers.indexOf(first), 1);
 
@@ -881,9 +869,9 @@ test("再起動で保留と認可は失効する", async () => {
   expect(second.listPending()).toHaveLength(0);
   expect(second.getConnectionCount()).toBe(0);
   expect(second.getAcceptance().enabled).toBe(false);
-  // 前世代の要求 ID・コードは使えない。
+  // 前世代の要求 ID は使えない。
   second.enableAcceptance();
-  expect(second.approvePairing(oldRequestId, oldCode)).toEqual({ status: "NOT_PENDING" });
+  expect(second.approvePairing(oldRequestId)).toEqual({ status: "NOT_PENDING" });
 });
 
 // ---------- 受付無効化の drain ----------
@@ -920,7 +908,7 @@ test("受付無効化で開始待ち・承認待ちが終了し認可済みは�
   expect(await pendingClosed).toMatchObject({ code: 1008 });
 
   expect(server.listPending()).toHaveLength(0);
-  expect(server.approvePairing(pending.message.requestId, pending.message.code)).toEqual({
+  expect(server.approvePairing(pending.message.requestId)).toEqual({
     status: "NOT_PENDING",
   });
 
@@ -966,7 +954,6 @@ test("再有効化しても旧要求は復活せず新規作成できる", async
   const pending = await collector.waitForType("pairing_pending");
   if (pending.message.type !== "pairing_pending") throw new Error("保留通知ではない。");
   const oldRequestId = pending.message.requestId;
-  const oldCode = pending.message.code;
   const closed = collector.waitClose();
 
   server.disableAcceptance();
@@ -977,7 +964,7 @@ test("再有効化しても旧要求は復活せず新規作成できる", async
 
   server.enableAcceptance();
   // 旧要求は復活しない。
-  expect(server.approvePairing(oldRequestId, oldCode)).toEqual({ status: "NOT_PENDING" });
+  expect(server.approvePairing(oldRequestId)).toEqual({ status: "NOT_PENDING" });
   // 新世代では新規作成ができる。
   const retry = await openCollected(server.endpoint, DEV_ORIGIN);
   retry.socket.send(pairingStartMessage());
@@ -987,7 +974,7 @@ test("再有効化しても旧要求は復活せず新規作成できる", async
   const secondRequestId = second.message.requestId;
   const listed = server.listPending().find((item) => item.requestId === secondRequestId);
   if (listed === undefined) throw new Error("保留がない。");
-  expect(server.approvePairing(listed.requestId, listed.code).status).toBe("APPROVED");
+  expect(server.approvePairing(listed.requestId).status).toBe("APPROVED");
 });
 
 test("管理イベントで保留の増減と受付の切替が分かる", async () => {
@@ -1008,7 +995,7 @@ test("管理イベントで保留の増減と受付の切替が分かる", async
   await waitForCondition(() => events.some((event) => event.kind === "pending-created"));
   const listed = server.listPending()[0];
   if (listed === undefined) throw new Error("保留がない。");
-  server.approvePairing(listed.requestId, listed.code);
+  server.approvePairing(listed.requestId);
   await waitForCondition(() => events.some((event) => event.kind === "pending-ended"));
   server.disableAcceptance();
   expect(events.map((event) => event.kind)).toContain("acceptance-changed");
@@ -1066,7 +1053,7 @@ test("時計を大きく進めても受付と未認可接続は自動終了し�
   // 保留は承認できる。
   const listed = server.listPending()[0];
   if (listed === undefined) throw new Error("保留がない。");
-  expect(server.approvePairing(listed.requestId, listed.code).status).toBe("APPROVED");
+  expect(server.approvePairing(listed.requestId).status).toBe("APPROVED");
   const ok = await pendingConn.collector.waitForType("auth_ok");
   expect(ok.message.type).toBe("auth_ok");
   void awaiting;
@@ -1430,7 +1417,7 @@ test("auth_ok直後のbinaryを失わず処理する", async () => {
   const pendingId = pending.message.requestId;
   const listed = server.listPending().find((item) => item.requestId === pendingId);
   if (listed === undefined) throw new Error("保留がない。");
-  server.approvePairing(listed.requestId, listed.code);
+  server.approvePairing(listed.requestId);
   const ok = await collector.waitForType("auth_ok");
   if (ok.message.type !== "auth_ok") throw new Error("認可応答ではない。");
   // `auth_ok` 受信直後に binary を送る（切替中の保持経路を通りうる）。

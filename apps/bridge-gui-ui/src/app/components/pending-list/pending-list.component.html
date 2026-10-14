@@ -10,7 +10,8 @@
         <app-pending-row
           [requestId]="entry.requestId"
           [view]="viewFor(entry.requestId)"
-          (showRequested)="showRequested.emit($event)"
+          [codeState]="codeStateFor(entry.requestId)"
+          (retryRequested)="retryRequested.emit($event)"
           (approveRequested)="approveRequested.emit($event)"
           (rejectRequested)="rejectRequested.emit($event)"
         />

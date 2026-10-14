@@ -95,13 +95,13 @@ test("注入コードの先頭ゼロは承認まで文字列で保持される",
   const created = store.create("conn-zero", "https://app.example");
   if (created.status !== "CREATED") throw new Error("保留が作れない。");
   expect(created.code).toBe("000042");
-  expect(store.approve(created.requestId, "000042")).toEqual({
+  expect(store.approve(created.requestId)).toEqual({
     status: "APPROVED",
     connectionId: "conn-zero",
     origin: "https://app.example",
   });
   // 承認は一度だけ成功する。
-  expect(store.approve(created.requestId, "000042")).toEqual({ status: "NOT_PENDING" });
+  expect(store.approve(created.requestId)).toEqual({ status: "NOT_PENDING" });
 });
 
 test("作成結果は要求IDとコードだけを持ち期限を持たない", () => {
@@ -177,9 +177,7 @@ test("要求IDは削除後も再利用しない", () => {
   if (first.status !== "CREATED") throw new Error("1件目が作れない。");
   ids.push(first.requestId);
   // 承認成功で消えた ID は再利用しない。
-  const code = store.get(first.requestId)?.code;
-  if (code === undefined) throw new Error("保留が見えない。");
-  expect(store.approve(first.requestId, code)).toEqual({
+  expect(store.approve(first.requestId)).toEqual({
     status: "APPROVED",
     connectionId: "conn-a",
     origin: "https://a.example",
@@ -214,7 +212,7 @@ test("時計を大きく進めても受付と保留は自動終了しない", ()
   expect(store.list()).toHaveLength(1);
   expect(store.size()).toBe(1);
   // 承認も通る。
-  expect(store.approve(created.requestId, "123456")).toEqual({
+  expect(store.approve(created.requestId)).toEqual({
     status: "APPROVED",
     connectionId: "conn-a",
     origin: "https://a.example",
@@ -268,13 +266,13 @@ test("受付を無効にすると保留は失効し再有効化で復活しな�
   expect(store.list()).toEqual([]);
   expect(store.get(created.requestId)).toBeUndefined();
   expect(store.size()).toBe(0);
-  expect(store.approve(created.requestId, "123456")).toEqual({ status: "NOT_PENDING" });
+  expect(store.approve(created.requestId)).toEqual({ status: "NOT_PENDING" });
   expect(store.reject(created.requestId)).toEqual({ status: "NOT_PENDING" });
   // 再有効化しても旧世代の保留は復活しない。
   acceptance.enable();
   expect(store.list()).toEqual([]);
   expect(store.get(created.requestId)).toBeUndefined();
-  expect(store.approve(created.requestId, "123456")).toEqual({ status: "NOT_PENDING" });
+  expect(store.approve(created.requestId)).toEqual({ status: "NOT_PENDING" });
 });
 
 test("受付を切替えても要求ID採番は初期化しない", () => {
@@ -291,24 +289,21 @@ test("受付を切替えても要求ID採番は初期化しない", () => {
   expect(isPairingRequestId(second.requestId)).toBe(true);
 });
 
-test("承認の失敗理由は未保留・書式・不一致・接続の順で区別する", () => {
+test("承認の失敗理由は未保留と失効で区別する", () => {
   const { acceptance, store } = setupPairing(undefined, { generateCode: () => "123456" });
-  // 未知 ID は他条件より先に未保留になる。
-  expect(store.approve("pairing-unknown-1", "not-a-code")).toEqual({ status: "NOT_PENDING" });
+  // 未知 ID は未保留になる。
+  expect(store.approve("pairing-unknown-1")).toEqual({ status: "NOT_PENDING" });
   acceptance.enable();
   const created = store.create("conn-a", "https://a.example");
   if (created.status !== "CREATED") throw new Error("保留が作れない。");
-  // 書式不正は無効であり保留は残る。
-  expect(store.approve(created.requestId, "abc")).toEqual({ status: "INVALID_CODE" });
-  expect(store.get(created.requestId)?.requestId).toBe(created.requestId);
-  // コード不一致は区別され保留は残る。
-  expect(store.approve(created.requestId, "654321")).toEqual({ status: "CODE_MISMATCH" });
-  expect(store.get(created.requestId)?.requestId).toBe(created.requestId);
-  // 無効化で失効した世代の要求は未保留になる（不可逆に失効する）。
-  acceptance.disable();
-  expect(store.approve(created.requestId, "123456")).toEqual({ status: "NOT_PENDING" });
-  // 無効な受付での新規作成は受け付けない。
-  expect(store.create("conn-b", "https://b.example")).toEqual({ status: "ACCEPTANCE_CLOSED" });
+  // 要求 ID だけで承認が成立する。
+  expect(store.approve(created.requestId)).toEqual({
+    status: "APPROVED",
+    connectionId: "conn-a",
+    origin: "https://a.example",
+  });
+  // 二重承認は未保留になる。
+  expect(store.approve(created.requestId)).toEqual({ status: "NOT_PENDING" });
 });
 
 test("無効前の承認は成功し承認済みは再有効化で復活しない", () => {
@@ -316,19 +311,17 @@ test("無効前の承認は成功し承認済みは再有効化で復活しな�
   acceptance.enable();
   const created = store.create("conn-a", "https://a.example");
   if (created.status !== "CREATED") throw new Error("保留が作れない。");
-  const code = store.get(created.requestId)?.code;
-  if (code === undefined) throw new Error("保留が見えない。");
   // 無効前の承認は成功する。
-  expect(store.approve(created.requestId, code)).toEqual({
+  expect(store.approve(created.requestId)).toEqual({
     status: "APPROVED",
     connectionId: "conn-a",
     origin: "https://a.example",
   });
   // 承認済みの要求は無効後に未保留であり、再有効化でも復活しない。
   acceptance.disable();
-  expect(store.approve(created.requestId, code)).toEqual({ status: "NOT_PENDING" });
+  expect(store.approve(created.requestId)).toEqual({ status: "NOT_PENDING" });
   acceptance.enable();
-  expect(store.approve(created.requestId, code)).toEqual({ status: "NOT_PENDING" });
+  expect(store.approve(created.requestId)).toEqual({ status: "NOT_PENDING" });
 });
 
 test("コード生成中の無効化と再有効化では旧世代として作らない", () => {
@@ -375,7 +368,7 @@ test("世代をまたぐ保留の持ち越しは拒否され同一接続は新�
   acceptance.enable();
   // 旧世代の要求は未保留であり、同一接続の新規作成を妨げない。
   expect(store.get(first.requestId)).toBeUndefined();
-  expect(store.approve(first.requestId, "123456")).toEqual({ status: "NOT_PENDING" });
+  expect(store.approve(first.requestId)).toEqual({ status: "NOT_PENDING" });
   const second = store.create("conn-a", "https://a.example");
   expect(second.status).toBe("CREATED");
   if (second.status !== "CREATED") throw new Error("2件目が作れない。");
@@ -399,8 +392,8 @@ test("複数の保留は受付無効化ですべて終わる", () => {
   expect(store.size()).toBe(0);
   expect(store.get(first.requestId)).toBeUndefined();
   expect(store.get(second.requestId)).toBeUndefined();
-  expect(store.approve(first.requestId, "111111")).toEqual({ status: "NOT_PENDING" });
-  expect(store.approve(second.requestId, "222222")).toEqual({ status: "NOT_PENDING" });
+  expect(store.approve(first.requestId)).toEqual({ status: "NOT_PENDING" });
+  expect(store.approve(second.requestId)).toEqual({ status: "NOT_PENDING" });
 });
 
 test("生存判定の例外は内部エラーとして対象だけを終わらせる", () => {
@@ -425,36 +418,15 @@ test("生存判定の例外は内部エラーとして対象だけを終わら�
     throw new Error("保留が作れない。");
   }
   // 生存不明を切断済みと断定せず、専用の失敗結果を返す。例外は呼び出し側へ漏らさない。
-  expect(store.approve(bad.requestId, "222222")).toEqual({ status: "CONNECTION_CHECK_ERROR" });
+  expect(store.approve(bad.requestId)).toEqual({ status: "CONNECTION_CHECK_ERROR" });
   // 対象のエントリは残らないが、他要求は巻き込まない。
-  expect(store.approve(bad.requestId, "222222")).toEqual({ status: "NOT_PENDING" });
+  expect(store.approve(bad.requestId)).toEqual({ status: "NOT_PENDING" });
   expect(store.get(bad.requestId)).toBeUndefined();
-  expect(store.approve(good.requestId, "111111")).toEqual({
+  expect(store.approve(good.requestId)).toEqual({
     status: "APPROVED",
     connectionId: "conn-good",
     origin: "https://a.example",
   });
-});
-
-test("書式不正のコードは無効で保留は残る", () => {
-  const { acceptance, store } = setupPairing(undefined, { generateCode: () => "123456" });
-  acceptance.enable();
-  const created = store.create("conn-a", "https://a.example");
-  if (created.status !== "CREATED") throw new Error("保留が作れない。");
-  expect(store.approve(created.requestId, "abc")).toEqual({ status: "INVALID_CODE" });
-  expect(store.approve(created.requestId, "12345")).toEqual({ status: "INVALID_CODE" });
-  expect(store.get(created.requestId)?.requestId).toBe(created.requestId);
-  expect(store.approve(created.requestId, "123456").status).toBe("APPROVED");
-});
-
-test("コード不一致は区別され保留は残る", () => {
-  const { acceptance, store } = setupPairing(undefined, { generateCode: () => "123456" });
-  acceptance.enable();
-  const created = store.create("conn-a", "https://a.example");
-  if (created.status !== "CREATED") throw new Error("保留が作れない。");
-  expect(store.approve(created.requestId, "654321")).toEqual({ status: "CODE_MISMATCH" });
-  expect(store.get(created.requestId)?.requestId).toBe(created.requestId);
-  expect(store.approve(created.requestId, "123456").status).toBe("APPROVED");
 });
 
 test("接続が死んだ保留は承認できず終わる", () => {
@@ -471,9 +443,9 @@ test("接続が死んだ保留は承認できず終わる", () => {
     throw new Error("保留が作れない。");
   }
   alive.delete("conn-b");
-  expect(store.approve(second.requestId, "222222")).toEqual({ status: "CONNECTION_GONE" });
-  expect(store.approve(second.requestId, "222222")).toEqual({ status: "NOT_PENDING" });
-  expect(store.approve(first.requestId, "111111").status).toBe("APPROVED");
+  expect(store.approve(second.requestId)).toEqual({ status: "CONNECTION_GONE" });
+  expect(store.approve(second.requestId)).toEqual({ status: "NOT_PENDING" });
+  expect(store.approve(first.requestId).status).toBe("APPROVED");
 });
 
 test("生存確認中に対象が消えたら承認せず未保留になる", () => {
@@ -498,7 +470,7 @@ test("生存確認中に対象が消えたら承認せず未保留になる", ()
   const created = store.create("conn-a", "https://a.example");
   if (created.status !== "CREATED") throw new Error("保留が作れない。");
   const targetId: string = created.requestId;
-  expect(store.approve(targetId, "123456")).toEqual({ status: "NOT_PENDING" });
+  expect(store.approve(targetId)).toEqual({ status: "NOT_PENDING" });
   expect(store.size()).toBe(0);
 });
 

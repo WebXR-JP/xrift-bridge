@@ -29,7 +29,7 @@ node apps/bridge-cli/dist/index.mjs --dev --origin http://localhost:5173
 - 本番経路の既定許可 `Origin` は `https://app.xrift.net` であり、正本は `packages/bridge-server/src/verify.ts` の `PRODUCTION_ORIGIN` とする。
 - 開発時は `--dev` と `--origin http://localhost:5173` を付け、`accept enable` の前に許可 `Origin` を確認する。`--origin` は `--dev` なしでは起動失敗する。
 - 待ち受けは `127.0.0.1` への明示 bind であり、正規接続先は `ws://127.0.0.1:3100/v1` である。ポート競合時は探索せず失敗する。
-- 対話命令の一覧は起動時の表示と `--help` の出力が正本である（`accept enable`・`accept disable`・`pending`・`approve <requestId> <code>`・`reject <requestId>`・`status`・`connections`・`disconnect <connectionId>`・`quit`）。
+- 対話命令の一覧は起動時の表示と `--help` の出力が正本である（`accept enable`・`accept disable`・`pending`・`approve <requestId>`・`reject <requestId>`・`status`・`connections`・`disconnect <connectionId>`・`quit`）。
 
 ### 診断ワールドの起動
 
@@ -62,10 +62,10 @@ vp run diagnostic-world#dev
 1. CLI で `accept enable` を入力する。`acceptance=enabled` と表示される。起動時は無効であり、自動では切り替わらないこと。
 2. 診断盤で「接続開始」を押す。盤の進行が「承認待ち」になり、比較コードが区切り表示される。
 3. CLI で `pending` を入力する。要求 ID・`Origin`・区切り付きコードが表示される。両画面のコードが一致することを目視で照合する。一致の記録は「一致した事実」のみとし、コード本文は残さない。
-4. CLI で `approve <requestId> <6桁コード>` を入力する（コードは区切りなし6文字の文字列）。`approved <requestId> connection=<connectionId>` が表示され、盤が「認証済み」へ遷移する。ワールド側へ `auth_ok` が届いた接続だけが認可される。
+4. CLI で `approve <requestId>` を入力する（引数は要求 ID だけ。比較コードの入力・照合は行わない）。`approved <requestId> connection=<connectionId>` が表示され、盤が「認証済み」へ遷移する。ワールド側へ `auth_ok` が届いた接続だけが認可される。
 5. 盤で「echo 往復」を押す。表示が「一致」になる（診断が採番した操作番号・バイト数・往復時間のみ残り、wire の連番は表示しない）。
 6. 盤で「ping」を押す。表示が「pong」になる（`data` 上の診断 payload `{op: "ping", id}` に対する `{op: "pong", id}` の応答。yamux 監視 Ping とは別物）。
-7. 誤コードの確認。別の承認待ち要求でわざと1桁変えたコードを `approve` する。`approve 失敗: CODE_MISMATCH <requestId>` となり、保留は残って接続も維持される。正しいコードで承認し直す。
+7. 取り違えの目視確認。二つの承認待ち要求を作り、両画面のコードに対応する行を選ぶ。異なるコードの行は承認せず、対応する行だけを `approve <requestId>` で承認する。承認しなかった方は保留のまま残り、接続も維持される。記録は対応する行を選んだ事実のみとし、コード本文は残さない。
 8. `reject` の確認。新しい要求を作り、CLI で `reject <requestId>` を入力する。`rejected <requestId>` が表示され、対象の接続が終了する。
 9. 取消の確認。新しい要求を作り、承認前に盤で「取消」を押す。承認待ち表示が消え、CLI の `pending` からも消える。
 10. 受付無効化の確認。CLI で `accept disable` を入力する。`acceptance=disabled` となり、開始待ち・承認待ちがすべて終了する。認可済み接続は維持され、echo が通ることを確認する。再有効化しても終了済みの要求は復活しない。
@@ -102,7 +102,7 @@ vp run diagnostic-world#dev
 | 承認           | 認可済みへ遷移               |      |      | 要求 ID・接続 ID             |
 | echo           | 一致                         |      |      | 操作番号・バイト数・往復時間 |
 | ping           | pong                         |      |      |                              |
-| 誤コード       | `CODE_MISMATCH` で保留維持   |      |      |                              |
+| 取り違え目視   | 異なるコードの行を承認しない |      |      | 対応する行を選んだ事実のみ   |
 | 拒否           | 対象接続の終了               |      |      |                              |
 | 取消           | 承認待ちの消去               |      |      |                              |
 | 受付無効化     | 待機終了・認可済み維持       |      |      |                              |
@@ -127,6 +127,15 @@ vp run diagnostic-world#dev
 - 実ホストで観測した不具合: ワールド読み込み時に、`assets.xrift.net` の外部 CSS（`style-c5847ad2a83f...css`）がホストの CSP `style-src 'self' https://fonts.googleapis.com 'unsafe-inline'` によりブロックされた。盤は 3D 描画のため実害は小さい見込みだが、実ホスト観測として残す。
 - 未了: runbook の正式な目視承認フロー、`auth_ok` 送信失敗／mux 初期化失敗／切替中 text の 3 分岐テスト、負荷試行。
 
+### 2026-10-14 GUI 目視確認（要求 ID だけの承認）
+
+2026-10-14 に人間が実施した GUI 経路の確認記録である。比較コード本文・業務 payload は残さない。本項の追記であり、上記の正式手順・記録用紙・2026-10-10 観測は書き換えない。
+
+- 日付：2026-10-14。実施は人間、結果は OK。
+- 観測：保留カードに入力欄・「比較コードを表示する」ボタンがなく、比較コードが自動表示される。ワールドとアプリの数字の一致を見てそのまま「承認する」で承認でき、取り下げも動作する。
+- 対応：`apps/bridge-gui-ui/pen/sketch.pen` は同ボタンを削除し、新表示（コード常時表示・表示ボタン／入力欄なし）に一致する。
+- 未確認：二重保留の GUI 目視、native 画素観測・実入力送信の自動化、実ワールドの耐久・負荷は扱わない。
+
 ### 異常系の理由別集計
 
 CLI の `status` に出る理由別カウンタを転記する。符号の正本は `packages/bridge-server/src/pairing.ts`・`packages/bridge-server/src/server.ts` とする。
@@ -148,7 +157,7 @@ CLI の `status` に出る理由別カウンタを転記する。符号の正本
 
 - 接続自体が届かない場合：接続先（数値 IP・ポート・パス `/v1`）・許可 `Origin`・待ち受けポート・CSP・LNA 許可の順に確認する。
 - 要求が保留にならない場合：受付が有効か、開始メッセージが接続につき1回か、レート・上限超過で `status` に集計されていないかを確認する。
-- 承認が通らない場合：要求 ID とコードの組・接続の生存・受付状態を確認する。符号（`NOT_PENDING`・`INVALID_CODE`・`CODE_MISMATCH`・`CONNECTION_GONE`・`CONNECTION_CHECK_ERROR`）で切り分ける。
+- 承認が通らない場合：要求 ID・接続の生存・受付状態を確認する。符号（`NOT_PENDING`・`CONNECTION_GONE`・`CONNECTION_CHECK_ERROR`）で切り分ける。符号の正本は `packages/bridge-server/src/pairing.ts`・`packages/bridge-server/src/server.ts` とする（`CODE_MISMATCH`・`INVALID_CODE` は持たない）。
 - 認可後に業務が通らない場合：認可状態と接続 ID・Session の対応を確認する。認可前の操作は拒否が正しい。
 - ブラウザの安全機能を無効化した成功は合格にしない。
 - XRift の審査不通過は正式な許可可否を確認し、検出されない API への置換で迂回しない。

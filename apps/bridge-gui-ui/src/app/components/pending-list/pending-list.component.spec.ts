@@ -3,7 +3,8 @@ import { TestBed } from "@angular/core/testing";
 import { beforeEach, describe, expect, it } from "vite-plus/test";
 import { PendingListComponent } from "./pending-list.component.ts";
 
-// 保留一覧の描画と要求の送出。入力値は行が保持し、親の更新で失わせない。
+// 保留一覧の描画と要求の送出。取得状態は入力で受け、行へ渡すだけである。
+// 比較コードの入力欄は持たず、自動取得と再試行だけを配線する。
 
 beforeEach(() => {
   TestBed.configureTestingModule({
@@ -21,71 +22,128 @@ describe("保留一覧の表示", () => {
     expect(text).toContain("保留は無い");
   });
 
-  it("要求識別子ごとに操作を出し表示要求を送出する", async () => {
+  it("入力欄と表示ボタンを持たない", async () => {
     await TestBed.compileComponents();
     const fixture = TestBed.createComponent(PendingListComponent);
     fixture.componentRef.setInput("pending", [{ requestId: "r1" }]);
+    fixture.componentRef.setInput(
+      "views",
+      new Map([["r1", { available: true, requestId: "r1", code: "x", displayCode: "y" }]]),
+    );
+    fixture.componentRef.setInput("fetchPending", []);
+    fixture.componentRef.setInput("fetchFailed", []);
+    fixture.detectChanges();
+    const root = fixture.nativeElement as HTMLElement;
+    expect(root.querySelector("input")).toBe(null);
+    const labels = Array.from(root.querySelectorAll("button")).map(
+      (button) => button.textContent ?? "",
+    );
+    expect(labels.some((label) => label.includes("比較コードを表示する"))).toBe(false);
+  });
+
+  it("複数行の要求識別子ごとに操作を出す", async () => {
+    await TestBed.compileComponents();
+    const fixture = TestBed.createComponent(PendingListComponent);
+    fixture.componentRef.setInput("pending", [{ requestId: "r1" }, { requestId: "r2" }]);
+    fixture.componentRef.setInput(
+      "views",
+      new Map([
+        ["r1", { available: true, requestId: "r1", code: "x", displayCode: "y1" }],
+        ["r2", { available: true, requestId: "r2", code: "x", displayCode: "y2" }],
+      ]),
+    );
     fixture.detectChanges();
     const root = fixture.nativeElement as HTMLElement;
     expect(root.textContent).toContain("r1");
-    let shown: string[] = [];
-    fixture.componentInstance.showRequested.subscribe((requestId) => {
-      shown = [...shown, requestId];
-    });
-    const showButton = Array.from(root.querySelectorAll("button")).find((button) =>
-      (button.textContent ?? "").includes("比較コードを表示する"),
-    );
-    showButton?.click();
-    expect(shown).toEqual(["r1"]);
+    expect(root.textContent).toContain("r2");
+    expect(root.textContent).toContain("y1");
+    expect(root.textContent).toContain("y2");
   });
 
-  it("承認では入力欄の比較コードを載せる", async () => {
+  it("承認では要求識別子だけを載せる", async () => {
     await TestBed.compileComponents();
     const fixture = TestBed.createComponent(PendingListComponent);
-    fixture.componentRef.setInput("pending", [{ requestId: "r1" }]);
-    fixture.detectChanges();
-    const root = fixture.nativeElement as HTMLElement;
-    const field = root.querySelector("input") as HTMLInputElement | null;
-    field?.focus();
-    if (field !== null) {
-      field.value = "041003";
-      field.dispatchEvent(new Event("input"));
-    }
-    fixture.detectChanges();
-    let approved: unknown[] = [];
-    fixture.componentInstance.approveRequested.subscribe((request) => {
-      approved = [...approved, request];
-    });
-    const approveButton = Array.from(root.querySelectorAll("button")).find((button) =>
-      (button.textContent ?? "").includes("承認する"),
-    );
-    approveButton?.click();
-    expect(approved).toEqual([{ requestId: "r1", code: "041003" }]);
-  });
-
-  it("状態更新でも入力値と行の同一性を保つ", async () => {
-    await TestBed.compileComponents();
-    const fixture = TestBed.createComponent(PendingListComponent);
-    fixture.componentRef.setInput("pending", [{ requestId: "r1" }]);
-    fixture.detectChanges();
-    const before = fixture.nativeElement as HTMLElement;
-    const fieldBefore = before.querySelector("input") as HTMLInputElement | null;
-    if (fieldBefore !== null) {
-      fieldBefore.value = "041003";
-      fieldBefore.dispatchEvent(new Event("input"));
-    }
-    fixture.detectChanges();
-    // 保留は同じで表示だけ更新する（改訂が進んだ場合の写し）。
     fixture.componentRef.setInput("pending", [{ requestId: "r1" }]);
     fixture.componentRef.setInput(
       "views",
       new Map([["r1", { available: true, requestId: "r1", code: "x", displayCode: "y" }]]),
     );
     fixture.detectChanges();
-    const after = fixture.nativeElement as HTMLElement;
-    const fieldAfter = after.querySelector("input") as HTMLInputElement | null;
-    expect(fieldAfter?.value).toBe("041003");
-    expect(fieldAfter?.isSameNode(fieldBefore)).toBe(true);
+    const root = fixture.nativeElement as HTMLElement;
+    let approved: unknown[] = [];
+    fixture.componentInstance.approveRequested.subscribe((requestId) => {
+      approved = [...approved, requestId];
+    });
+    const approveButton = Array.from(root.querySelectorAll("button")).find((button) =>
+      (button.textContent ?? "").includes("承認する"),
+    );
+    approveButton?.click();
+    expect(approved).toEqual(["r1"]);
+  });
+
+  it("取得中は承認不可であり取得後は承認可である", async () => {
+    await TestBed.compileComponents();
+    const fixture = TestBed.createComponent(PendingListComponent);
+    fixture.componentRef.setInput("pending", [{ requestId: "r1" }]);
+    fixture.componentRef.setInput("fetchPending", ["r1"]);
+    fixture.detectChanges();
+    let root = fixture.nativeElement as HTMLElement;
+    expect(root.textContent).toContain("取得しています");
+    const fetchingApprove = Array.from(root.querySelectorAll("button")).find((button) =>
+      (button.textContent ?? "").includes("承認する"),
+    );
+    expect(fetchingApprove?.disabled).toBe(true);
+    // 取得後は承認できる。
+    fixture.componentRef.setInput("fetchPending", []);
+    fixture.componentRef.setInput(
+      "views",
+      new Map([["r1", { available: true, requestId: "r1", code: "x", displayCode: "y" }]]),
+    );
+    fixture.detectChanges();
+    root = fixture.nativeElement as HTMLElement;
+    const readyApprove = Array.from(root.querySelectorAll("button")).find((button) =>
+      (button.textContent ?? "").includes("承認する"),
+    );
+    expect(readyApprove?.disabled).toBe(false);
+  });
+
+  it("取得失敗時は再試行の要求を送出する", async () => {
+    await TestBed.compileComponents();
+    const fixture = TestBed.createComponent(PendingListComponent);
+    fixture.componentRef.setInput("pending", [{ requestId: "r1" }]);
+    fixture.componentRef.setInput("fetchFailed", ["r1"]);
+    fixture.detectChanges();
+    const root = fixture.nativeElement as HTMLElement;
+    expect(root.textContent).toContain("取得に失敗した");
+    let retried: string[] = [];
+    fixture.componentInstance.retryRequested.subscribe((requestId) => {
+      retried = [...retried, requestId];
+    });
+    const retryButton = Array.from(root.querySelectorAll("button")).find((button) =>
+      (button.textContent ?? "").includes("再試行"),
+    );
+    retryButton?.click();
+    expect(retried).toEqual(["r1"]);
+  });
+
+  it("状態更新でも行の同一性を保つ", async () => {
+    await TestBed.compileComponents();
+    const fixture = TestBed.createComponent(PendingListComponent);
+    fixture.componentRef.setInput("pending", [{ requestId: "r1" }]);
+    fixture.componentRef.setInput("fetchPending", ["r1"]);
+    fixture.detectChanges();
+    const before = (fixture.nativeElement as HTMLElement).querySelector("app-pending-row");
+    // 保留は同じで表示だけ更新する（改訂が進んだ場合の写し）。
+    fixture.componentRef.setInput("pending", [{ requestId: "r1" }]);
+    fixture.componentRef.setInput("fetchPending", []);
+    fixture.componentRef.setInput(
+      "views",
+      new Map([["r1", { available: true, requestId: "r1", code: "x", displayCode: "y" }]]),
+    );
+    fixture.detectChanges();
+    const after = (fixture.nativeElement as HTMLElement).querySelector("app-pending-row");
+    expect(after?.isSameNode(before)).toBe(true);
+    expect((fixture.nativeElement as HTMLElement).textContent).toContain("y");
   });
 
   it("取得不能時は理由だけを出す", async () => {
@@ -106,29 +164,19 @@ describe("保留一覧の表示", () => {
     await TestBed.compileComponents();
     const fixture = TestBed.createComponent(PendingListComponent);
     fixture.componentRef.setInput("pending", [{ requestId: "r1" }]);
+    fixture.componentRef.setInput(
+      "views",
+      new Map([["r1", { available: true, requestId: "r1", code: "x", displayCode: "y" }]]),
+    );
     fixture.detectChanges();
     const root = fixture.nativeElement as HTMLElement;
     const byLabel = (label: string): HTMLButtonElement | undefined =>
       Array.from(root.querySelectorAll("button")).find((button) =>
         (button.textContent ?? "").includes(label),
       );
-    const show = byLabel("比較コードを表示する");
     const approve = byLabel("承認する");
     const reject = byLabel("取り下げる");
-    expect(show?.classList.contains("spartan-button-variant-outline")).toBe(true);
     expect(approve?.classList.contains("spartan-button-variant-default")).toBe(true);
     expect(reject?.classList.contains("spartan-button-variant-outline")).toBe(true);
-  });
-
-  it("比較コード入力欄の識別子と属性を保つ", async () => {
-    await TestBed.compileComponents();
-    const fixture = TestBed.createComponent(PendingListComponent);
-    fixture.componentRef.setInput("pending", [{ requestId: "r1" }]);
-    fixture.detectChanges();
-    const root = fixture.nativeElement as HTMLElement;
-    const field = root.querySelector("input") as HTMLInputElement | null;
-    expect(field?.id).toBe("code-input-r1");
-    expect(field?.maxLength).toBe(6);
-    expect(field?.autocomplete).toBe("off");
   });
 });

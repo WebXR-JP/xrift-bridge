@@ -1,29 +1,21 @@
 /**
- * 保留行の比較コード入力と操作の行部品。
+ * 保留行の比較コード表示と操作の行部品。
  *
- * 入力値はこの行だけが保持し、親の状態更新で値・フォーカスを失わせない。
- * 親は `requestId` の同一性（`track`）でこの行を使い回す。比較コード本文は
- * 送るだけで記録しない（ログ・snapshot に残さない）。
+ * 比較コードの入力欄は持たず、自動取得した表示用コードを示すだけである。
+ * 取得成功まで承認は押せず、取得後は追加入力・確認なしで承認できる。
+ * 比較コード本文は送るだけで記録しない（ログ・snapshot に残さない）。
  * 行は札（`--card` 背景・`--border` 境界・角丸 8・padding 16）で描き、
- * 操作は helm ボタン（表示 outline・承認 primary・取下げ outline）にする。
+ * 操作は helm ボタン（承認 primary・再試行・取下げ outline）にする。
  */
-import { Component, input, output, signal } from "@angular/core";
+import { Component, input, output } from "@angular/core";
 import type { PairingViewResult } from "bridge-gui-contract/management";
+import type { PairingCodeState } from "../../Services/management.service.ts";
 import { HlmButton } from "../../ui/button/hlm-button.ts";
-import { HlmInput } from "../../ui/input/hlm-input.ts";
-
-/** 承認要求の内容。入力欄の比較コードをそのまま載せる。 */
-export interface ApproveRequest {
-  /** 照合対象の要求識別子。 */
-  readonly requestId: string;
-  /** 入力欄の比較コード（整形しない）。 */
-  readonly code: string;
-}
 
 @Component({
   selector: "app-pending-row",
   standalone: true,
-  imports: [HlmButton, HlmInput],
+  imports: [HlmButton],
   templateUrl: "./pending-row.component.html",
 })
 export class PendingRowComponent {
@@ -33,38 +25,31 @@ export class PendingRowComponent {
   /** 表示用の比較コード取得結果。未取得の間は undefined である。 */
   readonly view = input<PairingViewResult | undefined>(undefined);
 
-  /** 比較コード表示の要求。 */
-  readonly showRequested = output<string>();
+  /** 比較コードの取得状態。承認可否と本文表示の分岐に使う。 */
+  readonly codeState = input<PairingCodeState>("unfetched");
 
-  /** 承認の要求。入力欄の比較コードを載せる。 */
-  readonly approveRequested = output<ApproveRequest>();
+  /** 比較コード取得の再試行の要求。取得失敗時の明示操作だけに使う。 */
+  readonly retryRequested = output<string>();
+
+  /** 承認の要求。要求識別子だけを載せる。 */
+  readonly approveRequested = output<string>();
 
   /** 取り下げの要求。 */
   readonly rejectRequested = output<string>();
 
-  // ADR: 入力値は行の一時状態にのみ保持し、親の snapshot 更新で上書きしない。
-  // `[value]` と `(input)` で結び付け、親からの入力値の流入経路を作らない。
-  // 保留が消えたら行ごと破棄されるため、残存の掃除は不要である。
-  /** 入力欄の比較コード。保留行の一時状態にのみ保持する。 */
-  readonly code = signal("");
-
-  /**
-   * 入力欄の変更を一時状態へ写す。整形はしない。
-   *
-   * @param value - 入力欄の現在の値。
-   */
-  onCodeInput(value: string): void {
-    this.code.set(value);
+  /** 取得成功まで承認は押せない。取得後は追加入力なしで承認できる。 */
+  get canApprove(): boolean {
+    return this.codeState() === "ready";
   }
 
-  /** 比較コード表示を要求する。 */
-  onShow(): void {
-    this.showRequested.emit(this.requestId());
+  /** 比較コード取得の再試行を要求する。 */
+  onRetry(): void {
+    this.retryRequested.emit(this.requestId());
   }
 
-  /** 入力欄の比較コードで承認を要求する。 */
+  /** 要求識別子だけで承認を要求する。 */
   onApprove(): void {
-    this.approveRequested.emit({ requestId: this.requestId(), code: this.code() });
+    this.approveRequested.emit(this.requestId());
   }
 
   /** 取り下げを要求する。 */

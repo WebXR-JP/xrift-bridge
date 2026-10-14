@@ -152,11 +152,6 @@ function isPong(payload: unknown, id: string): boolean {
   return record["op"] === "pong" && record["id"] === id;
 }
 
-/** 誤った比較コードを決定的に作る（正誤の取り違えはしない）。 */
-function wrongCodeOf(code: string): string {
-  return `${code.startsWith("0") ? "1" : "0"}${code.slice(1)}`;
-}
-
 test("受付から承認・診断往復・切断・再接続まで通る", async () => {
   const backend = await startBackend();
   backend.enableAcceptance();
@@ -177,11 +172,8 @@ test("受付から承認・診断往復・切断・再接続まで通る", async
   expect(typeof shown.code).toBe("string");
   expect(shown.displayCode).toBe(formatPairingCode(first.code));
 
-  // 誤ったコードでは承認しない。承認可否は server が決める。
-  expect(
-    backend.approvePairing({ requestId: first.requestId, code: wrongCodeOf(first.code) }).status,
-  ).toBe("CODE_MISMATCH");
-  const approved = backend.approvePairing({ requestId: first.requestId, code: first.code });
+  // 要求 ID だけで承認する。承認可否は server が決める。
+  const approved = backend.approvePairing({ requestId: first.requestId });
   expect(approved.status).toBe("APPROVED");
   // 承認済みの保留は表示用にも残らない。
   expect(backend.getPairingView({ requestId: first.requestId }).available).toBe(false);
@@ -234,7 +226,7 @@ test("受付から承認・診断往復・切断・再接続まで通る", async
   const second = await receivePairing(backend);
   expect(second.requestId).not.toBe(first.requestId);
   await expectPendingProvider({ sessionProvider: second.sessionProvider });
-  const reapproved = backend.approvePairing({ requestId: second.requestId, code: second.code });
+  const reapproved = backend.approvePairing({ requestId: second.requestId });
   expect(reapproved.status).toBe("APPROVED");
   const provider2 = await second.sessionProvider;
   providers.push(provider2);
@@ -259,9 +251,7 @@ test("未割当ての reliable にデータを送ると中断される", async (
   const backend = await startBackend();
   backend.enableAcceptance();
   const pairing = await receivePairing(backend);
-  expect(backend.approvePairing({ requestId: pairing.requestId, code: pairing.code }).status).toBe(
-    "APPROVED",
-  );
+  expect(backend.approvePairing({ requestId: pairing.requestId }).status).toBe("APPROVED");
   const provider = await pairing.sessionProvider;
   providers.push(provider);
 
@@ -290,7 +280,7 @@ test("未割当ての reliable にデータを送ると中断される", async (
 test("不正な引数と終了中の操作を拒否する", async () => {
   const backend = await startBackend();
   expect(() => backend.getPairingView({ requestId: "" })).toThrowError(RangeError);
-  expect(() => backend.approvePairing({ requestId: "無い", code: 123 })).toThrowError(RangeError);
+  expect(() => backend.approvePairing({ requestId: 123 })).toThrowError(RangeError);
   expect(() => backend.rejectPairing({ requestId: "" })).toThrowError(RangeError);
   expect(() => backend.disconnectConnection({ connectionId: "" })).toThrowError(RangeError);
   expect(() => backend.assignPlugin({ pluginKind: "diagnostic", localSessionId: "" })).toThrowError(

@@ -18,7 +18,9 @@
     <app-pending-list
       [pending]="snapshot()?.pending ?? []"
       [views]="pairingViews()"
-      (showRequested)="onShowCode($event)"
+      [fetchPending]="pairingFetchPending()"
+      [fetchFailed]="pairingFetchFailed()"
+      (retryRequested)="onRetryPairingView($event)"
       (approveRequested)="onApprove($event)"
       (rejectRequested)="onReject($event)"
     />

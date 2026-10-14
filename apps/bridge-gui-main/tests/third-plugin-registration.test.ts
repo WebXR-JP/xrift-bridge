@@ -449,7 +449,7 @@ async function approveConnection(backend: GuiBackend): Promise<SessionProvider> 
   });
   void request.sessionProvider.catch(() => {});
   const pairing = await request.pairingInfo;
-  const approved = backend.approvePairing({ requestId: pairing.requestId, code: pairing.code });
+  const approved = backend.approvePairing({ requestId: pairing.requestId });
   expect(approved.status).toBe("APPROVED");
   const provider = await request.sessionProvider;
   providers.push(provider);

@@ -67,9 +67,7 @@ test("診断割当てしたセッションが終わると生成分も回収す�
   });
   void request.sessionProvider.catch(() => {});
   const pairing = await request.pairingInfo;
-  expect(backend.approvePairing({ requestId: pairing.requestId, code: pairing.code }).status).toBe(
-    "APPROVED",
-  );
+  expect(backend.approvePairing({ requestId: pairing.requestId }).status).toBe("APPROVED");
   const provider = await request.sessionProvider;
   providers.push(provider);
   await provider.tryCreateSession({

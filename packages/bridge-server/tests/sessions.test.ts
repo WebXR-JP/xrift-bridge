@@ -254,7 +254,7 @@ async function authorizeCollected(
   if (listed === undefined) throw new Error("保留一覧に見えない。");
   // ワールド画面と管理画面のコードは一致すること。
   expect(listed.code).toBe(pendingCode);
-  const approved = server.approvePairing(pendingRequestId, listed.code);
+  const approved = server.approvePairing(pendingRequestId);
   expect(approved.status).toBe("APPROVED");
   const ok = await collector.waitForType("auth_ok");
   if (ok.message.type !== "auth_ok") throw new Error("認可応答ではない。");

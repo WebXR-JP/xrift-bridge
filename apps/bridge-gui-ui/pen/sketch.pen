@@ -1179,20 +1179,6 @@
                           "gap": 8,
                           "children": [
                             {
-                              "id": "mOjAG",
-                              "type": "ref",
-                              "ref": "r:C10zH",
-                              "name": "Show Button",
-                              "descendants": {
-                                "r:l8v2I": {
-                                  "enabled": false
-                                },
-                                "r:poRwU": {
-                                  "content": "比較コードを表示する"
-                                }
-                              }
-                            },
-                            {
                               "id": "Luu8z",
                               "type": "ref",
                               "ref": "r:VSnC2",

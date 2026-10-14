@@ -767,8 +767,6 @@ test("実在する全符号に案内が付く", () => {
     "TOO_MANY_CONNECTIONS",
     "TOO_MANY_UNAUTHORIZED",
     "NOT_PENDING",
-    "INVALID_CODE",
-    "CODE_MISMATCH",
     "CONNECTION_GONE",
     "CONNECTION_CHECK_ERROR",
     "NOT_AUTHORIZED",

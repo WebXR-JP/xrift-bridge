@@ -29,6 +29,16 @@ import type { PluginViewState } from "../plugin-view-state.ts";
 import { derivePluginViewState, isPluginViewVisible } from "../plugin-view-state.ts";
 
 /**
+ * 比較コードの取得状態（保留行の表示分岐用）。
+ *
+ * `ready` は表示できるコードがある場合、`failed` は取得 RPC の失敗または
+ * 取得不能（`available:false`）の場合、`fetching` は取得中の場合、
+ * `unfetched` は自動取得前の瞬間的な未取得の場合である。未取得と取得中は
+ * いずれも「取得しています…」を示す。
+ */
+export type PairingCodeState = "unfetched" | "fetching" | "failed" | "ready";
+
+/**
  * main の JS 実行標識の合言葉。本文・payload ではなく到達確認用の固定値である。
  *
  * main が開発観測（`BRIDGE_GUI_NG_DEBUG=1`）で
@@ -121,6 +131,14 @@ export class ManagementService {
   private readonly retryPendingIds = signal<readonly string[]>([]);
   private readonly retryFailedIds = signal<readonly string[]>([]);
 
+  // ADR: 比較コードの自動取得の局所状態は二つの集合で持つ。保留 ID ごとに
+  // 一度だけ自動取得し、同じ ID の snapshot 更新・画面切替では再取得しない。
+  // 取得中は「取得しています…」を示し、RPC 失敗時は再試行付きの失敗表示に
+  // 使う。自動リトライループは作らず、再試行は明示操作だけである。
+  // snapshot の複製は作らず、対象の要求識別子だけを載せる。本文は載せない。
+  private readonly pairingFetchingIds = signal<readonly string[]>([]);
+  private readonly pairingFetchFailedIds = signal<readonly string[]>([]);
+
   /** 現在採用中の表示状態。未取得の間は null である。 */
   readonly snapshot = this.current.asReadonly();
 
@@ -144,6 +162,12 @@ export class ManagementService {
 
   /** 再試行要求自体が失敗した対象個体の識別子一覧。 */
   readonly retryRequestFailed = this.retryFailedIds.asReadonly();
+
+  /** 比較コードを取得中の保留の要求識別子一覧。 */
+  readonly pairingFetchPending = this.pairingFetchingIds.asReadonly();
+
+  /** 比較コードの取得 RPC に失敗した保留の要求識別子一覧。 */
+  readonly pairingFetchFailed = this.pairingFetchFailedIds.asReadonly();
 
   // ADR: 二重押下での重複送信を避けるため、実行中の操作を識別子で覚える。
   // 汎用 store は作らず、この集合だけを重複抑止に使う。失敗・成功のいずれでも
@@ -220,6 +244,9 @@ export class ManagementService {
         }
       }
       this.views.set(kept);
+      // 消えた保留の取得失敗表示も捨てる（再送基盤は作らない）。
+      const livePending = new Set(next.pending.map((entry) => entry.requestId));
+      this.pairingFetchFailedIds.update((ids) => ids.filter((id) => livePending.has(id)));
       // 採用中 snapshot から失敗が消えた個体の再試行要求失敗の注記も消す。
       // 次回再試行の成功まで残すと、別原因の再失敗に古い注記が載る。
       const liveFailures = new Set(next.pluginMountFailures.map((failure) => failure.instanceId));
@@ -232,6 +259,22 @@ export class ManagementService {
       // 遷移規則も採用中 snapshot の値を正本とし、以後のタグ配置に使う。
       this.pluginNavigationRules = [...next.pluginNavigationRules];
       this.reconcilePluginTags(next.pluginMounts);
+      // 新しい保留の比較コードだけを一度だけ自動取得する。同じ ID の
+      // snapshot 更新・画面切替では再取得せず、承認 RPC は送らない。
+      // 取得済み・取得中・取得失敗済みは飛ばし、自動リトライはしない。
+      for (const entry of next.pending) {
+        const requestId = entry.requestId;
+        if (this.views().has(requestId)) {
+          continue;
+        }
+        if (this.pairingFetchFailedIds().includes(requestId)) {
+          continue;
+        }
+        if (this.pairingFetchingIds().includes(requestId)) {
+          continue;
+        }
+        void this.fetchPairingView(requestId);
+      }
     } else {
       console.log(`[bridge-gui-ng] 古い状態を無視した: via=${via} incoming=${incoming.revision}`);
       this.appendLog(`無視 via=${via} incoming=${incoming.revision} current=${previous?.revision}`);
@@ -751,20 +794,60 @@ export class ManagementService {
   }
 
   /**
-   * 選択した保留の比較コードを表示用に取得する。承認はしない。
+   * 指定した保留の比較コードの取得状態を返す。表示分岐だけに使う。
    *
-   * 保留が消えた後に遅延応答が返っても再表示しない。本文はログに残さない。
+   * snapshot の複製は作らず、採用中の一時状態（取得結果・取得中・取得失敗）
+   * だけから都度導出する。
+   *
+   * @param requestId - 照合対象の要求識別子。
+   * @returns 取得状態。表示できるコードがある場合だけ `ready` である。
+   */
+  pairingCodeStateFor(requestId: string): PairingCodeState {
+    const view = this.views().get(requestId);
+    if (view?.available === true) {
+      return "ready";
+    }
+    if (this.pairingFetchingIds().includes(requestId)) {
+      return "fetching";
+    }
+    if (this.pairingFetchFailedIds().includes(requestId) || view !== undefined) {
+      return "failed";
+    }
+    return "unfetched";
+  }
+
+  /**
+   * 保留の比較コードを表示用に取得する。承認はしない。
+   *
+   * 採用経路の自動取得と明示の再試行で共有する。実行中の重複取得は抑止し、
+   * 遅延応答は応答の要求識別子が取得対象と一致し、かつ現在も保留が生存する
+   * 場合だけ表示し、消滅後は破棄する。本文はログに残さない。
+   * 承認 RPC は送らない。
    *
    * @param requestId - 照合対象の要求識別子。
    */
-  async showPairingView(requestId: string): Promise<void> {
-    const key = `show-code:${requestId}`;
+  private async fetchPairingView(requestId: string): Promise<void> {
+    const key = `pairing-view:${requestId}`;
     if (!this.beginOperation(key)) {
       return;
     }
+    // 取得開始時点で保留が無ければ送らない（消滅後の再表示を防ぐ）。
+    const aliveBefore =
+      this.current()?.pending.some((entry) => entry.requestId === requestId) ?? false;
+    if (!aliveBefore) {
+      this.endOperation(key);
+      return;
+    }
+    this.pairingFetchingIds.update((ids) => (ids.includes(requestId) ? ids : [...ids, requestId]));
     try {
       const result = await this.rpc.getPairingView(requestId);
+      // 応答の要求識別子が取得対象と一致しない場合は破棄する。
       // 応答待ちの間に保留が消えたら捨てる（再表示しない）。
+      if (result.available && result.requestId !== requestId) {
+        console.log(`[bridge-gui-ng] 別保留の表示を破棄した: requestId=${requestId}`);
+        this.appendLog(`比較コード表示を破棄した requestId=${requestId}`);
+        return;
+      }
       const live = this.current()?.pending.some((entry) => entry.requestId === requestId) ?? false;
       if (!live) {
         console.log(`[bridge-gui-ng] 消滅した保留の表示を破棄した: requestId=${requestId}`);
@@ -774,6 +857,8 @@ export class ManagementService {
       const kept = new Map(this.views());
       kept.set(requestId, result);
       this.views.set(kept);
+      // 取得できたため失敗表示は消す。自動リトライはしない。
+      this.pairingFetchFailedIds.update((ids) => ids.filter((id) => id !== requestId));
       // 成否の符号だけを残す。本文・表示形はログに載せない。
       if (result.available) {
         console.log(`[bridge-gui-ng] 比較コード表示を取得した: requestId=${requestId}`);
@@ -787,29 +872,55 @@ export class ManagementService {
         );
       }
     } catch {
+      // 保留が消えた後の失敗は残さない（行が無いため）。
+      const live = this.current()?.pending.some((entry) => entry.requestId === requestId) ?? false;
+      if (!live) {
+        console.log(`[bridge-gui-ng] 消滅した保留の表示を破棄した: requestId=${requestId}`);
+        this.appendLog(`比較コード表示を破棄した requestId=${requestId}`);
+        return;
+      }
+      this.pairingFetchFailedIds.update((ids) =>
+        ids.includes(requestId) ? ids : [...ids, requestId],
+      );
       console.log(`[bridge-gui-ng] 比較コード表示の取得に失敗した: requestId=${requestId}`);
       this.appendLog(`比較コード表示の取得に失敗した requestId=${requestId}`);
     } finally {
+      this.pairingFetchingIds.update((ids) => ids.filter((id) => id !== requestId));
       this.endOperation(key);
     }
   }
 
   /**
-   * 保留を比較コード照合で承認する。承認可否は server が決める。
+   * 比較コードの取得を明示に再試行する。承認はしない。
    *
-   * 入力コードでの自動承認はしない。明示の操作だけが承認する。
+   * 自動取得で失敗・取得不能になった場合の再試行だけに使い、自動リトライ
+   * ループは作らない。取得中は抑止し、承認 RPC は送らない。
    *
    * @param requestId - 照合対象の要求識別子。
-   * @param code - 入力欄の比較コード（整形しない）。
    */
-  async approvePairing(requestId: string, code: string): Promise<void> {
+  async retryPairingView(requestId: string): Promise<void> {
+    // 再試行中は取得中表示にするため、失敗表示を先に消す。
+    // 取得自体の重複抑止は取得処理が行う。
+    this.pairingFetchFailedIds.update((ids) => ids.filter((id) => id !== requestId));
+    await this.fetchPairingView(requestId);
+  }
+
+  /**
+   * 保留を要求 ID だけで承認する。承認可否は server が決める。
+   *
+   * 比較コードの取得とは独立し、取得から承認 RPC は自動で送らない。
+   * 明示の操作だけが承認する。承認・取り下げの実行中は対象行の重複送信を
+   * 抑止する。本文はログに載せない。
+   *
+   * @param requestId - 承認対象の要求識別子。
+   */
+  async approvePairing(requestId: string): Promise<void> {
     const key = `approve:${requestId}`;
     if (!this.beginOperation(key)) {
       return;
     }
     try {
-      // 入力コードは送るだけで記録しない。本文はログに載せない。
-      const result = await this.rpc.approvePairing(requestId, code);
+      const result = await this.rpc.approvePairing(requestId);
       console.log(`[bridge-gui-ng] 承認の結果: requestId=${requestId} status=${result.status}`);
       this.appendLog(`承認の結果 requestId=${requestId} status=${result.status}`);
       await this.refresh("承認");

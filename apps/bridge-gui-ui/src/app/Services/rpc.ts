@@ -136,14 +136,15 @@ export class ManagementRpcClient {
   }
 
   /**
-   * 保留を比較コード照合で承認する。承認可否は server が決める。
+   * 保留を要求 ID だけで承認する。承認可否は server が決める。
    *
-   * @param requestId - 照合対象の要求識別子。
-   * @param code - 入力欄の比較コード（整形しない）。
+   * 比較コードは表示専用であり、承認には送らない。
+   *
+   * @param requestId - 承認対象の要求識別子。
    * @returns 承認結果。
    */
-  approvePairing(requestId: string, code: string): Promise<ApprovalResult> {
-    return this.rpc.request.approvePairing({ requestId, code });
+  approvePairing(requestId: string): Promise<ApprovalResult> {
+    return this.rpc.request.approvePairing({ requestId });
   }
 
   /**

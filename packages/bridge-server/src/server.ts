@@ -11,8 +11,8 @@
  * （認可前 text／切替中／mux／closing）で分ける。承認時に `auth_ok` を text で
  * 送り、その完了（`ws.send` callback）で mux を開始する。
  *
- * 比較コードは両画面への表示と照合にだけ使い、構造化ログ・URL・永続保存・
- * 診断 JSON には出さない。承認操作はローカル管理境界だけに置き、
+ * 比較コードは両画面への表示と人間による目視照合にだけ使い、承認の照合・
+ * 資格情報には使わず、構造化ログ・URL・永続保存・診断 JSON には出さない。承認操作はローカル管理境界だけに置き、
  * ワールド向け WebSocket には公開しない。
  *
  * @packageDocumentation
@@ -137,7 +137,8 @@ export interface AcceptanceInfo {
  * 保留中のペアリング要求の公開内容。
  *
  * 比較コードを含む。呼び出し側はログ・URL・永続保存に出さず、両画面への
- * 表示と照合にだけ使うこと。時間での失効を持たない。
+ * 表示と人間による目視照合にだけ使い、承認の照合・資格情報には使わないこと。
+ * 時間での失効を持たない。
  */
 export interface PendingPairingInfo {
   /** 再利用しないペアリング要求の識別子。 */
@@ -162,12 +163,7 @@ export type ApprovalResult =
       readonly origin: string;
     }
   | {
-      readonly status:
-        | "NOT_PENDING"
-        | "INVALID_CODE"
-        | "CODE_MISMATCH"
-        | "CONNECTION_GONE"
-        | "CONNECTION_CHECK_ERROR";
+      readonly status: "NOT_PENDING" | "CONNECTION_GONE" | "CONNECTION_CHECK_ERROR";
     };
 
 /** 拒否結果。 */
@@ -229,16 +225,18 @@ export interface BridgeServer {
   /** 生存中の保留一覧。時間での失効を持たない。 */
   listPending(): readonly PendingPairingInfo[];
   /**
-   * 保留を承認する。要求 ID と比較コードの両方を照合し、その要求だけ認可する。
+   * 保留を承認する。要求 ID だけを照合し、その要求だけ認可する。
+   *
+   * 比較コードの入力・照合は行わない。コードの生成・両画面への表示・
+   * 人間による目視照合は維持する。
    *
    * WebSocket 経路からは呼べない境界に置くこと。承認成功は相手への
    * `auth_ok` 到達を保証しない。
    *
    * @param requestId - 承認する要求の識別子。
-   * @param code - 照合する比較コード（文字列のまま、先頭ゼロ保持）。
    * @returns 承認結果。
    */
-  approvePairing(requestId: string, code: string): ApprovalResult;
+  approvePairing(requestId: string): ApprovalResult;
   /**
    * 保留を取り下げる。対象の接続を終了する。
    *
@@ -1163,9 +1161,9 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
         code: entry.code,
         issuedAt: entry.issuedAt,
       })),
-    approvePairing: (requestId: string, code: string): ApprovalResult => {
+    approvePairing: (requestId: string): ApprovalResult => {
       // 承認と無効化は同期的に直列化する。承認成功なら切替開始まで確定する。
-      const result = pairing.approve(requestId, code);
+      const result = pairing.approve(requestId);
       if (result.status === "APPROVED") {
         const state = findById(result.connectionId);
         if (
@@ -1191,12 +1189,6 @@ export async function createBridgeServer(options: BridgeOptions): Promise<Bridge
         // 受信形式の推測判別は行わない。
         beginSwitch(state, requestId);
         return { status: "APPROVED", connectionId: result.connectionId, origin: result.origin };
-      }
-      if (result.status === "INVALID_CODE" || result.status === "CODE_MISMATCH") {
-        // 保留は残る。人間が正しいコードで再試行できる。
-        stats.pairingFailure += 1;
-        countRejection(result.status);
-        return result;
       }
       if (result.status === "NOT_PENDING") {
         stats.pairingFailure += 1;
