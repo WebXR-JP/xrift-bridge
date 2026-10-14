@@ -1,0 +1,134 @@
+<div class="flex min-h-screen" style="background: var(--background)">
+  <aside
+    class="flex w-[337px] shrink-0 flex-col gap-4 border-r p-4"
+    style="background: var(--card); border-right-color: var(--border)"
+  >
+    <div class="flex items-center gap-3">
+      <span
+        class="flex h-9 w-9 shrink-0 items-center justify-center rounded-[10px]"
+        style="background: var(--sidebar-accent)"
+      >
+        <ng-icon
+          name="lucideHexagon"
+          style="font-size: 18px; color: var(--sidebar-accent-foreground)"
+        />
+      </span>
+      <span class="flex min-w-0 flex-col">
+        <span style="font-size: 15px; font-weight: 600; color: var(--foreground)"
+          >XRift Bridge</span
+        >
+        <span style="font-size: 12px; color: var(--muted-foreground)">管理画面</span>
+      </span>
+    </div>
+
+    <section
+      class="flex flex-col gap-2 rounded-lg p-3"
+      style="background: var(--muted)"
+      aria-label="状態"
+    >
+      <h2 style="font-size: 12px; font-weight: 500; color: var(--muted-foreground)">状態</h2>
+      <div class="flex items-center justify-between">
+        <span style="font-size: 12px; color: var(--muted-foreground)">受付</span>
+        <span
+          class="flex items-center gap-1.5"
+          style="font-size: 12px; font-weight: 500; color: var(--card-foreground)"
+        >
+          @if (status().accepting === null) {
+            <span>—</span>
+          } @else {
+            <span
+              class="inline-block h-2 w-2 rounded-full"
+              style="background: var(--success)"
+            ></span>
+            <span>{{ status().accepting ? "受付中" : "受付停止中" }}</span>
+          }
+        </span>
+      </div>
+      <div class="flex items-center justify-between">
+        <span style="font-size: 12px; color: var(--muted-foreground)">保留</span>
+        <span style="font-size: 12px; font-weight: 500; color: var(--card-foreground)">{{
+          summaryCountText(status().pendingCount)
+        }}</span>
+      </div>
+      <div class="flex items-center justify-between">
+        <span style="font-size: 12px; color: var(--muted-foreground)">接続</span>
+        <span style="font-size: 12px; font-weight: 500; color: var(--card-foreground)">{{
+          summaryCountText(status().connectionCount)
+        }}</span>
+      </div>
+      <div class="flex items-center justify-between">
+        <span style="font-size: 12px; color: var(--muted-foreground)">生存セッション</span>
+        <span style="font-size: 12px; font-weight: 500; color: var(--card-foreground)">{{
+          summaryCountText(status().sessionCount)
+        }}</span>
+      </div>
+    </section>
+
+    <nav class="flex flex-col" aria-label="管理">
+      <h2 class="px-2" style="font-size: 12px; font-weight: 500; color: var(--muted-foreground)">
+        管理
+      </h2>
+      @for (view of views(); track view.key) {
+        <button
+          type="button"
+          [attr.data-nav-key]="view.key"
+          [attr.aria-current]="view.key === selectedKey() ? 'page' : null"
+          (click)="selectRequested.emit(view.key)"
+          class="flex w-full items-center gap-2 rounded-md px-2 py-1.5"
+          [style.background]="view.key === selectedKey() ? 'var(--sidebar-accent)' : 'transparent'"
+        >
+          <ng-icon
+            [name]="view.iconName"
+            style="font-size: 16px"
+            [style.color]="
+              view.key === selectedKey() ? 'var(--sidebar-foreground)' : 'var(--muted-foreground)'
+            "
+          />
+          <span
+            class="min-w-0 flex-1 text-left"
+            style="font-size: 14px; color: var(--foreground)"
+            [style.fontWeight]="view.key === selectedKey() ? '500' : '400'"
+            >{{ view.navLabel }}</span
+          >
+          @if (countText(view.key); as countLabel) {
+            <span style="font-size: 12px; color: var(--muted-foreground)">{{ countLabel }}</span>
+          }
+        </button>
+      }
+    </nav>
+
+    <div class="flex-1"></div>
+    <div class="h-px" style="background: var(--border)"></div>
+    <button
+      type="button"
+      data-action="quit"
+      (click)="quitRequested.emit()"
+      class="flex w-full items-center gap-2 rounded-md px-2 py-1.5"
+      style="background: transparent"
+    >
+      <ng-icon name="lucidePower" style="font-size: 16px; color: var(--destructive)" />
+      <span class="min-w-0 flex-1 text-left" style="font-size: 14px; color: var(--destructive)"
+        >終了</span
+      >
+    </button>
+  </aside>
+
+  <div class="flex min-w-0 flex-1 flex-col gap-4 p-8">
+    @if (selectedView(); as current) {
+      <header class="flex flex-col gap-1">
+        <h1 class="m-0" style="font-size: 28px; font-weight: 700; color: var(--foreground)">
+          {{ current.title }}
+        </h1>
+        <p class="m-0" style="font-size: 14px; color: var(--muted-foreground)">
+          {{ current.subtitle }}
+        </p>
+      </header>
+    }
+    <div
+      class="flex min-h-0 flex-1 flex-col gap-6 overflow-auto border p-6"
+      style="background: var(--card); border-color: var(--border); border-radius: var(--radius)"
+    >
+      <ng-content />
+    </div>
+  </div>
+</div>

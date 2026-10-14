@@ -1,5 +1,6 @@
 import { provideZonelessChangeDetection, signal } from "@angular/core";
 import { TestBed } from "@angular/core/testing";
+import type { ComponentFixture } from "@angular/core/testing";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { AppComponent } from "./app.component.ts";
 import { ManagementService } from "./Services/management.service.ts";
@@ -93,5 +94,95 @@ describe("入れ物の起動", () => {
     expect(fixture.nativeElement.querySelector("#plugin-host")).not.toBe(null);
     expect(stub.registerMountHosts).toHaveBeenCalledTimes(1);
     expect(stub.refreshSpike).toHaveBeenCalledWith("初期化");
+  });
+});
+
+// 2カラム化後の画面選択。5パネルは常時マウントし、表示切替だけを行う。
+// 切替は業務 RPC を送らず、snapshot 更新で選択は戻らないことを確かめる。
+
+/** パネル要素を求める。常時マウントのため、欠けてはならない。 */
+function panelOf(fixture: ComponentFixture<AppComponent>, key: string): HTMLElement {
+  const root = fixture.nativeElement as HTMLElement;
+  const panel = root.querySelector(`[data-panel="${key}"]`);
+  if (panel === null) {
+    throw new Error(`パネルが無い: ${key}`);
+  }
+  return panel as HTMLElement;
+}
+
+/** ナビ項目を押す。表示切替だけであり、業務 RPC は送らない。 */
+function selectView(fixture: ComponentFixture<AppComponent>, key: string): void {
+  const root = fixture.nativeElement as HTMLElement;
+  const button = root.querySelector(`nav button[data-nav-key="${key}"]`);
+  if (button === null) {
+    throw new Error(`ナビ項目が無い: ${key}`);
+  }
+  (button as HTMLButtonElement).click();
+  fixture.detectChanges();
+}
+
+describe("画面選択とパネル切替", () => {
+  it("5つのナビ項目があり初期は接続を選ぶ", async () => {
+    const { fixture } = await prepareRoot();
+    const root = fixture.nativeElement as HTMLElement;
+    const navButtons = root.querySelectorAll("nav button[data-nav-key]");
+    expect(navButtons.length).toBe(5);
+    expect(
+      root.querySelector('nav button[data-nav-key="connections"]')?.getAttribute("aria-current"),
+    ).toBe("page");
+    expect(panelOf(fixture, "connections").classList.contains("hidden")).toBe(false);
+    expect(panelOf(fixture, "sessions").classList.contains("hidden")).toBe(true);
+    expect(root.querySelector("header h1")?.textContent).toContain("接続");
+  });
+
+  it("選択切替で対応パネルだけが表示され他は非表示になる", async () => {
+    const { fixture } = await prepareRoot();
+    selectView(fixture, "sessions");
+    const root = fixture.nativeElement as HTMLElement;
+    expect(panelOf(fixture, "sessions").classList.contains("hidden")).toBe(false);
+    expect(panelOf(fixture, "connections").classList.contains("hidden")).toBe(true);
+    expect(panelOf(fixture, "plugins").classList.contains("hidden")).toBe(true);
+    expect(panelOf(fixture, "operations").classList.contains("hidden")).toBe(true);
+    expect(panelOf(fixture, "log").classList.contains("hidden")).toBe(true);
+    expect(root.querySelector("header h1")?.textContent).toContain("セッション一覧");
+    // 常時マウントのため、非表示パネルの部品も破棄されない。
+    expect(panelOf(fixture, "connections").querySelector("app-status-summary")).not.toBe(null);
+    expect(fixture.nativeElement.querySelector("#spike-host")).not.toBe(null);
+    expect(fixture.nativeElement.querySelector("#plugin-host")).not.toBe(null);
+  });
+
+  it("選択はsnapshot更新で戻らない", async () => {
+    const { fixture, stub } = await prepareRoot();
+    selectView(fixture, "log");
+    stub.snapshot.set(makeSnapshot({ revision: 9 }));
+    fixture.detectChanges();
+    await fixture.whenStable();
+    const root = fixture.nativeElement as HTMLElement;
+    expect(panelOf(fixture, "log").classList.contains("hidden")).toBe(false);
+    expect(panelOf(fixture, "connections").classList.contains("hidden")).toBe(true);
+    expect(root.querySelector("header h1")?.textContent).toContain("受信記録");
+  });
+
+  it("パネル切替が業務RPCを送らない", async () => {
+    const { fixture, stub } = await prepareRoot();
+    for (const key of ["sessions", "plugins", "operations", "log", "connections"]) {
+      selectView(fixture, key);
+    }
+    await fixture.whenStable();
+    expect(stub.fetchInitial).toHaveBeenCalledTimes(1);
+    expect(stub.enableAcceptance).not.toHaveBeenCalled();
+    expect(stub.disableAcceptance).not.toHaveBeenCalled();
+    expect(stub.showPairingView).not.toHaveBeenCalled();
+    expect(stub.approvePairing).not.toHaveBeenCalled();
+    expect(stub.rejectPairing).not.toHaveBeenCalled();
+    expect(stub.disconnectConnection).not.toHaveBeenCalled();
+    expect(stub.assignPlugin).not.toHaveBeenCalled();
+    expect(stub.unassignPlugin).not.toHaveBeenCalled();
+    expect(stub.quit).not.toHaveBeenCalled();
+    expect(stub.createSpike).not.toHaveBeenCalled();
+    expect(stub.pushSpike).not.toHaveBeenCalled();
+    expect(stub.destroySpike).not.toHaveBeenCalled();
+    expect(stub.resetSpikes).not.toHaveBeenCalled();
+    expect(stub.retryPluginMounts).not.toHaveBeenCalled();
   });
 });

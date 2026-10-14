@@ -1,70 +1,73 @@
-<main class="container">
-  <h1>XRift Bridge 管理画面（Angular）</h1>
-  <p class="subtitle">既定の vanilla 画面は残す。</p>
+<app-shell
+  [views]="views"
+  [selectedKey]="selectedKey()"
+  [counts]="viewCounts"
+  [status]="shellStatus"
+  (selectRequested)="onSelectView($event)"
+  (quitRequested)="onQuit()"
+>
+  <section data-panel="connections" [class.hidden]="selectedKey() !== 'connections'">
+    <app-status-summary [snapshot]="snapshot()" />
 
-  <app-status-summary [snapshot]="snapshot()" />
+    <app-acceptance-toggle
+      [snapshot]="snapshot()"
+      (enableRequested)="onEnable()"
+      (disableRequested)="onDisable()"
+    />
 
-  <app-acceptance-toggle
-    [snapshot]="snapshot()"
-    (enableRequested)="onEnable()"
-    (disableRequested)="onDisable()"
-  />
+    <app-pending-list
+      [pending]="snapshot()?.pending ?? []"
+      [views]="pairingViews()"
+      (showRequested)="onShowCode($event)"
+      (approveRequested)="onApprove($event)"
+      (rejectRequested)="onReject($event)"
+    />
 
-  <app-pending-list
-    [pending]="snapshot()?.pending ?? []"
-    [views]="pairingViews()"
-    (showRequested)="onShowCode($event)"
-    (approveRequested)="onApprove($event)"
-    (rejectRequested)="onReject($event)"
-  />
-
-  <app-connection-list
-    [connections]="snapshot()?.connections ?? []"
-    (disconnectRequested)="onDisconnect($event)"
-  />
-
-  <app-session-list
-    [sessions]="snapshot()?.sessions ?? []"
-    [diagnosticBindings]="diagnosticBindings"
-    (assignRequested)="onAssignPlugin($event)"
-    (unassignRequested)="onUnassignPlugin($event)"
-  />
-
-  <app-text-card
-    [owned]="textOwned"
-    [fetched]="fetched"
-    [error]="textError()"
-    (assignRequested)="onAssignPlugin({ pluginKind: 'text' })"
-    (unassignRequested)="onUnassignPlugin($event)"
-  />
-
-  <section class="card">
-    <h2>終了</h2>
-    <div class="row">
-      <button type="button" (click)="onQuit()">アプリを終了する</button>
-    </div>
+    <app-connection-list
+      [connections]="snapshot()?.connections ?? []"
+      (disconnectRequested)="onDisconnect($event)"
+    />
   </section>
 
-  <app-plugin-mounts
-    [mounts]="snapshot()?.pluginMounts ?? []"
-    [failures]="snapshot()?.pluginMountFailures ?? []"
-    (retryRequested)="onRetryPluginMounts()"
-  />
+  <section data-panel="sessions" [class.hidden]="selectedKey() !== 'sessions'">
+    <app-session-list
+      [sessions]="snapshot()?.sessions ?? []"
+      [diagnosticBindings]="diagnosticBindings"
+      (assignRequested)="onAssignPlugin($event)"
+      (unassignRequested)="onUnassignPlugin($event)"
+    />
+  </section>
 
-  <app-spike-section
-    [spikes]="spikeMounts()"
-    (createRequested)="onCreateSpike()"
-    (pushRequested)="onPushSpike($event)"
-    (destroyRequested)="onDestroySpike($event)"
-    (resetRequested)="onResetSpikes()"
-  />
+  <section data-panel="plugins" [class.hidden]="selectedKey() !== 'plugins'">
+    <app-text-card
+      [owned]="textOwned"
+      [fetched]="fetched"
+      [error]="textError()"
+      (assignRequested)="onAssignPlugin({ pluginKind: 'text' })"
+      (unassignRequested)="onUnassignPlugin($event)"
+    />
+  </section>
 
-  <app-event-log [entries]="eventLog()" />
+  <section data-panel="operations" [class.hidden]="selectedKey() !== 'operations'">
+    <app-plugin-mounts
+      [mounts]="snapshot()?.pluginMounts ?? []"
+      [failures]="snapshot()?.pluginMountFailures ?? []"
+      (retryRequested)="onRetryPluginMounts()"
+    />
 
-  <section class="card">
-    <h2>子画面の配置先</h2>
-    <p class="note">管理領域とは別のペインであり、重ねない。</p>
+    <app-spike-section
+      [spikes]="spikeMounts()"
+      (createRequested)="onCreateSpike()"
+      (pushRequested)="onPushSpike($event)"
+      (destroyRequested)="onDestroySpike($event)"
+      (resetRequested)="onResetSpikes()"
+    />
+
     <div #spikeHost id="spike-host"></div>
     <div #pluginHost id="plugin-host"></div>
   </section>
-</main>
+
+  <section data-panel="log" [class.hidden]="selectedKey() !== 'log'">
+    <app-event-log [entries]="eventLog()" />
+  </section>
+</app-shell>

@@ -5,7 +5,7 @@
  * 起動時の自動走行はしない（検証は明示の試験・ハーネスで行う）。
  * 比較コード本文・業務 payload・テキスト本文は扱わない。
  */
-import { Component, ElementRef, ViewChild } from "@angular/core";
+import { Component, ElementRef, ViewChild, signal } from "@angular/core";
 import type { OnInit } from "@angular/core";
 import { AcceptanceToggleComponent } from "./components/acceptance-toggle/acceptance-toggle.component.ts";
 import { ConnectionListComponent } from "./components/connection-list/connection-list.component.ts";
@@ -15,9 +15,13 @@ import { PendingListComponent } from "./components/pending-list/pending-list.com
 import type { ApproveRequest } from "./components/pending-row/pending-row.component.ts";
 import { PluginMountsComponent } from "./components/plugin-mounts/plugin-mounts.component.ts";
 import { SessionListComponent } from "./components/session-list/session-list.component.ts";
+import { ShellComponent } from "./components/shell/shell.component.ts";
+import type { ShellStatus } from "./components/shell/shell.component.ts";
 import { SpikeSectionComponent } from "./components/spike-section/spike-section.component.ts";
 import { StatusSummaryComponent } from "./components/status-summary/status-summary.component.ts";
 import { TextCardComponent } from "./components/text-card/text-card.component.ts";
+import { DEFAULT_VIEW_KEY, VIEW_DEFINITIONS } from "./view-config.ts";
+import type { ViewKey } from "./view-config.ts";
 
 @Component({
   selector: "app-root",
@@ -29,6 +33,7 @@ import { TextCardComponent } from "./components/text-card/text-card.component.ts
     PendingListComponent,
     PluginMountsComponent,
     SessionListComponent,
+    ShellComponent,
     SpikeSectionComponent,
     StatusSummaryComponent,
     TextCardComponent,
@@ -36,6 +41,15 @@ import { TextCardComponent } from "./components/text-card/text-card.component.ts
   templateUrl: "./app.component.html",
 })
 export class AppComponent implements OnInit {
+  /** 画面定義。ヘッダとナビが同一定義を参照する。 */
+  readonly views = VIEW_DEFINITIONS;
+
+  // ADR: 画面選択は App のローカル signal に閉じる。Router も汎用 store も
+  // 追加しない。snapshot の更新で選択は戻さない（表示切替は業務 RPC を送らない）。
+  private readonly selected = signal<ViewKey>(DEFAULT_VIEW_KEY);
+
+  /** 選択中の画面キー。 */
+  readonly selectedKey = this.selected.asReadonly();
   /** 採用中の表示状態。 */
   get snapshot() {
     return this.management.snapshot;
@@ -86,6 +100,55 @@ export class AppComponent implements OnInit {
   /** 段0スパイクの所有一覧。 */
   get spikeMounts() {
     return this.management.spikeMounts;
+  }
+
+  /**
+   * 画面キーごとの件数。snapshot から都度導出し、別 signal へ複製しない。
+   * 件数が無い画面と未取得は `null` であり、出さない。
+   */
+  get viewCounts(): Readonly<Record<ViewKey, number | null>> {
+    const current = this.management.snapshot();
+    if (current === null) {
+      return { connections: null, sessions: null, plugins: null, operations: null, log: null };
+    }
+    return {
+      connections: current.connections.length,
+      sessions: current.sessions.length,
+      plugins: null,
+      operations: null,
+      log: null,
+    };
+  }
+
+  /**
+   * シェル側の状態サマリ値。snapshot から都度導出し、別 signal へ複製しない。
+   * 未取得の項目は `null` であり、事実として出さない。
+   */
+  get shellStatus(): ShellStatus {
+    const current = this.management.snapshot();
+    if (current === null) {
+      return {
+        accepting: null,
+        pendingCount: null,
+        connectionCount: null,
+        sessionCount: null,
+      };
+    }
+    return {
+      accepting: current.admission.accepting,
+      pendingCount: current.pending.length,
+      connectionCount: current.connections.length,
+      sessionCount: current.sessions.length,
+    };
+  }
+
+  /**
+   * 画面を選択する。表示切替だけであり、業務 RPC は送らない。
+   *
+   * @param key - 選択する画面のキー。
+   */
+  onSelectView(key: ViewKey): void {
+    this.selected.set(key);
   }
 
   @ViewChild("spikeHost", { static: true })
