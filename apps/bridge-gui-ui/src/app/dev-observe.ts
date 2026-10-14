@@ -13,7 +13,10 @@ import type { NgDevObserveElement, NgDevObserveResult } from "bridge-gui-contrac
  * 段階観測の固定要素表。管理画面の構成要素に対応する選択子だけを載せる。
  *
  * キーは応答に載せる固定名であり、選択子は文書内の Angular 要素を指す。
- * 任意の選択子・全文取得はしない。
+ * 任意の選択子・全文取得はしない。`readActiveKey` は表の順で `closest` を
+ * 返すため、具体的な部品を先に、包含的な要素（子画面 host・パネル・
+ * シェル側）を後に置く。包含側を先に置くと内側部品の焦点が包含側に
+ * 吸収される。
  */
 export const DEV_OBSERVE_TARGETS: readonly { key: string; selector: string }[] = [
   { key: "status-summary", selector: "app-status-summary" },
@@ -21,10 +24,20 @@ export const DEV_OBSERVE_TARGETS: readonly { key: string; selector: string }[] =
   { key: "pending-list", selector: "app-pending-list" },
   { key: "connection-list", selector: "app-connection-list" },
   { key: "session-list", selector: "app-session-list" },
-  { key: "text-card", selector: "app-text-card" },
+  { key: "plugin-list", selector: "app-plugin-list" },
+  { key: "plugin-operations", selector: "app-plugin-operations" },
   { key: "plugin-mounts", selector: "app-plugin-mounts" },
   { key: "spike-section", selector: "app-spike-section" },
   { key: "event-log", selector: "app-event-log" },
+  { key: "plugin-host", selector: "#plugin-host" },
+  { key: "spike-host", selector: "#spike-host" },
+  { key: "panel-connections", selector: '[data-panel="connections"]' },
+  { key: "panel-sessions", selector: '[data-panel="sessions"]' },
+  { key: "panel-plugins", selector: '[data-panel="plugins"]' },
+  { key: "panel-operations", selector: '[data-panel="operations"]' },
+  { key: "panel-log", selector: '[data-panel="log"]' },
+  { key: "shell-sidebar", selector: "app-shell aside" },
+  { key: "page-header", selector: "app-shell header" },
 ] as const;
 
 /** 固定要素表の順に並べた観測入力（DOM 読取り済みの値）。 */

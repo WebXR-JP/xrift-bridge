@@ -625,6 +625,34 @@ describe("段階観測の秘密の非含有", () => {
       host.remove();
     }
   });
+
+  it("helmボタン（hlmBtnはbutton）の無効化をdisabledで拾う", () => {
+    // hlmBtn は `button[hlmBtn]` への指示子であり実体は `button` のため、
+    // 無効化は素の `disabled` 属性に載り、`:disabled` で拾える。
+    const host = document.createElement("app-acceptance-toggle");
+    const button = document.createElement("button");
+    button.setAttribute("hlmBtn", "");
+    button.disabled = true;
+    host.append(button);
+    document.body.append(host);
+    try {
+      const { service } = prepareService();
+      const observed = service.buildDevObservation();
+      const target = observed.elements.find((element) => element.key === "acceptance-toggle");
+      expect(target?.present).toBe(true);
+      expect(target?.disabled).toBe(true);
+      // 本文・入力値の置き場は無い（許可項目だけである）。
+      expect(Object.keys(target ?? {}).sort()).toEqual([
+        "disabled",
+        "key",
+        "present",
+        "rect",
+        "visible",
+      ]);
+    } finally {
+      host.remove();
+    }
+  });
 });
 
 describe("子画面操作の要求送出", () => {

@@ -124,118 +124,12 @@ body {
   min-height: 100vh;
 }
 
-/* ADR: 旧呈示用の大域規則は既存部品がまだ参照しているため、この単位では
- * 削らず `@layer components`（utilities より低優先）へ移して見た目を保つ。
- * 最終撤去は後続の統合単位が行う。なお `.container` は preset の
- * `container` utility と同名のため、行内余白だけ preset 側が勝つ。
- * 移行中の仮の姿であり、撤去時に解消する。 */
-@layer components {
-  .container {
-    max-width: 720px;
-    margin: 0 auto;
-    padding: 32px 20px;
-  }
-
-  h1 {
-    font-size: 1.5rem;
-    margin-bottom: 4px;
-  }
-
-  .subtitle {
-    color: #64748b;
-    margin-top: 0;
-  }
-
-  .card {
-    background: #fff;
-    border-radius: 12px;
-    padding: 20px 24px;
-    margin: 20px 0;
-    box-shadow: 0 2px 8px rgb(15 23 42 / 0.08);
-  }
-
-  h2 {
-    font-size: 1.1rem;
-    margin-top: 0;
-  }
-
-  dl > div {
-    display: grid;
-    grid-template-columns: 160px 1fr;
-    gap: 8px;
-    padding: 6px 0;
-    border-top: 1px solid #e2e8f0;
-  }
-
-  dt {
-    color: #64748b;
-  }
-
-  dd {
-    margin: 0;
-  }
-
-  .row {
-    display: flex;
-    gap: 8px;
-  }
-
-  button {
-    font-size: 0.85rem;
-    padding: 4px 12px;
-  }
-
-  /* 比較コード入力欄（子部品の行で使う）。 */
-  input {
-    font-size: 0.85rem;
-    padding: 4px 8px;
-    width: 140px;
-  }
-
-  ul {
-    margin: 0;
-    padding-left: 20px;
-    font-size: 0.9rem;
-    color: #475569;
-  }
-
-  li {
-    margin: 4px 0;
-  }
-
-  /* 一覧（子部品で `entries` として使う）。 */
-  .entries {
-    margin: 0;
-    padding-left: 20px;
-    font-size: 0.9rem;
-  }
-
-  .entries li {
-    margin: 8px 0;
-  }
-
-  /* 比較コードの表示（子部品の行で使う）。 */
-  .code {
-    margin-top: 4px;
-    font-size: 1.1rem;
-    font-weight: 700;
-  }
-
-  /* 操作失敗の表示（本文は載せない）。 */
-  .error {
-    margin: 0;
-    min-height: 1.2em;
-    font-size: 0.85rem;
-    color: #b91c1c;
-  }
-
-  /* 補足（子画面の説明などで使う）。 */
-  .note {
-    font-size: 0.85rem;
-    color: #64748b;
-    margin-top: 0;
-  }
-}
+/* ADR: 旧呈示用の大域規則（`.container`・`h1`・`.subtitle`・`.card`・`h2`・
+ * `dl > div`・`dt`・`dd`・`.row`・`button`・`input`・`ul`・`li`・`.entries`・
+ * `.code`・`.error`・`.note` 等）は移行完了により撤去した。5画面はすべて
+ * helm＋Tailwind＋テーマで意匠済みであり、仮置きの `@layer components`
+ * （utilities より低優先で見た目を保つ層）は不要になった。`.container` と
+ * preset の `container` utility の同名衝突も解消される。 */
 
 /* ADR: 子画面 host の規則は大域に残す。host 下の要素は命令的に足され、
  * 部品 CSS の擬似 encapsulation が届かないため。`electrobun-webview` の

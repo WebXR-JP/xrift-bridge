@@ -14,7 +14,7 @@ function makeInput(overrides?: Partial<DevObserveInput>): DevObserveInput {
     resolvedComponent: true,
     adoptedRevision: 3,
     focus: true,
-    activeKey: "text-card",
+    activeKey: "status-summary",
     elements: DEV_OBSERVE_TARGETS.map((target) => ({
       key: target.key,
       present: true,
