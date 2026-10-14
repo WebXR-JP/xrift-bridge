@@ -3,13 +3,17 @@
  *
  * snapshot の描画だけを担い、取得・操作は行わない。比較コード本文・業務
  * payload・テキスト本文は扱わない（改訂番号・起動状態・件数のみ）。
+ * 見出しは helm accordion の trigger に載せ、初期展開で出す。
  */
 import { Component, input } from "@angular/core";
 import type { ManagementSnapshot } from "bridge-gui-contract/management";
+import { HlmAccordionImports } from "../../ui/accordion/index.ts";
+import { HlmSeparator } from "../../ui/separator/hlm-separator.ts";
 
 @Component({
   selector: "app-status-summary",
   standalone: true,
+  imports: [...HlmAccordionImports, HlmSeparator],
   templateUrl: "./status-summary.component.html",
 })
 export class StatusSummaryComponent {

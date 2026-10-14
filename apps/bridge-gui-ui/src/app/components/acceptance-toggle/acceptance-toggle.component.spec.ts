@@ -69,4 +69,16 @@ describe("受付操作の表示", () => {
     disable.click();
     expect(requested).toBe(1);
   });
+
+  it("有効化は primary・無効化は outline の helm ボタンで描画する", async () => {
+    await TestBed.compileComponents();
+    const fixture = TestBed.createComponent(AcceptanceToggleComponent);
+    fixture.componentRef.setInput("snapshot", makeSnapshot({ admission: { accepting: true } }));
+    fixture.detectChanges();
+    const [enable, disable] = readButtons(fixture);
+    expect(enable.classList.contains("spartan-button")).toBe(true);
+    expect(enable.classList.contains("spartan-button-variant-default")).toBe(true);
+    expect(disable.classList.contains("spartan-button")).toBe(true);
+    expect(disable.classList.contains("spartan-button-variant-outline")).toBe(true);
+  });
 });

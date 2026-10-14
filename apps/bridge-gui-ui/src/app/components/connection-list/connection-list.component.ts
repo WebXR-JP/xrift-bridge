@@ -2,14 +2,19 @@
  * 接続一覧の表示部品。
  *
  * 取得・操作は行わず、表示と切断要求の送出だけを担う。認可状態・段階を
- * 示し、識別子は表示用である。
+ * 示し、識別子は表示用である。行は下境界の罫で区切り、切断は helm の
+ * outline ボタンで出す。前の区画との区切りは helm separator で置く
+ * （App は変えない）。
  */
 import { Component, input, output } from "@angular/core";
 import type { ConnectionSummary } from "bridge-gui-contract/management";
+import { HlmButton } from "../../ui/button/hlm-button.ts";
+import { HlmSeparator } from "../../ui/separator/hlm-separator.ts";
 
 @Component({
   selector: "app-connection-list",
   standalone: true,
+  imports: [HlmButton, HlmSeparator],
   templateUrl: "./connection-list.component.html",
 })
 export class ConnectionListComponent {

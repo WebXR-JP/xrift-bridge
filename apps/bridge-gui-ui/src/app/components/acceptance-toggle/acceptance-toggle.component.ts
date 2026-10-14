@@ -3,13 +3,16 @@
  *
  * 操作できるかは表示状態の有無で決まる（未取得の間は両方押せない）。
  * 操作自体は行わず、有効化・無効化の要求を送出する。
+ * ボタンは helm の意匠で描き、有効化を primary・無効化を outline にする。
  */
 import { Component, input, output } from "@angular/core";
 import type { ManagementSnapshot } from "bridge-gui-contract/management";
+import { HlmButton } from "../../ui/button/hlm-button.ts";
 
 @Component({
   selector: "app-acceptance-toggle",
   standalone: true,
+  imports: [HlmButton],
   templateUrl: "./acceptance-toggle.component.html",
 })
 export class AcceptanceToggleComponent {

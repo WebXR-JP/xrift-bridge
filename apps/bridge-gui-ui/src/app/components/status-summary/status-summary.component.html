@@ -1,59 +1,83 @@
-<section class="card">
-  <h2>状態</h2>
-  @if (snapshot(); as current) {
-    <dl>
-      <div>
-        <dt>改訂番号</dt>
-        <dd>{{ current.revision }}</dd>
+<!-- 状態要約（helm accordion。初期展開。trigger 下に区切りを置く）。 -->
+<div hlmAccordion type="single">
+  <div hlmAccordionItem [isOpened]="true">
+    <hlm-accordion-trigger>
+      <span class="text-[15px] font-bold text-[var(--foreground)]">状態</span>
+    </hlm-accordion-trigger>
+    <hlm-separator hlmSeparator orientation="horizontal"></hlm-separator>
+    <hlm-accordion-content>
+      <!-- spartan の内容器が下に pb-2.5 を持つため、足して 16px になる分だけ足す。 -->
+      <div class="flex flex-col gap-3 pb-1.5 pt-3">
+        @if (snapshot(); as current) {
+          <div class="grid grid-cols-2 gap-6">
+            <div class="flex min-w-0 flex-col gap-1">
+              <span class="text-[12px] text-[var(--muted-foreground)]">改訂番号</span>
+              <span class="text-[14px] text-[var(--foreground)]">{{ current.revision }}</span>
+            </div>
+            <div class="flex min-w-0 flex-col gap-1">
+              <span class="text-[12px] text-[var(--muted-foreground)]">起動状態</span>
+              <span class="text-[14px] text-[var(--foreground)]">{{ current.backend }}</span>
+            </div>
+          </div>
+          <div class="grid grid-cols-2 gap-6">
+            <div class="flex min-w-0 flex-col gap-1">
+              <span class="text-[12px] text-[var(--muted-foreground)]">公開先</span>
+              <span class="text-[14px] text-[var(--foreground)]">{{ endpointText(current) }}</span>
+            </div>
+            <div class="flex min-w-0 flex-col gap-1">
+              <span class="text-[12px] text-[var(--muted-foreground)]">受付</span>
+              <span class="text-[14px] text-[var(--foreground)]">{{
+                current.admission.accepting ? "受付中" : "受付停止中"
+              }}</span>
+            </div>
+          </div>
+          <div class="grid grid-cols-2 gap-6">
+            <div class="flex min-w-0 flex-col gap-1">
+              <span class="text-[12px] text-[var(--muted-foreground)]">保留</span>
+              <span class="text-[14px] text-[var(--foreground)]"
+                >{{ current.pending.length }} 件</span
+              >
+            </div>
+            <div class="flex min-w-0 flex-col gap-1">
+              <span class="text-[12px] text-[var(--muted-foreground)]">接続</span>
+              <span class="text-[14px] text-[var(--foreground)]"
+                >{{ current.connections.length }} 件</span
+              >
+            </div>
+          </div>
+          <div class="grid grid-cols-2 gap-6">
+            <div class="flex min-w-0 flex-col gap-1">
+              <span class="text-[12px] text-[var(--muted-foreground)]">生存セッション</span>
+              <span class="text-[14px] text-[var(--foreground)]"
+                >{{ current.sessions.length }} 件</span
+              >
+            </div>
+            <div class="flex min-w-0 flex-col gap-1">
+              <span class="text-[12px] text-[var(--muted-foreground)]">割当て</span>
+              <span class="text-[14px] text-[var(--foreground)]"
+                >実体 {{ current.plugins.instances.length }}・割当て
+                {{ current.plugins.assignments.length }}</span
+              >
+            </div>
+          </div>
+          @if (current.plugins.instances.length > 0) {
+            <div class="flex min-w-0 flex-col gap-1">
+              <span class="text-[12px] text-[var(--muted-foreground)]">所有一覧</span>
+              <ul class="m-0 flex list-none flex-col gap-1 p-0">
+                @for (item of current.plugins.instances; track item.instanceId) {
+                  <li class="m-0 text-[14px] text-[var(--foreground)]">
+                    {{ item.pluginKind }} {{ item.instanceId }} {{ item.localSessionId }}
+                    {{ item.portId }}（{{ item.phase }}）
+                  </li>
+                }
+              </ul>
+            </div>
+          }
+        } @else {
+          <!-- 未取得の間は件数・状態を断定しない。 -->
+          <p class="text-[14px] text-[var(--muted-foreground)]">未取得</p>
+        }
       </div>
-      <div>
-        <dt>起動状態</dt>
-        <dd>{{ current.backend }}</dd>
-      </div>
-      <div>
-        <dt>公開先</dt>
-        <dd>{{ endpointText(current) }}</dd>
-      </div>
-      <div>
-        <dt>受付</dt>
-        <dd>{{ current.admission.accepting ? "受付中" : "受付停止中" }}</dd>
-      </div>
-      <div>
-        <dt>保留</dt>
-        <dd>{{ current.pending.length }} 件</dd>
-      </div>
-      <div>
-        <dt>接続</dt>
-        <dd>{{ current.connections.length }} 件</dd>
-      </div>
-      <div>
-        <dt>生存セッション</dt>
-        <dd>{{ current.sessions.length }} 件</dd>
-      </div>
-      <div>
-        <dt>割当て</dt>
-        <dd>
-          実体 {{ current.plugins.instances.length }}・割当て
-          {{ current.plugins.assignments.length }}
-        </dd>
-      </div>
-      @if (current.plugins.instances.length > 0) {
-        <div>
-          <dt>所有一覧</dt>
-          <dd>
-            <ul>
-              @for (item of current.plugins.instances; track item.instanceId) {
-                <li>
-                  {{ item.pluginKind }} {{ item.instanceId }} {{ item.localSessionId }}
-                  {{ item.portId }}（{{ item.phase }}）
-                </li>
-              }
-            </ul>
-          </dd>
-        </div>
-      }
-    </dl>
-  } @else {
-    <p>未取得</p>
-  }
-</section>
+    </hlm-accordion-content>
+  </div>
+</div>

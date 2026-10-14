@@ -1,25 +1,34 @@
-<li>
-  <span>{{ requestId() }} </span>
-  <button type="button" (click)="onShow()">比較コードを表示する</button>
-  {{ " " }}
-  <input
-    type="text"
-    [attr.id]="'code-input-' + requestId()"
-    [value]="code()"
-    (input)="onCodeInput($any($event.target).value)"
-    maxlength="6"
-    placeholder="比較コード（6桁）"
-    autocomplete="off"
-  />
-  {{ " " }}
-  <button type="button" (click)="onApprove()">承認する</button>
-  {{ " " }}
-  <button type="button" (click)="onReject()">取り下げる</button>
-  @if (view(); as shown) {
-    @if (shown.available) {
-      <div class="code">比較コード: {{ shown.displayCode }}</div>
-    } @else {
-      <div class="code">取得できない: {{ shown.reason }}</div>
+<!-- 保留行の札（左に要求識別子と比較コード・右に操作）。 -->
+<li
+  class="m-0 flex items-center justify-between gap-4 rounded-lg border p-4"
+  style="background: var(--card); border-color: var(--border)"
+>
+  <div class="flex min-w-0 flex-1 flex-col gap-2">
+    <span class="text-[14px] font-medium text-[var(--foreground)]">{{ requestId() }}</span>
+    @if (view(); as shown) {
+      @if (shown.available) {
+        <span class="text-[18px] font-bold text-[var(--foreground)]"
+          >比較コード: {{ shown.displayCode }}</span
+        >
+      } @else {
+        <span class="text-[14px] text-[var(--foreground)]">取得できない: {{ shown.reason }}</span>
+      }
     }
-  }
+    <!-- 比較コード入力欄は意匠に無いが照合の機能に要るため残す。自動入力・自動承認はしない。 -->
+    <input
+      hlmInput
+      type="text"
+      [id]="'code-input-' + requestId()"
+      [value]="code()"
+      (input)="onCodeInput($any($event.target).value)"
+      maxlength="6"
+      placeholder="比較コード（6桁）"
+      autocomplete="off"
+    />
+  </div>
+  <div class="flex shrink-0 items-center gap-2">
+    <button hlmBtn variant="outline" type="button" (click)="onShow()">比較コードを表示する</button>
+    <button hlmBtn variant="default" type="button" (click)="onApprove()">承認する</button>
+    <button hlmBtn variant="outline" type="button" (click)="onReject()">取り下げる</button>
+  </div>
 </li>

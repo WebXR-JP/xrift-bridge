@@ -113,4 +113,16 @@ describe("状態要約の表示", () => {
     const text: string = fixture.nativeElement.textContent ?? "";
     expect(text).toContain("未取得");
   });
+
+  it("見出しを helm accordion の trigger に載せ初期展開で出す", async () => {
+    await TestBed.compileComponents();
+    const fixture = TestBed.createComponent(StatusSummaryComponent);
+    fixture.componentRef.setInput("snapshot", makeSnapshot({ revision: 3 }));
+    fixture.detectChanges();
+    const root = fixture.nativeElement as HTMLElement;
+    const trigger = root.querySelector("[data-slot='accordion-trigger']");
+    expect(trigger?.textContent).toContain("状態");
+    // 初期展開のため内容（改訂番号の値）がそのまま読める。
+    expect(root.textContent).toContain("3");
+  });
 });

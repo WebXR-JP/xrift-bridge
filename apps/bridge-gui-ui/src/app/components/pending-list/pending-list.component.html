@@ -1,11 +1,11 @@
-<section class="card">
-  <h2>保留（照合待ち）</h2>
+<!-- 保留一覧（前の区画との区切り＋見出し＋札の縦積み）。空のときは空表示にする。 -->
+<hlm-separator hlmSeparator orientation="horizontal"></hlm-separator>
+<section class="flex flex-col gap-3">
+  <h2 class="text-[15px] font-bold text-[var(--foreground)]">保留（照合待ち）</h2>
   @if (pending().length === 0) {
-    <ul class="entries">
-      <li>保留は無い</li>
-    </ul>
+    <p class="text-[14px] text-[var(--muted-foreground)]">保留は無い</p>
   } @else {
-    <ul class="entries">
+    <ul class="m-0 flex list-none flex-col gap-3 p-0">
       @for (entry of pending(); track entry.requestId) {
         <app-pending-row
           [requestId]="entry.requestId"

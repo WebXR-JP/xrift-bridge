@@ -4,9 +4,13 @@
  * 入力値はこの行だけが保持し、親の状態更新で値・フォーカスを失わせない。
  * 親は `requestId` の同一性（`track`）でこの行を使い回す。比較コード本文は
  * 送るだけで記録しない（ログ・snapshot に残さない）。
+ * 行は札（`--card` 背景・`--border` 境界・角丸 8・padding 16）で描き、
+ * 操作は helm ボタン（表示 outline・承認 primary・取下げ outline）にする。
  */
 import { Component, input, output, signal } from "@angular/core";
 import type { PairingViewResult } from "bridge-gui-contract/management";
+import { HlmButton } from "../../ui/button/hlm-button.ts";
+import { HlmInput } from "../../ui/input/hlm-input.ts";
 
 /** 承認要求の内容。入力欄の比較コードをそのまま載せる。 */
 export interface ApproveRequest {
@@ -19,6 +23,7 @@ export interface ApproveRequest {
 @Component({
   selector: "app-pending-row",
   standalone: true,
+  imports: [HlmButton, HlmInput],
   templateUrl: "./pending-row.component.html",
 })
 export class PendingRowComponent {

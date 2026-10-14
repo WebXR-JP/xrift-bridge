@@ -101,4 +101,34 @@ describe("保留一覧の表示", () => {
     expect(text).toContain("取得できない");
     expect(text).toContain("承認済みのため取得できない");
   });
+
+  it("行の操作は helm ボタンで描画し承認だけが primary である", async () => {
+    await TestBed.compileComponents();
+    const fixture = TestBed.createComponent(PendingListComponent);
+    fixture.componentRef.setInput("pending", [{ requestId: "r1" }]);
+    fixture.detectChanges();
+    const root = fixture.nativeElement as HTMLElement;
+    const byLabel = (label: string): HTMLButtonElement | undefined =>
+      Array.from(root.querySelectorAll("button")).find((button) =>
+        (button.textContent ?? "").includes(label),
+      );
+    const show = byLabel("比較コードを表示する");
+    const approve = byLabel("承認する");
+    const reject = byLabel("取り下げる");
+    expect(show?.classList.contains("spartan-button-variant-outline")).toBe(true);
+    expect(approve?.classList.contains("spartan-button-variant-default")).toBe(true);
+    expect(reject?.classList.contains("spartan-button-variant-outline")).toBe(true);
+  });
+
+  it("比較コード入力欄の識別子と属性を保つ", async () => {
+    await TestBed.compileComponents();
+    const fixture = TestBed.createComponent(PendingListComponent);
+    fixture.componentRef.setInput("pending", [{ requestId: "r1" }]);
+    fixture.detectChanges();
+    const root = fixture.nativeElement as HTMLElement;
+    const field = root.querySelector("input") as HTMLInputElement | null;
+    expect(field?.id).toBe("code-input-r1");
+    expect(field?.maxLength).toBe(6);
+    expect(field?.autocomplete).toBe("off");
+  });
 });

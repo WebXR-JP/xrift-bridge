@@ -1,19 +1,32 @@
-<section class="card">
-  <h2>接続</h2>
+<!-- 接続一覧（前の区画との区切り＋見出し＋下罫の行）。空のときは空表示にする。 -->
+<hlm-separator hlmSeparator orientation="horizontal"></hlm-separator>
+<section class="flex flex-col gap-3">
+  <h2 class="text-[15px] font-bold text-[var(--foreground)]">接続</h2>
   @if (connections().length === 0) {
-    <ul class="entries">
-      <li>接続は無い</li>
-    </ul>
+    <p class="text-[14px] text-[var(--muted-foreground)]">接続は無い</p>
   } @else {
-    <ul class="entries">
+    <ul class="m-0 flex list-none flex-col p-0">
       @for (connection of connections(); track connection.connectionId) {
-        <li>
-          <span
-            >{{ connection.connectionId }}（{{ connection.origin }}・{{
-              connection.authorized ? "認可済み" : "未認可"
-            }}・{{ connection.phase }}）
-          </span>
-          <button type="button" (click)="disconnectRequested.emit(connection.connectionId)">
+        <li
+          class="m-0 flex items-center justify-between gap-4 border-b px-0 py-3"
+          style="border-bottom-color: var(--border)"
+        >
+          <div class="flex min-w-0 flex-1 flex-col gap-0.5">
+            <span class="text-[14px] font-medium text-[var(--foreground)]">{{
+              connection.connectionId
+            }}</span>
+            <span class="text-[12px] text-[var(--muted-foreground)]"
+              >{{ connection.origin }}・{{ connection.authorized ? "認可済み" : "未認可" }}・{{
+                connection.phase
+              }}</span
+            >
+          </div>
+          <button
+            hlmBtn
+            variant="outline"
+            type="button"
+            (click)="disconnectRequested.emit(connection.connectionId)"
+          >
             切断する
           </button>
         </li>

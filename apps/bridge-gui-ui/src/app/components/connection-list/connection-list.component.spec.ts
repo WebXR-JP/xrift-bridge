@@ -44,4 +44,18 @@ describe("接続一覧の表示", () => {
     buttons[1]?.click();
     expect(disconnected).toEqual(["c2"]);
   });
+
+  it("切断ボタンは helm の outline ボタンで描画する", async () => {
+    await TestBed.compileComponents();
+    const fixture = TestBed.createComponent(ConnectionListComponent);
+    fixture.componentRef.setInput("connections", [
+      { connectionId: "c1", origin: "https://example.test", authorized: true, phase: "ready" },
+    ]);
+    fixture.detectChanges();
+    const root = fixture.nativeElement as HTMLElement;
+    const button = root.querySelector("button") as HTMLButtonElement | null;
+    expect(button?.classList.contains("spartan-button")).toBe(true);
+    expect(button?.classList.contains("spartan-button-variant-outline")).toBe(true);
+    expect(button?.disabled).toBe(false);
+  });
 });

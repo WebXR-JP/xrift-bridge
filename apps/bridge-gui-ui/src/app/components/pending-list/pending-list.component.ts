@@ -4,16 +4,18 @@
  * 取得・操作は行わず、表示と要求の送出だけを担う。行の同一性は `requestId`
  * で保持し、状態更新で入力値・フォーカスを失わせない。比較コード本文は
  * snapshot・ログに残さない（表示用の取得結果だけを行へ渡す）。
+ * 前の区画との区切りは helm separator で置く（App は変えない）。
  */
 import { Component, input, output } from "@angular/core";
 import type { PairingViewResult, PendingEntry } from "bridge-gui-contract/management";
+import { HlmSeparator } from "../../ui/separator/hlm-separator.ts";
 import { PendingRowComponent } from "../pending-row/pending-row.component.ts";
 import type { ApproveRequest } from "../pending-row/pending-row.component.ts";
 
 @Component({
   selector: "app-pending-list",
   standalone: true,
-  imports: [PendingRowComponent],
+  imports: [PendingRowComponent, HlmSeparator],
   templateUrl: "./pending-list.component.html",
 })
 export class PendingListComponent {
