@@ -1,0 +1,15 @@
+import { Directive } from "@angular/core";
+import { classes } from "../utils/hlm";
+
+@Directive({
+  selector: "[hlmCardHeader],hlm-card-header",
+  host: { "data-slot": "card-header" },
+})
+export class HlmCardHeader {
+  constructor() {
+    classes(
+      () =>
+        "spartan-card-header group/card-header @container/card-header grid auto-rows-min items-start has-data-[slot=card-action]:grid-cols-[1fr_auto] has-data-[slot=card-description]:grid-rows-[auto_auto]",
+    );
+  }
+}

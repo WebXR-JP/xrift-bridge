@@ -1,127 +1,245 @@
-/* 管理画面の意匠はこの大域 stylesheet に集める。 */
+/* 管理画面の意匠入口（Tailwind v4＋spartan 基盤＋pen 主題）。
+ *
+ * ADR: 層の順序を先に宣言し、公式の層構成で取り込む。preset は
+ * tw-animate-css と CDK の overlay-prebuilt を含むため重複 import しない。
+ * Tailwind 専用の別ビルド工程は作らず、ng の `styles` のまま束ねる。
+ */
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme);
+@import "tailwindcss/preflight.css" layer(base);
+@import "tailwindcss/utilities.css";
+@import "@spartan-ng/brain/hlm-tailwind-preset.css";
+@import "./app/ui/spartan-nova.css";
 
-/* 複数部品の template で共有する `.card` 等は大域に置く。部品 CSS */
-/* （既定の擬似 encapsulation）は自 template にしか届かないため、子部品の */
-/* 要素には適用されない。vanilla の `index.css` と見た目を揃える。 */
-* {
-  box-sizing: border-box;
+/* 同梱字形（実行時の外部取得をしない）。日本語は fallback で描画する。 */
+@font-face {
+  font-family: "Inter";
+  src: url("./assets/fonts/Inter-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Inter";
+  src: url("./assets/fonts/Inter-Medium.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Inter";
+  src: url("./assets/fonts/Inter-SemiBold.woff2") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "Inter";
+  src: url("./assets/fonts/Inter-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("./assets/fonts/JetBrainsMono-Regular.woff2") format("woff2");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("./assets/fonts/JetBrainsMono-Medium.woff2") format("woff2");
+  font-weight: 500;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("./assets/fonts/JetBrainsMono-SemiBold.woff2") format("woff2");
+  font-weight: 600;
+  font-style: normal;
+  font-display: swap;
+}
+@font-face {
+  font-family: "JetBrains Mono";
+  src: url("./assets/fonts/JetBrainsMono-Bold.woff2") format("woff2");
+  font-weight: 700;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* pen 主題（実値）。dark 対応は追加しない。 */
+:root {
+  color-scheme: light;
+  --background: #f6f6f4;
+  --foreground: #1a1a1a;
+  --card: #ffffff;
+  --card-foreground: #1a1a1a;
+  --popover: #ffffff;
+  --popover-foreground: #1a1a1a;
+  --muted-foreground: #6b6b6b;
+  --border: #e3e3df;
+  --input: #e3e3df;
+  --sidebar: #ffffff;
+  --sidebar-border: #e3e3df;
+  /* ADR: shadcn 由来の残りの値は pen の shadcn 実値を読めないため
+   * spartan の既定（neutral 系）を採る。`--radius` だけで全形状が揃うとは
+   * 扱わず、12px 外枠・8px 内部札・10px 標・6px  tab 域は側で指定する。
+   * 成功色だけ pen 指定の `#22c55e` を採る。 */
+  --primary: oklch(0.205 0 0);
+  --primary-foreground: oklch(0.985 0 0);
+  --secondary: oklch(0.97 0 0);
+  --secondary-foreground: oklch(0.205 0 0);
+  --muted: oklch(0.97 0 0);
+  --accent: oklch(0.97 0 0);
+  --accent-foreground: oklch(0.205 0 0);
+  --destructive: oklch(0.58 0.22 27);
+  --success: #22c55e;
+  --ring: oklch(0.708 0 0);
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.6 0.118 184.704);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
+  --sidebar-foreground: #1a1a1a;
+  --sidebar-primary: oklch(0.205 0 0);
+  --sidebar-primary-foreground: oklch(0.985 0 0);
+  --sidebar-accent: oklch(0.97 0 0);
+  --sidebar-accent-foreground: oklch(0.205 0 0);
+  --sidebar-ring: oklch(0.708 0 0);
+  --radius: 0.75rem;
+  /* ADR: 日本語グリフまで両字形で揃うとは扱わず、和文は OS 備え付け書体の
+   * fallback で描く。旧 `body` の直書き色は使わない。 */
+  --font-sans:
+    "Inter", -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Hiragino Kaku Gothic ProN",
+    "Noto Sans JP", "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Noto Sans JP", sans-serif;
-  margin: 0;
-  padding: 0;
-  background: #f1f5f9;
-  color: #1e293b;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-sans);
   min-height: 100vh;
 }
 
-.container {
-  max-width: 720px;
-  margin: 0 auto;
-  padding: 32px 20px;
+/* ADR: 旧呈示用の大域規則は既存部品がまだ参照しているため、この単位では
+ * 削らず `@layer components`（utilities より低優先）へ移して見た目を保つ。
+ * 最終撤去は後続の統合単位が行う。なお `.container` は preset の
+ * `container` utility と同名のため、行内余白だけ preset 側が勝つ。
+ * 移行中の仮の姿であり、撤去時に解消する。 */
+@layer components {
+  .container {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: 32px 20px;
+  }
+
+  h1 {
+    font-size: 1.5rem;
+    margin-bottom: 4px;
+  }
+
+  .subtitle {
+    color: #64748b;
+    margin-top: 0;
+  }
+
+  .card {
+    background: #fff;
+    border-radius: 12px;
+    padding: 20px 24px;
+    margin: 20px 0;
+    box-shadow: 0 2px 8px rgb(15 23 42 / 0.08);
+  }
+
+  h2 {
+    font-size: 1.1rem;
+    margin-top: 0;
+  }
+
+  dl > div {
+    display: grid;
+    grid-template-columns: 160px 1fr;
+    gap: 8px;
+    padding: 6px 0;
+    border-top: 1px solid #e2e8f0;
+  }
+
+  dt {
+    color: #64748b;
+  }
+
+  dd {
+    margin: 0;
+  }
+
+  .row {
+    display: flex;
+    gap: 8px;
+  }
+
+  button {
+    font-size: 0.85rem;
+    padding: 4px 12px;
+  }
+
+  /* 比較コード入力欄（子部品の行で使う）。 */
+  input {
+    font-size: 0.85rem;
+    padding: 4px 8px;
+    width: 140px;
+  }
+
+  ul {
+    margin: 0;
+    padding-left: 20px;
+    font-size: 0.9rem;
+    color: #475569;
+  }
+
+  li {
+    margin: 4px 0;
+  }
+
+  /* 一覧（子部品で `entries` として使う）。 */
+  .entries {
+    margin: 0;
+    padding-left: 20px;
+    font-size: 0.9rem;
+  }
+
+  .entries li {
+    margin: 8px 0;
+  }
+
+  /* 比較コードの表示（子部品の行で使う）。 */
+  .code {
+    margin-top: 4px;
+    font-size: 1.1rem;
+    font-weight: 700;
+  }
+
+  /* 操作失敗の表示（本文は載せない）。 */
+  .error {
+    margin: 0;
+    min-height: 1.2em;
+    font-size: 0.85rem;
+    color: #b91c1c;
+  }
+
+  /* 補足（子画面の説明などで使う）。 */
+  .note {
+    font-size: 0.85rem;
+    color: #64748b;
+    margin-top: 0;
+  }
 }
 
-h1 {
-  font-size: 1.5rem;
-  margin-bottom: 4px;
-}
-
-.subtitle {
-  color: #64748b;
-  margin-top: 0;
-}
-
-.card {
-  background: #fff;
-  border-radius: 12px;
-  padding: 20px 24px;
-  margin: 20px 0;
-  box-shadow: 0 2px 8px rgb(15 23 42 / 0.08);
-}
-
-h2 {
-  font-size: 1.1rem;
-  margin-top: 0;
-}
-
-dl > div {
-  display: grid;
-  grid-template-columns: 160px 1fr;
-  gap: 8px;
-  padding: 6px 0;
-  border-top: 1px solid #e2e8f0;
-}
-
-dt {
-  color: #64748b;
-}
-
-dd {
-  margin: 0;
-}
-
-.row {
-  display: flex;
-  gap: 8px;
-}
-
-button {
-  font-size: 0.85rem;
-  padding: 4px 12px;
-}
-
-/* 比較コード入力欄（子部品の行で使う）。 */
-input {
-  font-size: 0.85rem;
-  padding: 4px 8px;
-  width: 140px;
-}
-
-ul {
-  margin: 0;
-  padding-left: 20px;
-  font-size: 0.9rem;
-  color: #475569;
-}
-
-li {
-  margin: 4px 0;
-}
-
-/* 一覧（子部品で `entries` として使う）。 */
-.entries {
-  margin: 0;
-  padding-left: 20px;
-  font-size: 0.9rem;
-}
-
-.entries li {
-  margin: 8px 0;
-}
-
-/* 比較コードの表示（子部品の行で使う）。 */
-.code {
-  margin-top: 4px;
-  font-size: 1.1rem;
-  font-weight: 700;
-}
-
-/* 操作失敗の表示（本文は載せない）。 */
-.error {
-  margin: 0;
-  min-height: 1.2em;
-  font-size: 0.85rem;
-  color: #b91c1c;
-}
-
-/* 補足（子画面の説明などで使う）。 */
-.note {
-  font-size: 0.85rem;
-  color: #64748b;
-  margin-top: 0;
-}
-
+/* ADR: 子画面 host の規則は大域に残す。host 下の要素は命令的に足され、
+ * 部品 CSS の擬似 encapsulation が届かないため。`electrobun-webview` の
+ * 高さもここで保つ。 */
 #spike-host {
   display: flex;
   flex-direction: column;

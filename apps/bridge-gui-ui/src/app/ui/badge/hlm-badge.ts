@@ -1,0 +1,39 @@
+import { Directive, input } from "@angular/core";
+import { classes } from "../utils/hlm";
+import { type VariantProps, cva } from "class-variance-authority";
+
+const badgeVariants = cva(
+  "spartan-badge group/badge focus-visible:border-ring focus-visible:ring-ring/50 aria-invalid:border-destructive aria-invalid:ring-destructive/20 dark:aria-invalid:ring-destructive/40 inline-flex w-fit shrink-0 items-center justify-center overflow-hidden whitespace-nowrap focus-visible:ring-[3px] [&>ng-icon]:pointer-events-none",
+  {
+    variants: {
+      variant: {
+        default: "spartan-badge-variant-default",
+        secondary: "spartan-badge-variant-secondary",
+        destructive: "spartan-badge-variant-destructive",
+        outline: "spartan-badge-variant-outline",
+        ghost: "spartan-badge-variant-ghost",
+        link: "spartan-badge-variant-link",
+      },
+    },
+    defaultVariants: {
+      variant: "default",
+    },
+  },
+);
+
+export type BadgeVariants = VariantProps<typeof badgeVariants>;
+
+@Directive({
+  selector: "[hlmBadge],hlm-badge",
+  host: {
+    "data-slot": "badge",
+    "[attr.data-variant]": "variant()",
+  },
+})
+export class HlmBadge {
+  public readonly variant = input<BadgeVariants["variant"]>("default");
+
+  constructor() {
+    classes(() => badgeVariants({ variant: this.variant() }));
+  }
+}

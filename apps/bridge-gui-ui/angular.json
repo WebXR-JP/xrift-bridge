@@ -24,7 +24,9 @@
             "polyfills": [],
             "styles": ["src/styles.css"],
             "outputHashing": "none",
-            "assets": []
+            // ADR: 同梱フォント（`src/assets/fonts`）を成果物へ運ぶ。固定名のまま
+            // `assets/` 配下に置き、`styles.css` の `@font-face` から参照する。
+            "assets": ["src/assets"]
           },
           "configurations": {
             "production": {

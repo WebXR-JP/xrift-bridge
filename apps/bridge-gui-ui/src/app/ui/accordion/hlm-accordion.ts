@@ -1,0 +1,16 @@
+import { Directive } from "@angular/core";
+import { BrnAccordion } from "@spartan-ng/brain/accordion";
+import { classes } from "../utils/hlm";
+
+@Directive({
+  selector: "[hlmAccordion], hlm-accordion",
+  hostDirectives: [{ directive: BrnAccordion, inputs: ["type", "orientation"] }],
+  host: {
+    "data-slot": "accordion",
+  },
+})
+export class HlmAccordion {
+  constructor() {
+    classes(() => "spartan-accordion flex w-full flex-col");
+  }
+}

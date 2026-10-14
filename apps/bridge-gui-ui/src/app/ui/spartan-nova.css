@@ -1,0 +1,180 @@
+/* helm 部品の見た目（spartan の既定意匠 nova からの抜粋）。
+ *
+ * 取得元: `spartan-ng/spartan` のタグ `v1.6.3`
+ * （`libs/registry/src/styles/style-nova.css`）。ライセンス: MIT。
+ *
+ * ADR: helm の部品テンプレートは `spartan-*` という素の意匠名だけを載せ、
+ * 実値はこの意匠表が `@apply` で与える。上流の文書用 `@scope` の入れ子
+ * （複数意匠の見本を並べるための封じ込め）は単一意匠の本品には要らないため
+ * 外し、大域の素の規則として置く。層には入れない（上流の配線に合わせ、
+ * 層付きの utility より確実に勝たせる）。取り込みはこの単位の7部品
+ * （accordion・badge・button・card・input・separator・tabs）の節に限る。
+ * `tabs` の paginated 変種は部品ごと取り込まないため節も入れない。
+ */
+
+/* MARK: Accordion */
+.spartan-accordion-item {
+  @apply not-last:border-b;
+}
+
+.spartan-accordion-trigger {
+  @apply focus-visible:ring-ring/50 focus-visible:border-ring focus-visible:after:border-ring **:data-[slot=accordion-trigger-icon]:text-muted-foreground! rounded-lg py-2.5 text-start text-sm font-medium hover:underline focus-visible:ring-3 **:data-[slot=accordion-trigger-icon]:ms-auto **:data-[slot=accordion-trigger-icon]:text-[length:--spacing(4)];
+}
+
+.spartan-accordion-content {
+  @apply text-sm;
+}
+
+.spartan-accordion-content-inner {
+  @apply pt-0 pb-2.5;
+}
+
+/* MARK: Badge */
+.spartan-badge {
+  @apply h-5 gap-1 rounded-4xl border border-transparent px-2 py-0.5 text-xs font-medium transition-all has-data-[icon=inline-end]:pe-1.5 has-data-[icon=inline-start]:ps-1.5 [&>ng-icon]:text-[length:--spacing(3)];
+}
+
+.spartan-badge-variant-default {
+  @apply bg-primary text-primary-foreground [a]:hover:bg-primary/80;
+}
+
+.spartan-badge-variant-secondary {
+  @apply bg-secondary text-secondary-foreground [a]:hover:bg-secondary/80;
+}
+
+.spartan-badge-variant-outline {
+  @apply border-border text-foreground [a]:hover:bg-muted [a]:hover:text-muted-foreground;
+}
+
+.spartan-badge-variant-destructive {
+  @apply bg-destructive/10 [a]:hover:bg-destructive/20 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 text-destructive dark:bg-destructive/20;
+}
+
+.spartan-badge-variant-ghost {
+  @apply hover:bg-muted hover:text-muted-foreground dark:hover:bg-muted/50;
+}
+
+.spartan-badge-variant-link {
+  @apply text-primary underline-offset-4 hover:underline;
+}
+
+/* MARK: Button */
+.spartan-button {
+  @apply focus-visible:border-ring focus-visible:ring-ring/50 data-[matches-spartan-invalid=true]:ring-destructive/20 dark:data-[matches-spartan-invalid=true]:ring-destructive/40 data-[matches-spartan-invalid=true]:border-destructive dark:data-[matches-spartan-invalid=true]:border-destructive/50 rounded-lg border border-transparent bg-clip-padding text-sm font-medium focus-visible:ring-3 active:not-aria-[haspopup]:translate-y-px data-[matches-spartan-invalid=true]:ring-3 [&_ng-icon:not([class*='text-'])]:text-[length:--spacing(3)];
+}
+
+.spartan-button-variant-default {
+  @apply bg-primary text-primary-foreground [a]:hover:bg-primary/80;
+}
+
+.spartan-button-variant-outline {
+  @apply border-border bg-background hover:bg-muted hover:text-foreground dark:bg-input/30 dark:border-input dark:hover:bg-input/50 aria-expanded:bg-muted aria-expanded:text-foreground;
+}
+
+.spartan-button-variant-secondary {
+  @apply bg-secondary text-secondary-foreground hover:bg-secondary/80 aria-expanded:bg-secondary aria-expanded:text-secondary-foreground;
+}
+
+.spartan-button-variant-ghost {
+  @apply hover:bg-muted hover:text-foreground dark:hover:bg-muted/50 aria-expanded:bg-muted aria-expanded:text-foreground;
+}
+
+.spartan-button-variant-destructive {
+  @apply bg-destructive/10 hover:bg-destructive/20 focus-visible:ring-destructive/20 dark:focus-visible:ring-destructive/40 dark:bg-destructive/20 text-destructive focus-visible:border-destructive/40 dark:hover:bg-destructive/30;
+}
+
+.spartan-button-variant-link {
+  @apply text-primary underline-offset-4 hover:underline;
+}
+
+.spartan-button-size-xs {
+  @apply h-6 gap-1 rounded-[min(var(--radius-md),10px)] px-2 text-xs in-data-[slot=button-group]:rounded-lg has-data-[icon=inline-end]:pe-1.5 has-data-[icon=inline-start]:ps-1.5 [&_ng-icon:not([class*='text-'])]:text-[length:--spacing(3)];
+}
+
+.spartan-button-size-sm {
+  @apply h-7 gap-1 rounded-[min(var(--radius-md),12px)] px-2.5 text-[0.8rem] in-data-[slot=button-group]:rounded-lg has-data-[icon=inline-end]:pe-1.5 has-data-[icon=inline-start]:ps-1.5 [&_ng-icon:not([class*='text-'])]:text-[length:--spacing(3.5)];
+}
+
+.spartan-button-size-default {
+  @apply h-8 gap-1.5 px-2.5 has-data-[icon=inline-end]:pe-2 has-data-[icon=inline-start]:ps-2;
+}
+
+.spartan-button-size-lg {
+  @apply h-9 gap-1.5 px-2.5 has-data-[icon=inline-end]:pe-3 has-data-[icon=inline-start]:ps-3;
+}
+
+.spartan-button-size-icon-xs {
+  @apply size-6 rounded-[min(var(--radius-md),10px)] in-data-[slot=button-group]:rounded-lg [&_ng-icon:not([class*='text-'])]:text-[length:--spacing(3)];
+}
+
+.spartan-button-size-icon-sm {
+  @apply size-7 rounded-[min(var(--radius-md),12px)] in-data-[slot=button-group]:rounded-lg;
+}
+
+.spartan-button-size-icon {
+  @apply size-8;
+}
+
+.spartan-button-size-icon-lg {
+  @apply size-9;
+}
+
+/* MARK: Card */
+.spartan-card {
+  @apply ring-foreground/10 bg-card text-card-foreground gap-(--card-spacing) overflow-hidden rounded-xl py-(--card-spacing) text-sm ring-1 [--card-spacing:--spacing(4)] has-data-[slot=card-footer]:pb-0 has-[>img:first-child]:pt-0 data-[size=sm]:[--card-spacing:--spacing(3)] data-[size=sm]:has-data-[slot=card-footer]:pb-0 *:[img:first-child]:rounded-t-xl *:[img:last-child]:rounded-b-xl;
+}
+
+.spartan-card-header {
+  @apply gap-1 rounded-t-xl px-(--card-spacing) [.border-b]:pb-(--card-spacing);
+}
+
+.spartan-card-title {
+  @apply text-base leading-snug font-medium group-data-[size=sm]/card:text-sm;
+}
+
+.spartan-card-description {
+  @apply text-muted-foreground text-sm;
+}
+
+.spartan-card-content {
+  @apply px-(--card-spacing);
+}
+
+.spartan-card-footer {
+  @apply bg-muted/50 rounded-b-xl border-t p-(--card-spacing);
+}
+
+/* MARK: Input */
+.spartan-input {
+  @apply dark:bg-input/30 border-input focus-visible:border-ring focus-visible:ring-ring/50 data-[matches-spartan-invalid=true]:ring-destructive/20 dark:data-[matches-spartan-invalid=true]:ring-destructive/40 data-[matches-spartan-invalid=true]:border-destructive dark:data-[matches-spartan-invalid=true]:border-destructive/50 disabled:bg-input/50 dark:disabled:bg-input/80 h-8 rounded-lg border bg-transparent px-2.5 py-1 text-base transition-colors file:h-6 file:text-sm file:font-medium focus-visible:ring-3 data-[matches-spartan-invalid=true]:ring-3 md:text-sm;
+}
+
+/* MARK: Separator */
+.spartan-separator {
+  @apply bg-border shrink-0;
+}
+
+.spartan-separator-horizontal {
+  @apply h-px w-full;
+}
+
+.spartan-separator-vertical {
+  @apply h-full w-px;
+}
+
+/* MARK: Tabs */
+.spartan-tabs {
+  @apply gap-2;
+}
+
+.spartan-tabs-list {
+  @apply rounded-lg p-[3px] group-data-horizontal/tabs:h-8 data-[variant=line]:rounded-none;
+}
+
+.spartan-tabs-trigger {
+  @apply gap-1.5 rounded-md border border-transparent px-1.5 py-0.5 text-sm font-medium group-data-[variant=default]/tabs-list:data-active:shadow-sm group-data-[variant=line]/tabs-list:data-active:shadow-none [&_ng-icon:not([class*='text-'])]:text-[length:--spacing(4)];
+}
+
+.spartan-tabs-content {
+  @apply text-sm;
+}

@@ -1,0 +1,65 @@
+import { Directive, input, signal } from "@angular/core";
+import { BrnButton } from "@spartan-ng/brain/button";
+import { classes } from "../utils/hlm";
+import { cva, type VariantProps } from "class-variance-authority";
+import type { ClassValue } from "clsx";
+import { injectBrnButtonConfig } from "./hlm-button.token";
+
+export const buttonVariants = cva(
+  "spartan-button group/button inline-flex shrink-0 items-center justify-center whitespace-nowrap transition-all outline-none select-none data-disabled:pointer-events-none data-disabled:opacity-50 [&_ng-icon]:pointer-events-none [&_ng-icon]:shrink-0",
+  {
+    variants: {
+      variant: {
+        default: "spartan-button-variant-default",
+        outline: "spartan-button-variant-outline",
+        secondary: "spartan-button-variant-secondary",
+        ghost: "spartan-button-variant-ghost",
+        destructive: "spartan-button-variant-destructive",
+        link: "spartan-button-variant-link",
+      },
+      size: {
+        default: "spartan-button-size-default",
+        xs: "spartan-button-size-xs",
+        sm: "spartan-button-size-sm",
+        lg: "spartan-button-size-lg",
+        icon: "spartan-button-size-icon",
+        "icon-xs": "spartan-button-size-icon-xs",
+        "icon-sm": "spartan-button-size-icon-sm",
+        "icon-lg": "spartan-button-size-icon-lg",
+      },
+    },
+    defaultVariants: {
+      variant: "default",
+      size: "default",
+    },
+  },
+);
+
+export type ButtonVariants = VariantProps<typeof buttonVariants>;
+
+@Directive({
+  selector: "button[hlmBtn], a[hlmBtn]",
+  exportAs: "hlmBtn",
+  hostDirectives: [{ directive: BrnButton, inputs: ["disabled"] }],
+  host: { "data-slot": "button" },
+})
+export class HlmButton {
+  private readonly _config = injectBrnButtonConfig();
+
+  private readonly _additionalClasses = signal<ClassValue>("");
+
+  public readonly variant = input<ButtonVariants["variant"]>(this._config.variant);
+
+  public readonly size = input<ButtonVariants["size"]>(this._config.size);
+
+  constructor() {
+    classes(() => [
+      buttonVariants({ variant: this.variant(), size: this.size() }),
+      this._additionalClasses(),
+    ]);
+  }
+
+  setClass(classes: string): void {
+    this._additionalClasses.set(classes);
+  }
+}
