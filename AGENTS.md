@@ -13,6 +13,7 @@ XRiftでワールド内とローカルを接続するための仕組みを作る
 - workspace パッケージ間の依存は `package.json` で `workspace:*` と明示する。catalog には外部パッケージのみを載せ、workspace パッケージ名を catalog のキーにしない。
   - `vp run` は `catalog:`（catalog 値が `workspace:*`）を依存グラフのエッジとして認識しないため、`vp run -r build` のビルド順序が壊れる。上流の `dist` 生成前に下流の `tsc` が走ると `TS2307` になり、失敗後の停止処理で並行タスクが `SIGKILL(137)` で落ちる。
 - `vp run` のフラグ（`--log`・`-v` など）はタスク名より前に置く。後に置くと子コマンドへ追加引数として転送され失敗する。
+- プラグインは `packages/bridge-plugin-*` で種別ごとに1パッケージとする。子画面はパッケージ側で事前ビルドし、GUI が staging（`apps/bridge-gui-main/src/plugin-view-dist/<種別>/`）経由で取り込む。クリーン状態の手順は `pnpm install` → `pnpm --filter bridge-gui-main gui:prepare`（plugin 閉包の build と app devkit の用意）→ `vp run -r build` とする。`gui:prepare` と plugin の `build` は Hutch（devkit 生成。初回にネットワーク取得）を要求し、`hutch` は `PATH` に要る。
 
 ## 構成、要件
 

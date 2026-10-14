@@ -246,7 +246,7 @@ MVP第1段（セッション公開＋診断移設）の実施結果を記録す�
 - ビルド: `vp run -r build` 成功。
 - テスト・型検査: `vp test`（ルート）で 291 合格／31 ファイル。`vp run -r test:types` で 4 パッケージ成功。
 - 統合スモーク（3/3 回・各 15 項目 PASS）: ビルド済み `apps/bridge-cli` を実プロセス起動 × `packages/world-client` を Node の `origin` 指定で実行し、実 WebSocket・yamux で往復した。流れは `accept open` → ワールド起点 `pairing_start` → 比較コード受信 → CLI 標準入力で `approve <requestId> <code>` → `auth_ok` → reliable Session 生成 → `{op:"echo"}` の同形返送と `{op:"ping"}` → `{op:"pong"}` → CLI `status` に `diagnosticEcho`・`diagnosticPing` が反映 → 切断で認可済み接続が消える → 再接続で新しい要求 ID・新しい比較コードと再承認が必要（承認前に `sessionProvider` は未解決＝認可を継承しない）。（注記：受付トグル化に伴い現行の対話命令は `accept enable`／`accept disable`）
-- 応答の出所: echo／ping 応答を生成するのは `packages/bridge-app-core/src/plugins/diagnostic.ts` のみであり、`packages/bridge-server/src` に診断参照は無い（`diagnostic-handler.ts` は削除済み）。`status` の診断項目は `server.getStats()` ではなく CLI の `startDiagnostics()` 由来である。
+- 応答の出所: echo／ping 応答を生成するのは `packages/bridge-plugin-diagnostic/src/index.ts` のみであり、`packages/bridge-server/src` に診断参照は無い（`diagnostic-handler.ts` は削除済み）。`status` の診断項目は `server.getStats()` ではなく CLI の `startDiagnostics()` 由来である。
 - 契約の実測: `getStats()` のキーから診断項目が消えていること、reliable Session にサーバ側の既定応答が無いこと、認可前・切替中はセッションが公開されないこと、session 終了で一覧・取得から外れ終了通知が一度だけであることを確認した。
 - 制限・未再現（失敗側の記録）: `packages/bridge-server/tests/server.test.ts` の「受付の自動クローズでも開始待ちは失効する」（実タイマー系）が負荷時に間欠失敗するとの報告があったが、41 回の再現試行で未再現であり、本変更の経路（セッション公開・診断・管理購読）と非交差と確認した。解消の主張はしない。（注記：当該テストは受付トグル化に伴い撤去済み）
 - 未計測（第1段の対象外）: `apps/bridge-gui-main`（Electrobun）そのもの、実 GUI→実ワールドの往復、native↔webview の RPC、埋込み UI、パッケージング／配布サイズ・常駐メモリは未計測である。`design/bridge-app.md`「基盤の観測」の該当項目は未計測である。
@@ -267,7 +267,7 @@ MVP第1段（セッション公開＋診断移設）の実施結果を記録す�
 
 - 目的: 実ワールドの表示板への文面表示、切断・再接続時の再承認・再割当ての必要性、表示板の文面消去を目視で確認する。
 - 手順:
-  1. `vp run -r build` で上流をビルドする。
+  1. クリーン状態では先に `pnpm --filter bridge-gui-main gui:prepare` を行ってから、`vp run -r build` で上流をビルドする（詳細は README を参照）。
   2. 開発用 Origin を許可して画面を起動する（`BRIDGE_GUI_DEV_ORIGINS=http://localhost:5173 pnpm --filter bridge-gui-main gui:run`）。
   3. 別端末で `vp run diagnostic-world#dev` を起動し、閲覧器で `http://localhost:5173` を開く。
   4. ワールドの操作盤から接続を開始し、表示された照合符号を画面の保留表示と目視照合して承認する。
@@ -327,3 +327,18 @@ MVP第1段（セッション公開＋診断移設）の実施結果を記録す�
 - 失われる補助防御（入力ミス・取り違えの機械的拒否）の扱いは設計文書を正本とし、ここでは繰り返さない。
 
 - 未確認事項：native 画素観測・実入力送信の自動化、実ワールド往復・耐久・負荷、メモリ・起動時間の計測、GUI 経路での二重保留の目視は今回扱わない（非目標または対象外）。
+
+## プラグインのパッケージ化の確認結果（2026-10-14 実施済み）
+
+既存の節は書き換えない。本節で包装層・native ゲート・一時観測の除去・境界不変条件の成立を示す。形状・型・値はコードを正本とする。
+
+- 包装層：実施済み・結果は合格。自前 devkit での prepare、パッケージ内での型検査＋子画面事前ビルド、完成資産から staging を経て最終 Resources までの一致、資産欠落・pin 不一致の包装前拒否、所要時間の記録を確認した。確認方法は包装スクリプトの検査と実包装の記録である。
+- native ゲート：実施済み・結果は合格。開発ビルドで新経路の子画面が実際の子 Webview で読み込まれ、子から main への初回取得が main に到達して応答が返り、main から子への後続 push が子に受信された。子画面表示と表示更新は人間の GUI セッションで目視確認した。
+- 一時観測の除去：実施済み・結果は合格。移行用の一時観測（`[bridge-probe]`）は除去済みであり、完成資産に一時観測の標識を残さないことを検査で固定している。
+- 境界不変条件：実施済み・結果は合格。汎用ホスト・SDK・共有契約・core が具象プラグインを参照しないこと、具象 import は composition root のみであること、core に逆依存を残さないこと、プラグインはホストソースを参照しないこと、SDK は実行系実体を持たないこと、共有契約に具象 URL を残さないこと、ワールドは通信契約 entry のみを利用することを検査で固定し、各検査が違反を実際に検出することを確認した。確認方法は境界検査の緑と違反検出の確認である。
+- 人間 GUI 確認（2026-10-14・人間が実施。対象は開発ビルド＋開発口＋ `apps/diagnostic-world` の dev（`http://localhost:5173`）。詳細手順は人間確認手順と各 README を正本とする）：
+  - テキストの統合往復：実 GUI の子画面から診断ワールドの表示板へ本文を1回送信し、表示板に本文が出て、子画面が反映確認で決着した。
+  - 両子画面の表示：text・diagnostic の子画面が表示され、割当て先・状態・統計・改訂番号が見えた。
+  - 移行前後で共通の既知挙動（原因は未特定）：窓を前面／可視にしない状態で新しいマウントを行うと子 Webview が ready に到達しない事象が出た（text・diagnostic の双方。移行前の旧経路でも同一症状を観測）。新規起動直後の前面状態でマウントすると両方とも成立した。可視性・起動条件への依存を示唆する観測だが断定しない。自動化上の含意として native 子画面のマウントは窓が前面／可視のときに発生させる。
+  - 未再現の UI 症状（未解決のまま残す。解決扱いにしない）：1回目の確認で「診断プラグインの追加」と「起動中プラグインの削除」が無反応に見えた。統制した状態で再試行すると両方とも設計どおりに動作し、再現しなかった。当時の観測は `plugin-list` が `disabled: true` でセッション候補が枯渇する状態だった。
+  - 上記は当該条件での観測であり、問題が無いことの一般化はしない。

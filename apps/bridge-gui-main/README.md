@@ -24,15 +24,19 @@ XRift Bridge の管理画面。Electrobun 2.x＋Bun main を前提とする。
 ```sh
 # ルートで依存を入れる（初回・package.json 変更時）
 pnpm install
-# Hutch の生成物（.hutch/devkit）を用意する（初回・pin 変更時。
-# `electrobun/*` の型解決に要るため `vp run -r build` より先に行う）
+# Hutch の生成物（plugin 閉包の dist と各パッケージの devkit）を用意する
+# （初回・pin 変更時。`electrobun/*` の型解決と hutch の config 読込みに要るため
+# `vp run -r build` より先に行う。plugin 閉包の build は依存順で回り、
+# 各 devkit の用意は plugin の `build` が満たす）
 pnpm --filter bridge-gui-main gui:prepare
-# 上流の dist を作る（段2以降で backend が参照するため。Angular の production AOT を含む）
+# 上流の dist を作る（段2以降で backend が参照するため。Angular の production AOT・
+# 子画面事前ビルド・staging 生成を含む。plugin の `build` が自前 devkit の再用意を
+# 内包するため `hutch` を要求する。初回はネットワーク取得）
 vp run -r build
 ```
 
 `hutch` が `PATH` に無い環境では `export PATH="$HOME/.hutch/bin:$PATH"` を足すこと
-（`gui:prepare`・`gui:run`・`gui:build` は `hutch` 呼び出しのため）。
+（`gui:prepare`・`vp run -r build`（plugin の `build` 経由）・`gui:run`・`gui:build` は `hutch` 呼び出しのため）。
 
 順序を変えると devkit・上流 dist の未生成で `TS2307` になるため、
 `gui:run` 等に入る前に上記を済ませること。
@@ -44,8 +48,10 @@ fresh 直後でも `vp run -r build` が vp のキャッシュに救われて通
 ## 入口
 
 `vp run -r build`・`vp test`・`vp check` を壊さないため、通常の再帰 build
-（`build`＝型検査のみ）に Hutch のネイティブ包装を混ぜない。判断理由は
+（`build`＝型検査＋子画面事前ビルド＋staging 生成）に Hutch のネイティブ包装を混ぜない。判断理由は
 `hutch.config.ts` の ADR コメントを参照。GUI の起動・包装は opt-in の入口を使う。
+`gui:prepare` は plugin 閉包の build（依存順。各 devkit の用意を含む）と app devkit の用意を
+まとめて行うため、`gui:run` 系に入る前に別途プラグイン操作は要らない。
 
 ```sh
 pnpm --filter bridge-gui-main gui:run          # 開発実行（単発。Angular dev 生成＋dev 包装＋起動）

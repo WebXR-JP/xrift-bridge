@@ -21,7 +21,7 @@ XRift とローカルブリッジの接続を診断するワールド（開発�
   最大8行、超過分は末尾省略（`…`）の方針で表示し、HTML・Markdown 解釈はしない。
   切断・再接続で本文を消す。本文は表示専用であり、診断証拠 JSON・ログ・同期状態に含めない。
 - `src/text/receiver.ts` — React/R3F 非依存のテキスト受信手順（検証・状態反映・反映確認・後片付け）。
-  契約 subpath（`bridge-app-core/text-contract`）だけを参照し、`bridge-server` 等を
+  契約 subpath（`bridge-plugin-text/contract`）だけを参照し、`bridge-server` 等を
   ブラウザへ引き込まない。不正な表示要求は無視し、当該セッションも Connection も閉じない。
 - `src/text/useTextReceiver.ts` — テキスト受信の React 結合（3D盤専用）。
   生成・購読・破棄の所有は effect が持つ（StrictMode 再実行・再マウントで残留しない）。
