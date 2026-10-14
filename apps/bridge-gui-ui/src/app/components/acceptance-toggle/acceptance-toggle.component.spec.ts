@@ -30,6 +30,17 @@ describe("受付操作の表示", () => {
     expect(disable.disabled).toBe(true);
   });
 
+  it("未取得の間は受付中も受付停止中も断定しない", async () => {
+    await TestBed.compileComponents();
+    const fixture = TestBed.createComponent(AcceptanceToggleComponent);
+    fixture.detectChanges();
+    const text: string = fixture.nativeElement.textContent ?? "";
+    expect(text).toContain("—");
+    expect(text).not.toContain("受付中");
+    expect(text).not.toContain("受付停止中");
+    expect(fixture.nativeElement.querySelector(".rounded-full")).toBe(null);
+  });
+
   it("取得済みなら操作でき受付状態が出る", async () => {
     await TestBed.compileComponents();
     const fixture = TestBed.createComponent(AcceptanceToggleComponent);

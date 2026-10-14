@@ -93,7 +93,12 @@ describe("表示状態の採用", () => {
     const adopted = service.snapshot();
     stub.pushHandler()?.({ revision: 3, snapshot: makeSnapshot({ revision: 3 }) });
     expect(service.snapshot()).toBe(adopted);
-    expect(service.eventLog().join("\n")).toContain("無視");
+    expect(
+      service
+        .eventLog()
+        .map((entry) => entry.message)
+        .join("\n"),
+    ).toContain("無視");
   });
 
   it("改訂番号を文書題に反映する", async () => {
@@ -106,9 +111,69 @@ describe("表示状態の採用", () => {
     const { service, stub } = prepareService();
     await service.fetchInitial();
     stub.pushHandler()?.({ revision: 2, snapshot: makeSnapshot({ revision: 2 }) });
-    const log = service.eventLog().join("\n");
+    const log = service
+      .eventLog()
+      .map((entry) => entry.message)
+      .join("\n");
     expect(log).toContain("更新");
     expect(log).toContain("無視");
+  });
+});
+
+// 受信記録の時刻表示。時刻は記録時の付け置きであり、描画で作り直さない。
+// backend の発生時刻ではなく、管理画面で受信・記録した時刻である。
+describe("受信記録の時刻表示", () => {
+  it("記録した時刻は `HH:mm:ss` 形式で再読み取りでも変わらない", async () => {
+    const { service } = prepareService();
+    await service.fetchInitial();
+    const first = service.eventLog();
+    expect(first.length).toBeGreaterThan(0);
+    for (const entry of first) {
+      expect(entry.time).toMatch(/^\d{2}:\d{2}:\d{2}$/);
+    }
+    const second = service.eventLog();
+    expect(second.map((entry) => entry.time)).toEqual(first.map((entry) => entry.time));
+    expect(second.map((entry) => entry.message)).toEqual(first.map((entry) => entry.message));
+  });
+
+  it("同時刻に記録しても行キーは衝突しない", async () => {
+    const { service, stub } = prepareService();
+    await service.fetchInitial();
+    await service.enableAcceptance();
+    await service.disableAcceptance();
+    stub.pushHandler()?.({ revision: 2, snapshot: makeSnapshot({ revision: 2 }) });
+    const entries = service.eventLog();
+    const ids = entries.map((entry) => entry.id);
+    expect(new Set(ids).size).toBe(ids.length);
+  });
+
+  it("比較コード・本文を含む試験値が時刻付きの記録へ漏れない", async () => {
+    const { service, stub } = prepareService();
+    stub.client.getSnapshot.mockResolvedValueOnce(
+      makeSnapshot({ revision: 3, pending: [{ requestId: "r1" }] }),
+    );
+    await service.fetchInitial();
+    await service.showPairingView("r1");
+    await service.approvePairing("r1", "041003");
+    const dumped = JSON.stringify(service.eventLog());
+    expect(dumped).not.toContain("041003");
+    expect(dumped).not.toContain("041 003");
+  });
+
+  it("記録時刻は受信時のローカル時計であり backend の値を写さない", async () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date(2026, 0, 2, 3, 4, 5));
+      const { service } = prepareService();
+      await service.fetchInitial();
+      const entries = service.eventLog();
+      expect(entries.length).toBeGreaterThan(0);
+      // snapshot の改訂番号（3）とは無関係に、記録時の時計だけが載る。
+      expect(entries[0]?.time).toBe("03:04:05");
+      expect(entries[0]?.message).not.toContain("03:04:05");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 
@@ -158,14 +223,29 @@ describe("限定操作の処理", () => {
     const { service, stub } = prepareService();
     stub.client.unassignPlugin.mockResolvedValueOnce({ released: false, issues: [] });
     await service.unassignPlugin("i1", "s1", "text");
-    expect(service.eventLog().join("\n")).toContain("不完全");
-    expect(service.eventLog().join("\n")).not.toContain("割当てを外した");
+    expect(
+      service
+        .eventLog()
+        .map((entry) => entry.message)
+        .join("\n"),
+    ).toContain("不完全");
+    expect(
+      service
+        .eventLog()
+        .map((entry) => entry.message)
+        .join("\n"),
+    ).not.toContain("割当てを外した");
     stub.client.unassignPlugin.mockResolvedValueOnce({
       released: true,
       issues: [{ stage: "unassign" }],
     });
     await service.unassignPlugin("i1", "s1", "text");
-    expect(service.eventLog().join("\n")).toContain("不完全");
+    expect(
+      service
+        .eventLog()
+        .map((entry) => entry.message)
+        .join("\n"),
+    ).toContain("不完全");
   });
 
   it("終了は要求だけ送り再取得しない", async () => {
@@ -175,7 +255,12 @@ describe("限定操作の処理", () => {
     await service.quit();
     expect(stub.client.quit).toHaveBeenCalledTimes(1);
     expect(stub.client.getSnapshot.mock.calls.length).toBe(baseline);
-    expect(service.eventLog().join("\n")).toContain("終了");
+    expect(
+      service
+        .eventLog()
+        .map((entry) => entry.message)
+        .join("\n"),
+    ).toContain("終了");
   });
 
   it("準備完了の通知に文書題を載せる", () => {
@@ -191,7 +276,12 @@ describe("失敗時の表示", () => {
     const { service, stub } = prepareService();
     stub.client.enableAcceptance.mockRejectedValueOnce(new Error("hma-fail"));
     await service.enableAcceptance();
-    expect(service.eventLog().join("\n")).toContain("有効化に失敗");
+    expect(
+      service
+        .eventLog()
+        .map((entry) => entry.message)
+        .join("\n"),
+    ).toContain("有効化に失敗");
   });
 
   it("テキスト割当ての失敗はカードの説明に出し本文は載せない", async () => {
@@ -200,7 +290,12 @@ describe("失敗時の表示", () => {
     await service.assignPlugin("text");
     expect(service.textError()).toContain("割当て不可");
     expect(service.textError()).not.toContain("041003");
-    expect(service.eventLog().join("\n")).toContain("プラグイン割当てに失敗");
+    expect(
+      service
+        .eventLog()
+        .map((entry) => entry.message)
+        .join("\n"),
+    ).toContain("プラグイン割当てに失敗");
   });
 
   it("テキスト割当て解除の失敗はカードの説明に出す", async () => {
@@ -296,7 +391,12 @@ describe("保留コードの一時状態", () => {
     release(makePairingView("r1"));
     await shown;
     expect(service.pairingViews().has("r1")).toBe(false);
-    expect(service.eventLog().join("\n")).toContain("破棄");
+    expect(
+      service
+        .eventLog()
+        .map((entry) => entry.message)
+        .join("\n"),
+    ).toContain("破棄");
   });
 
   it("取得不能時は理由だけを残し本文は載せない", async () => {
@@ -314,7 +414,12 @@ describe("保留コードの一時状態", () => {
       available: false,
       reason: "承認済みのため取得できない",
     });
-    expect(service.eventLog().join("\n")).toContain("取得できない");
+    expect(
+      service
+        .eventLog()
+        .map((entry) => entry.message)
+        .join("\n"),
+    ).toContain("取得できない");
   });
 });
 
@@ -327,7 +432,10 @@ describe("秘密の非記録", () => {
     await service.fetchInitial();
     await service.showPairingView("r1");
     await service.approvePairing("r1", "041003");
-    const log = service.eventLog().join("\n");
+    const log = service
+      .eventLog()
+      .map((entry) => entry.message)
+      .join("\n");
     expect(log).not.toContain("041003");
     expect(log).not.toContain("041 003");
   });
@@ -401,7 +509,12 @@ describe("子画面タグの照合", () => {
       const tags = hosts.spike.querySelectorAll("electrobun-webview");
       expect(tags.length).toBe(1);
       expect(tags[0]?.id).toBe("spike-spike-2");
-      expect(service.eventLog().join("\n")).toContain("mountId=spike-1");
+      expect(
+        service
+          .eventLog()
+          .map((entry) => entry.message)
+          .join("\n"),
+      ).toContain("mountId=spike-1");
     } finally {
       hosts.dispose();
     }
@@ -541,7 +654,12 @@ describe("子画面操作の要求送出", () => {
     expect(stub.client.resetSpike).toHaveBeenCalledTimes(1);
     // いずれも所有一覧の読直しを伴う。
     expect(stub.client.listSpikes).toHaveBeenCalledTimes(3);
-    expect(service.eventLog().join("\n")).toContain("mountId=spike-1");
+    expect(
+      service
+        .eventLog()
+        .map((entry) => entry.message)
+        .join("\n"),
+    ).toContain("mountId=spike-1");
   });
 
   it("実プラグインの再試行は要求後に最新状態を読み直す", async () => {
@@ -551,7 +669,12 @@ describe("子画面操作の要求送出", () => {
     await service.retryPluginMounts();
     expect(stub.client.retryPluginMounts).toHaveBeenCalledTimes(1);
     expect(stub.client.getSnapshot.mock.calls.length).toBe(baseline + 1);
-    expect(service.eventLog().join("\n")).toContain("再試行を要求した");
+    expect(
+      service
+        .eventLog()
+        .map((entry) => entry.message)
+        .join("\n"),
+    ).toContain("再試行を要求した");
   });
 });
 

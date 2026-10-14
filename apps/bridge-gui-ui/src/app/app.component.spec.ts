@@ -4,6 +4,7 @@ import type { ComponentFixture } from "@angular/core/testing";
 import { describe, expect, it, vi } from "vite-plus/test";
 import { AppComponent } from "./app.component.ts";
 import { ManagementService } from "./Services/management.service.ts";
+import type { EventLogEntry } from "./Services/management.service.ts";
 import { makeSnapshot } from "./snapshot-fixture.ts";
 
 // 入れ物の起動時の振る舞い。初回取得と準備完了通知だけを行い、
@@ -17,7 +18,7 @@ function prepareServiceStub() {
   return {
     snapshot: signal(makeSnapshot({ revision: 5 })),
     pairingViews: signal(new Map()),
-    eventLog: signal([] as readonly string[]),
+    eventLog: signal([] as readonly EventLogEntry[]),
     spikeMounts: signal([] as readonly never[]),
     fetchInitial: vi.fn(async () => {}),
     notifyReady: vi.fn(),

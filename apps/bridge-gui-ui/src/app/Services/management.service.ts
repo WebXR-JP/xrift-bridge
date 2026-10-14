@@ -49,6 +49,27 @@ function describeActionError(error: unknown): string {
 }
 
 /**
+ * 受信記録の1行（管理画面の表示用構造）。
+ *
+ * `time` は描画時に作らず、`appendLog` の時点で一度だけ付ける（再描画で
+ * 変わらない）。同時刻の行があっても `id` で区別する。
+ */
+export interface EventLogEntry {
+  /** ローカル連番。行の安定キーであり、同時刻でも衝突しない。 */
+  readonly id: number;
+  /** 記録した時刻（`HH:mm:ss`）。 */
+  readonly time: string;
+  /** 安全な要約。比較コード本文・業務 payload・DTO 全文・生の例外文字列は載せない。 */
+  readonly message: string;
+}
+
+/** 記録時刻の表示（`HH:mm:ss`）を作る。 */
+function formatLogTime(now: Date): string {
+  const pad = (value: number): string => String(value).padStart(2, "0");
+  return `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
+}
+
+/**
  * 子画面タグの `toggleHidden` 初期化待ちの上限（フレーム数）。
  *
  * append 直後は `webviewId` が `null` で `toggleHidden` が何もしないため、
@@ -76,9 +97,17 @@ export class ManagementService {
   // signal の値は読取り専用の写しとして公開し、呼び出し側の書換えを受けない。
   private readonly views = signal<ReadonlyMap<string, PairingViewResult>>(new Map());
 
-  // 受信記録（イベントログ）。採用／無視の符号と操作結果の要約だけを載せ、
-  // 比較コード本文・payload は載せない。小規模利用前提のため上限は設けない。
-  private readonly log = signal<readonly string[]>([]);
+  // ADR: 受信記録は管理画面で受信・記録した時刻を載せる。backend の発生時刻
+  // ではないため、snapshot や push の時刻欄から写さず、`appendLog` の時点で
+  // ローカル時計を一度だけ読む。時刻付与のために新しい業務データは取得せず、
+  // 採用／無視の符号と操作結果の要約だけを載せる（比較コード本文・payload は
+  // 載せない）。小規模利用前提のため件数上限や履歴保存は追加しない。
+  // 描画側は `time` をそのまま示し、時刻を生成しない（再描画で変わらない）。
+  // `id` はローカル連番の行キーであり、同時刻でも衝突しない。
+  private readonly log = signal<readonly EventLogEntry[]>([]);
+
+  // 受信記録の次の行番号。`log` とは別に持ち、行の安定キーに使う。
+  private nextLogId = 0;
 
   /** テキスト操作の失敗表示。本文は含めない（失敗理由だけである）。 */
   private readonly textFailure = signal("");
@@ -152,9 +181,15 @@ export class ManagementService {
     });
   }
 
-  /** 受信記録へ1行追加する。本文・payload は載せない。 */
+  /** 受信記録へ1行追加する。時刻はこの時点で一度だけ付け、本文・payload は載せない。 */
   private appendLog(message: string): void {
-    this.log.update((entries) => [...entries, message]);
+    const entry: EventLogEntry = {
+      id: this.nextLogId,
+      time: formatLogTime(new Date()),
+      message,
+    };
+    this.nextLogId += 1;
+    this.log.update((entries) => [...entries, entry]);
   }
 
   /** 受信した表示状態を revision 規約で採用し、採用時のみ反映する。 */

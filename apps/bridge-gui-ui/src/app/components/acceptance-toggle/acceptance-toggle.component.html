@@ -1,10 +1,15 @@
 <!-- 受付操作（左に状態・右に操作）。操作の可否は表示状態の有無で決まる。 -->
+<!-- 未取得の間は状態を断定せず「—」だけを示す（ドット無し）。 -->
 <section class="flex flex-col gap-3">
   <h2 class="text-[15px] font-bold text-[var(--foreground)]">受付</h2>
   <div class="flex items-center justify-between gap-4">
     <span class="flex items-center gap-2 text-[14px] font-medium text-[var(--foreground)]">
-      <span class="inline-block h-2 w-2 rounded-full" style="background: var(--success)"></span>
-      <span>{{ accepting ? "受付中" : "受付停止中" }}</span>
+      @if (snapshot() === null) {
+        <span>—</span>
+      } @else {
+        <span class="inline-block h-2 w-2 rounded-full" style="background: var(--success)"></span>
+        <span>{{ accepting ? "受付中" : "受付停止中" }}</span>
+      }
     </span>
     <span class="flex shrink-0 items-center gap-2">
       <button
