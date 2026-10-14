@@ -72,9 +72,9 @@ function formatLogTime(now: Date): string {
 /**
  * 子画面タグの `toggleHidden` 初期化待ちの上限（フレーム数）。
  *
- * append 直後は `webviewId` が `null` で `toggleHidden` が何もしないため、
- * rAF で再試行する。無制限ループにしないための上限であり、超えたら諦めて
- * 記録を残す。
+ * append 直後は `webviewId` が `null` であったり custom element の upgrade
+ * 前で `toggleHidden` が未定義であったりするため、rAF で再試行する。
+ * 無制限ループにしないための上限であり、超えたら諦めて記録を残す。
  */
 const PLUGIN_HIDDEN_RETRY_LIMIT = 120;
 
@@ -109,8 +109,8 @@ export class ManagementService {
   // 受信記録の次の行番号。`log` とは別に持ち、行の安定キーに使う。
   private nextLogId = 0;
 
-  /** テキスト操作の失敗表示。本文は含めない（失敗理由だけである）。 */
-  private readonly textFailure = signal("");
+  /** プラグイン操作の失敗表示。本文は含めない（失敗理由だけである）。 */
+  private readonly pluginFailure = signal("");
 
   /** 現在採用中の表示状態。未取得の間は null である。 */
   readonly snapshot = this.current.asReadonly();
@@ -124,8 +124,8 @@ export class ManagementService {
   /** 受信記録。採用／無視と操作結果の要約だけを載せる。 */
   readonly eventLog = this.log.asReadonly();
 
-  /** テキスト操作の失敗表示。本文は含めない（失敗理由だけである）。 */
-  readonly textError = this.textFailure.asReadonly();
+  /** プラグイン操作の失敗表示。本文は含めない（失敗理由だけである）。 */
+  readonly pluginError = this.pluginFailure.asReadonly();
 
   // 段0スパイクの所有一覧の表示状態。タグ配置の照合元であり、
   // `spikeList` の結果だけを載せる（履歴は持たない）。
@@ -155,14 +155,19 @@ export class ManagementService {
   // 非表示を保証しない。`OverlaySync` の矩形 0x0 停止も非表示にはならない。
   // 表示対象は mountId 単位の所有表の `instanceId` で決め、タグの再生成・
   // DOM 移動・`src` 再設定はしない。切替は業務 RPC を送らない。
-  // 状態は operations 画面の選択と選択中インスタンスだけであり、段0は対象外
-  // （開発用に常時表示のままにする）。
+  // 状態は operations 画面の選択と選択中インスタンスだけである。実プラグインは
+  // 可視かつ対象個体に一致する場合だけ見せ、段0は operations 表示中のみ
+  // 見せる（タブは無い）。いずれも同じ applicator（有限 rAF 再試行・
+  // 重複予約抑止）で `toggleHidden` を適用する。
   private pluginViewVisible = false;
   private activePluginInstanceId: string | null = null;
   private readonly pluginInstanceIds = new Map<string, string>();
   private readonly pluginDesiredHidden = new Map<string, boolean>();
   private readonly pluginHiddenRetries = new Map<string, number>();
   private readonly pluginHiddenScheduled = new Set<string>();
+  private readonly spikeDesiredHidden = new Map<string, boolean>();
+  private readonly spikeHiddenRetries = new Map<string, number>();
+  private readonly spikeHiddenScheduled = new Set<string>();
 
   // 採用中 snapshot の遷移規則。backend が登録済み companion の解決済み
   // view パス集合から生成した値の写しであり、タグ属性に載せる正本である。
@@ -461,6 +466,7 @@ export class ManagementService {
     }
     this.reconcileSpikeTags(this.spikeSummaries());
     this.applyPluginVisibility();
+    this.applySpikeVisibility();
   }
 
   /** 子画面タグを1つ作る。属性は所有表の発行値だけを載せる。 */
@@ -494,6 +500,11 @@ export class ManagementService {
     const tag = this.buildMountTag("spike", mountId, initialUrl, SPIKE_NAVIGATION_RULES_ATTRIBUTE);
     this.spikeHost.append(tag);
     this.spikeTags.set(mountId, tag);
+    // ADR: 配置直後に operations の表示状態を適用する。タグの再生成・
+    // DOM 移動・`src` 再設定はしない。
+    this.spikeDesiredHidden.set(mountId, this.desiredSpikeHidden());
+    this.spikeHiddenRetries.set(mountId, 0);
+    this.applySpikeHidden(mountId);
   }
 
   /** 配置中の段0タグを外す。表示の破棄は main の所有表が行う。 */
@@ -504,6 +515,9 @@ export class ManagementService {
     }
     tag.remove();
     this.spikeTags.delete(mountId);
+    this.spikeDesiredHidden.delete(mountId);
+    this.spikeHiddenRetries.delete(mountId);
+    this.spikeHiddenScheduled.delete(mountId);
   }
 
   /**
@@ -601,9 +615,10 @@ export class ManagementService {
   /**
    * 子画面の表示対象を切り替える。表示切替だけであり、業務 RPC は送らない。
    *
-   * 各タグの desired hidden は `!(可視 && そのタグの instanceId === 選択中)`
-   * であり、`toggleHidden` で適用する。未初期化のタグは rAF で上限付き
-   * 再試行し、desired を保持して初期化後に適用する。
+   * 実プラグインの各タグの desired hidden は `!(可視 && そのタグの
+   * instanceId === 選択中)`、段0の各タグは `!可視` であり、`toggleHidden`
+   * で適用する。未初期化のタグは rAF で上限付き再試行し、desired を保持して
+   * 初期化後に適用する。
    *
    * @param visible - operations 画面が選択されている場合に真。
    * @param activeInstanceId - 表示対象のインスタンス識別子。無ければ `null`。
@@ -612,6 +627,7 @@ export class ManagementService {
     this.pluginViewVisible = visible;
     this.activePluginInstanceId = activeInstanceId;
     this.applyPluginVisibility();
+    this.applySpikeVisibility();
   }
 
   /**
@@ -643,10 +659,84 @@ export class ManagementService {
   }
 
   /**
-   * 1つのタグへ desired を適用する。未初期化なら rAF で上限付き再試行する。
+   * 段0タグの desired hidden を求める。operations 表示中のみ偽である。
    *
-   * `toggleHidden` が関数でない要素（happy-dom の未知要素）は no-op とし、
-   * タグの再生成・DOM 移動・`src` 再設定はしない。
+   * 段0にタブは無く、選択中インスタンスとは無関係である。
+   *
+   * @returns 隠す場合に真。
+   */
+  private desiredSpikeHidden(): boolean {
+    return !this.pluginViewVisible;
+  }
+
+  /** 段0の全タグの desired を求め直し、変わったものだけ再試行回数を捨てて適用する。 */
+  private applySpikeVisibility(): void {
+    for (const mountId of this.spikeTags.keys()) {
+      const desired = this.desiredSpikeHidden();
+      if (this.spikeDesiredHidden.get(mountId) !== desired) {
+        this.spikeDesiredHidden.set(mountId, desired);
+        this.spikeHiddenRetries.set(mountId, 0);
+      }
+      this.applySpikeHidden(mountId);
+    }
+  }
+
+  /**
+   * 未初期化の表示切替を rAF で上限付き再試行する。
+   *
+   * `toggleHidden` 未定義（custom element の upgrade 遅延）と `webviewId`
+   * 未初期化のいずれにも同じ上限・重複予約抑止を使う。上限を超えた場合と
+   * 予約手段が無い場合は記録を残して諦める。無制限ループにしない。
+   *
+   * @param mountId - 対象のマウント識別子。
+   * @param reapply - 次枠で desired を適用し直す処理。
+   * @param retries - 種別ごとの再試行回数表。
+   * @param scheduled - 種別ごとの重複予約抑止集合。
+   * @param stillMounted - 再試行時点で配置が残っている場合に真。
+   * @param giveUpMessage - 上限超過・予約不能時に記録する定型文。
+   */
+  private scheduleHiddenRetry(
+    mountId: string,
+    reapply: () => void,
+    retries: Map<string, number>,
+    scheduled: Set<string>,
+    stillMounted: () => boolean,
+    giveUpMessage: string,
+  ): void {
+    const count = retries.get(mountId) ?? 0;
+    if (count >= PLUGIN_HIDDEN_RETRY_LIMIT) {
+      scheduled.delete(mountId);
+      this.appendLog(giveUpMessage);
+      return;
+    }
+    retries.set(mountId, count + 1);
+    if (scheduled.has(mountId)) {
+      return;
+    }
+    const scheduler = (globalThis as { readonly requestAnimationFrame?: unknown })[
+      "requestAnimationFrame"
+    ];
+    if (typeof scheduler !== "function") {
+      scheduled.delete(mountId);
+      this.appendLog(giveUpMessage);
+      return;
+    }
+    scheduled.add(mountId);
+    (scheduler as typeof requestAnimationFrame)(() => {
+      scheduled.delete(mountId);
+      if (!stillMounted()) {
+        return;
+      }
+      reapply();
+    });
+  }
+
+  /**
+   * 実プラグインの1つのタグへ desired を適用する。未初期化なら rAF で上限付き再試行する。
+   *
+   * `toggleHidden` 未定義・`webviewId` 未初期化のいずれも同じ有限再試行で
+   * 初期化後に適用する。happy-dom の未知要素のように初期化しない場合は
+   * 上限で諦める。タグの再生成・DOM 移動・`src` 再設定はしない。
    *
    * @param mountId - 対象のマウント識別子。
    */
@@ -658,40 +748,56 @@ export class ManagementService {
     const desired = this.pluginDesiredHidden.get(mountId) ?? this.desiredPluginHidden(mountId);
     this.pluginDesiredHidden.set(mountId, desired);
     const candidate = tag as HTMLElement & PluginVisibilityTag;
-    if (typeof candidate.toggleHidden !== "function") {
-      return;
-    }
-    if (typeof candidate.webviewId !== "number") {
-      const retries = this.pluginHiddenRetries.get(mountId) ?? 0;
-      if (retries >= PLUGIN_HIDDEN_RETRY_LIMIT) {
-        this.pluginHiddenScheduled.delete(mountId);
-        this.appendLog(`実プラグイン子画面の表示切替を諦めた mountId=${mountId}`);
-        return;
-      }
-      this.pluginHiddenRetries.set(mountId, retries + 1);
-      if (this.pluginHiddenScheduled.has(mountId)) {
-        return;
-      }
-      const scheduler = (globalThis as { readonly requestAnimationFrame?: unknown })[
-        "requestAnimationFrame"
-      ];
-      if (typeof scheduler !== "function") {
-        this.pluginHiddenScheduled.delete(mountId);
-        this.appendLog(`実プラグイン子画面の表示切替を諦めた mountId=${mountId}`);
-        return;
-      }
-      this.pluginHiddenScheduled.add(mountId);
-      (scheduler as typeof requestAnimationFrame)(() => {
-        this.pluginHiddenScheduled.delete(mountId);
-        if (!this.pluginTags.has(mountId)) {
-          return;
-        }
-        this.applyPluginHidden(mountId);
-      });
+    if (typeof candidate.toggleHidden !== "function" || typeof candidate.webviewId !== "number") {
+      this.scheduleHiddenRetry(
+        mountId,
+        () => {
+          this.applyPluginHidden(mountId);
+        },
+        this.pluginHiddenRetries,
+        this.pluginHiddenScheduled,
+        () => this.pluginTags.has(mountId),
+        `実プラグイン子画面の表示切替を諦めた mountId=${mountId}`,
+      );
       return;
     }
     this.pluginHiddenScheduled.delete(mountId);
     this.pluginHiddenRetries.set(mountId, 0);
+    candidate.toggleHidden(desired);
+  }
+
+  /**
+   * 段0の1つのタグへ desired を適用する。実プラグインと同じ applicator を使う。
+   *
+   * `toggleHidden` 未定義・`webviewId` 未初期化のいずれも同じ有限再試行で
+   * 初期化後に適用する。タグの再生成・DOM 移動・`src` 再設定はしない。
+   * 切替で業務 RPC は送らない。
+   *
+   * @param mountId - 対象のマウント識別子。
+   */
+  private applySpikeHidden(mountId: string): void {
+    const tag = this.spikeTags.get(mountId);
+    if (tag === undefined) {
+      return;
+    }
+    const desired = this.spikeDesiredHidden.get(mountId) ?? this.desiredSpikeHidden();
+    this.spikeDesiredHidden.set(mountId, desired);
+    const candidate = tag as HTMLElement & PluginVisibilityTag;
+    if (typeof candidate.toggleHidden !== "function" || typeof candidate.webviewId !== "number") {
+      this.scheduleHiddenRetry(
+        mountId,
+        () => {
+          this.applySpikeHidden(mountId);
+        },
+        this.spikeHiddenRetries,
+        this.spikeHiddenScheduled,
+        () => this.spikeTags.has(mountId),
+        `子画面の表示切替を諦めた mountId=${mountId}`,
+      );
+      return;
+    }
+    this.spikeHiddenScheduled.delete(mountId);
+    this.spikeHiddenRetries.set(mountId, 0);
     candidate.toggleHidden(desired);
   }
 
@@ -879,12 +985,12 @@ export class ManagementService {
         `[bridge-gui-ng] プラグインを割り当てた: kind=${result.pluginKind} localSessionId=${result.localSessionId} instanceId=${result.instanceId}`,
       );
       this.appendLog(`プラグインを割り当てた kind=${result.pluginKind}`);
-      this.textFailure.set("");
+      this.pluginFailure.set("");
       await this.refresh("プラグイン割当て");
     } catch (error: unknown) {
       console.log(`[bridge-gui-ng] プラグイン割当てに失敗した: ${String(error)}`);
       this.appendLog("プラグイン割当てに失敗した");
-      this.textFailure.set(`操作に失敗した: ${describeActionError(error)}`);
+      this.pluginFailure.set(`操作に失敗した: ${describeActionError(error)}`);
     } finally {
       this.endOperation(key);
     }
@@ -912,19 +1018,19 @@ export class ManagementService {
           `[bridge-gui-ng] プラグイン割当て解除が不完全である: released=${result.released} issues=${result.issues.length}`,
         );
         this.appendLog("プラグイン割当て解除が不完全である");
-        this.textFailure.set(
+        this.pluginFailure.set(
           `解除が不完全である: released=${result.released} issues=${result.issues.length}`,
         );
       } else {
         console.log("[bridge-gui-ng] プラグインの割当てを外した");
         this.appendLog("プラグインの割当てを外した");
-        this.textFailure.set("");
+        this.pluginFailure.set("");
       }
       await this.refresh("プラグイン割当て解除");
     } catch (error: unknown) {
       console.log(`[bridge-gui-ng] プラグイン割当て解除に失敗した: ${String(error)}`);
       this.appendLog("プラグイン割当て解除に失敗した");
-      this.textFailure.set(`操作に失敗した: ${describeActionError(error)}`);
+      this.pluginFailure.set(`操作に失敗した: ${describeActionError(error)}`);
     } finally {
       this.endOperation(key);
     }

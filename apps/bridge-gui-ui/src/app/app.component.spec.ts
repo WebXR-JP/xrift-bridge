@@ -20,6 +20,7 @@ function prepareServiceStub() {
     pairingViews: signal(new Map()),
     eventLog: signal([] as readonly EventLogEntry[]),
     spikeMounts: signal([] as readonly never[]),
+    pluginError: signal(""),
     fetchInitial: vi.fn(async () => {}),
     notifyReady: vi.fn(),
     registerMountHosts: vi.fn((_spike: HTMLElement, _plugin: HTMLElement) => {}),
@@ -173,6 +174,23 @@ describe("画面選択とパネル切替", () => {
     expect(panel.querySelector("app-text-card")).toBe(null);
     expect(panel.textContent).toContain("使用可能なプラグイン");
     expect(panel.textContent).toContain("起動中のプラグイン");
+  });
+
+  it("失敗表示の束縛をプラグイン一覧へ渡す", async () => {
+    const { fixture, stub } = await prepareRoot();
+    selectView(fixture, "plugins");
+    // 失敗が無いときは出さない。
+    expect(panelOf(fixture, "plugins").querySelector('[aria-live="polite"]')).toBe(null);
+    // 失敗理由が一覧の先頭に polite で出る。
+    stub.pluginError.set("操作に失敗した: 割当て不可");
+    fixture.detectChanges();
+    await fixture.whenStable();
+    const panel = panelOf(fixture, "plugins");
+    const status = panel.querySelector('[aria-live="polite"]');
+    if (status === null) {
+      throw new Error("失敗表示が一覧へ渡らない");
+    }
+    expect(status.textContent).toContain("割当て不可");
   });
 
   it("パネル切替が業務RPCを送らない", async () => {

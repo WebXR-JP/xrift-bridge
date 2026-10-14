@@ -219,7 +219,7 @@ describe("限定操作の処理", () => {
     expect(stub.client.getSnapshot.mock.calls.length).toBe(baseline + 2);
   });
 
-  it("解除の不完全は成功と記録しない", async () => {
+  it("解除の不完全は成功と記録せず失敗表示に残す", async () => {
     const { service, stub } = prepareService();
     stub.client.unassignPlugin.mockResolvedValueOnce({ released: false, issues: [] });
     await service.unassignPlugin("i1", "s1", "text");
@@ -246,6 +246,8 @@ describe("限定操作の処理", () => {
         .map((entry) => entry.message)
         .join("\n"),
     ).toContain("不完全");
+    // 不完全な解除は一覧の失敗表示に残り、UI へ渡る。
+    expect(service.pluginError()).toContain("不完全");
   });
 
   it("終了は要求だけ送り再取得しない", async () => {
@@ -284,12 +286,12 @@ describe("失敗時の表示", () => {
     ).toContain("有効化に失敗");
   });
 
-  it("テキスト割当ての失敗はカードの説明に出し本文は載せない", async () => {
+  it("プラグイン割当ての失敗は失敗理由を保持し本文は載せない", async () => {
     const { service, stub } = prepareService();
     stub.client.assignPlugin.mockRejectedValueOnce(new Error("割当て不可"));
     await service.assignPlugin("text");
-    expect(service.textError()).toContain("割当て不可");
-    expect(service.textError()).not.toContain("041003");
+    expect(service.pluginError()).toContain("割当て不可");
+    expect(service.pluginError()).not.toContain("041003");
     expect(
       service
         .eventLog()
@@ -298,20 +300,20 @@ describe("失敗時の表示", () => {
     ).toContain("プラグイン割当てに失敗");
   });
 
-  it("テキスト割当て解除の失敗はカードの説明に出す", async () => {
+  it("プラグイン割当て解除の失敗は失敗理由を保持する", async () => {
     const { service, stub } = prepareService();
     stub.client.unassignPlugin.mockRejectedValueOnce(new Error("解除不可"));
     await service.unassignPlugin("i1", "s1", "text");
-    expect(service.textError()).toContain("解除不可");
+    expect(service.pluginError()).toContain("解除不可");
   });
 
-  it("テキスト割当ての成功は失敗表示を消す", async () => {
+  it("プラグイン割当ての成功は失敗表示を消す", async () => {
     const { service, stub } = prepareService();
     stub.client.assignPlugin.mockRejectedValueOnce(new Error("割当て不可"));
     await service.assignPlugin("text");
-    expect(service.textError()).not.toBe("");
+    expect(service.pluginError()).not.toBe("");
     await service.assignPlugin("text");
-    expect(service.textError()).toBe("");
+    expect(service.pluginError()).toBe("");
   });
 });
 
@@ -829,8 +831,16 @@ describe("子画面の表示制御", () => {
     }
   });
 
-  it("toggleHiddenが無い要素では何もせず終える", async () => {
+  it("toggleHidden未定義でも有限再試行し上限で諦める", async () => {
     const hosts = prepareMountHosts();
+    const frames: FrameRequestCallback[] = [];
+    const original = (globalThis as { requestAnimationFrame?: unknown })["requestAnimationFrame"];
+    (globalThis as unknown as Record<string, unknown>)["requestAnimationFrame"] = (
+      callback: FrameRequestCallback,
+    ): number => {
+      frames.push(callback);
+      return frames.length;
+    };
     try {
       const { service, stub } = prepareService();
       service.registerMountHosts(hosts.spike, hosts.plugin);
@@ -844,7 +854,81 @@ describe("子画面の表示制御", () => {
       // happy-dom の未知要素のまま（`toggleHidden` が無い）で呼ぶ。
       expect(() => service.setPluginViewState(true, "i1")).not.toThrow();
       expect(hosts.plugin.querySelectorAll("electrobun-webview").length).toBe(1);
+      // 未定義経路も有限再試行を予約する。
+      expect(frames.length).toBeGreaterThan(0);
+      // 上限まで枠を進めても確実に終わる（無制限ループにしない）。
+      for (let step = 0; step < 200; step += 1) {
+        if (frames.length === 0) {
+          break;
+        }
+        frames.splice(0).forEach((callback) => {
+          callback(0);
+        });
+      }
+      expect(frames.length).toBe(0);
+      expect(
+        service
+          .eventLog()
+          .map((entry) => entry.message)
+          .join("\n"),
+      ).toContain("諦めた");
+      expect(hosts.plugin.querySelectorAll("electrobun-webview").length).toBe(1);
     } finally {
+      if (original === undefined) {
+        delete (globalThis as unknown as Record<string, unknown>)["requestAnimationFrame"];
+      } else {
+        (globalThis as unknown as Record<string, unknown>)["requestAnimationFrame"] = original;
+      }
+      hosts.dispose();
+    }
+  });
+
+  it("後からtoggleHiddenが生えた要素にdesiredを適用する", async () => {
+    const hosts = prepareMountHosts();
+    const frames: FrameRequestCallback[] = [];
+    const original = (globalThis as { requestAnimationFrame?: unknown })["requestAnimationFrame"];
+    (globalThis as unknown as Record<string, unknown>)["requestAnimationFrame"] = (
+      callback: FrameRequestCallback,
+    ): number => {
+      frames.push(callback);
+      return frames.length;
+    };
+    try {
+      const { service, stub } = prepareService();
+      service.registerMountHosts(hosts.spike, hosts.plugin);
+      stub.client.getSnapshot.mockResolvedValueOnce(
+        makeSnapshot({
+          revision: 3,
+          pluginMounts: [makePluginMountWithInstance("plugin-text-1", "i1")],
+        }),
+      );
+      await service.fetchInitial();
+      const tag = hosts.plugin.querySelector("electrobun-webview") as unknown as {
+        toggleHidden?: ReturnType<typeof vi.fn>;
+        webviewId?: number | null;
+      };
+      // custom element の upgrade 前であり、`toggleHidden` は未定義である。
+      expect(tag.toggleHidden).toBe(undefined);
+      const before = hosts.plugin.querySelector("electrobun-webview");
+      service.setPluginViewState(true, "i1");
+      expect(frames.length).toBeGreaterThan(0);
+      // upgrade 後に初期化が済むと、保持した desired（対象一致のため見せる）を適用する。
+      tag.toggleHidden = vi.fn();
+      tag.webviewId = 9;
+      frames.splice(0).forEach((callback) => {
+        callback(0);
+      });
+      expect(tag.toggleHidden).toHaveBeenCalledWith(false);
+      expect(hosts.plugin.querySelector("electrobun-webview")).toBe(before);
+      expect(before?.getAttribute("src")).toBe(
+        "views://plugin-host/blank.html#mount=plugin-text-1",
+      );
+    } finally {
+      if (original === undefined) {
+        delete (globalThis as unknown as Record<string, unknown>)["requestAnimationFrame"];
+      } else {
+        (globalThis as unknown as Record<string, unknown>)["requestAnimationFrame"] = original;
+      }
       hosts.dispose();
     }
   });
@@ -893,6 +977,53 @@ describe("子画面の表示制御", () => {
       } else {
         (globalThis as unknown as Record<string, unknown>)["requestAnimationFrame"] = original;
       }
+      hosts.dispose();
+    }
+  });
+
+  it("段0はoperations非選択で隠し選択で見せる", () => {
+    const hosts = prepareMountHosts();
+    try {
+      const { service } = prepareService();
+      service.registerMountHosts(hosts.spike, hosts.plugin);
+      service.reconcileSpikeTags([makeSpikeMount("spike-1")]);
+      const tag = attachVisibilityFake(hosts.spike.querySelector("electrobun-webview"));
+      tag.toggleHidden.mockClear();
+      // operations 未選択では隠す。
+      service.setPluginViewState(false, "i1");
+      expect(tag.toggleHidden).toHaveBeenCalledWith(true);
+      // operations 表示中は見せる（対象個体とは無関係である）。
+      service.setPluginViewState(true, "i1");
+      expect(tag.toggleHidden).toHaveBeenLastCalledWith(false);
+      service.setPluginViewState(true, null);
+      expect(tag.toggleHidden).toHaveBeenLastCalledWith(false);
+    } finally {
+      hosts.dispose();
+    }
+  });
+
+  it("段0切替で再生成せずsrc不変で業務RPCを送らない", () => {
+    const hosts = prepareMountHosts();
+    try {
+      const { service, stub } = prepareService();
+      service.registerMountHosts(hosts.spike, hosts.plugin);
+      service.reconcileSpikeTags([makeSpikeMount("spike-1")]);
+      const before = hosts.spike.querySelector("electrobun-webview");
+      const fake = attachVisibilityFake(before);
+      fake.toggleHidden.mockClear();
+      const src = before?.getAttribute("src");
+      const baseline = rpcCallCounts(stub.client);
+      service.setPluginViewState(true, null);
+      service.setPluginViewState(false, null);
+      service.setPluginViewState(true, null);
+      const after = hosts.spike.querySelector("electrobun-webview");
+      expect(after).toBe(before);
+      expect(after?.getAttribute("src")).toBe(src);
+      expect(hosts.spike.querySelectorAll("electrobun-webview").length).toBe(1);
+      expect(rpcCallCounts(stub.client)).toEqual(baseline);
+      expect(fake.toggleHidden).toHaveBeenCalledWith(false);
+      expect(fake.toggleHidden).toHaveBeenCalledWith(true);
+    } finally {
       hosts.dispose();
     }
   });

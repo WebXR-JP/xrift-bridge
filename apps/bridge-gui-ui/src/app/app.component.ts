@@ -80,6 +80,11 @@ export class AppComponent implements OnInit {
     return this.management.eventLog;
   }
 
+  /** プラグイン操作の失敗表示。本文は含めない（失敗理由だけである）。 */
+  get pluginError() {
+    return this.management.pluginError;
+  }
+
   /** 表示状態を取得済みの場合に真。 */
   get fetched() {
     return this.management.snapshot() !== null;

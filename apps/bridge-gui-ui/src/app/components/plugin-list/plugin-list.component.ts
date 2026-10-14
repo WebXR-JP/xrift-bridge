@@ -104,6 +104,13 @@ export class PluginListComponent {
   /** 生存セッション一覧。候補の表示に使う。 */
   readonly sessions = input<readonly SessionSummary[]>([]);
 
+  /**
+   * プラグイン操作の失敗表示。安全な定型メッセージ文字列だけを受け、空なら出さない。
+   *
+   * 本文・payload・生の DTO 全文は載せない。
+   */
+  readonly error = input<string>("");
+
   /** 割当ての要求。種別トークンと選択した識別子を載せる。 */
   readonly assignRequested = output<PluginAssignRequest>();
 

@@ -39,6 +39,7 @@
       [instances]="snapshot()?.plugins.instances ?? []"
       [assignments]="snapshot()?.plugins.assignments ?? []"
       [sessions]="snapshot()?.sessions ?? []"
+      [error]="pluginError()"
       (assignRequested)="onAssignPlugin($event)"
       (unassignRequested)="onUnassignPlugin($event)"
     />

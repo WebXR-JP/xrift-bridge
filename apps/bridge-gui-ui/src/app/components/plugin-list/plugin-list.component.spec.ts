@@ -327,6 +327,32 @@ describe("プラグイン一覧の追加フロー", () => {
   });
 });
 
+describe("プラグイン一覧の失敗表示", () => {
+  it("エラー入力があるときは一覧の先頭に polite で出す", async () => {
+    await TestBed.compileComponents();
+    const fixture = TestBed.createComponent(PluginListComponent);
+    fixture.componentRef.setInput("error", "操作に失敗した: 割当て不可");
+    fixture.detectChanges();
+    const root = fixture.nativeElement as HTMLElement;
+    const status = root.querySelector('[aria-live="polite"]');
+    if (status === null) {
+      throw new Error("失敗表示が無い");
+    }
+    expect(status.textContent).toContain("割当て不可");
+    // 一覧の先頭付近であり、一覧より前に出る。
+    expect(root.firstElementChild).toBe(status);
+  });
+
+  it("エラー入力が空なら失敗表示を出さない", async () => {
+    await TestBed.compileComponents();
+    const fixture = TestBed.createComponent(PluginListComponent);
+    fixture.componentRef.setInput("error", "");
+    fixture.detectChanges();
+    const root = fixture.nativeElement as HTMLElement;
+    expect(root.querySelector('[aria-live="polite"]')).toBe(null);
+  });
+});
+
 describe("プラグイン一覧の起動中表示", () => {
   it("無いときはその旨を出す", async () => {
     await TestBed.compileComponents();
