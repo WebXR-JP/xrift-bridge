@@ -17,7 +17,7 @@
           "type": "frame",
           "id": "OMkOV",
           "name": "Left Column",
-          "width": 337,
+          "width": 257,
           "height": "fill_container",
           "fill": "$surface",
           "stroke": "$border",
