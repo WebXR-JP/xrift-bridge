@@ -274,7 +274,7 @@ export class PluginUiCoordinator implements CompanionRequestEnv {
       ) {
         this.failMount(
           record,
-          "子画面の準備完了が期限切れになった。管理画面の配置を確認すること。",
+          "子画面の初期化が時間内に完了しませんでした。ウィンドウが操作対象になっていないと初期化が進まない場合があります。このウィンドウをクリックしてから「再試行」を押してください。",
         );
         changed = true;
       }

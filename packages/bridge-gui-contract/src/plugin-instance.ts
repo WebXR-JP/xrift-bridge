@@ -67,10 +67,11 @@ export function selectNewerInstanceSnapshot<T extends { readonly revision: numbe
 export const PLUGIN_BLANK_PATH = "views://plugin-host/blank.html";
 
 /**
- * 子画面の生成待ちが失効するまでの時間（ミリ秒）。
+ * 配置から起算する待機の総予算（ミリ秒）。
  *
- * 配置からタグ生成の照合が無いまま過ぎたら、配置の不備として回収し、
- * 失敗表示に回す。自動で作り直さず、再生成は明示の再試行に任せる。
+ * 生成待ちと準備完了待ちで分けず、配置を受け付けてからこの時間を過ぎても
+ * 準備完了に至らなければ回収して失敗表示に回す。自動で作り直さず、
+ * 再生成は明示の再試行に任せる。
  */
 export const PLUGIN_PENDING_TIMEOUT_MS = 15_000;
 

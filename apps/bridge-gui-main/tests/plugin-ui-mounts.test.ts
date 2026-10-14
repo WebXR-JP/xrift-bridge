@@ -384,13 +384,16 @@ test("生成待ちの期限超過を失敗表示に回し再配置しない", ()
   expect(failures).toHaveLength(1);
   expect(failures[0]?.kind).toBe("text");
   expect(failures[0]?.instanceId).toBe("instance-1");
+  // 生成待ちの期限超過は従来どおり固有理由であり、準備完了待ちの案内文と混ぜない。
+  expect(failures[0]?.reason).toContain("生成待ちが期限切れ");
+  expect(failures[0]?.reason).not.toContain("このウィンドウをクリック");
   // 現割当てが残っていても明示の再試行まで再配置しない。
   expect(coordinator.syncNow()).toBe(false);
   expect(coordinator.size).toBe(0);
   expect(coordinator.listFailures()).toHaveLength(1);
 });
 
-test("結線後に準備完了が無いまま期限超過したら失敗表示に回し再配置しない", () => {
+test("結線後に準備完了が無いまま期限超過したら既知の可能性と復旧手順を示し再配置しない", () => {
   const { backend, coordinator, setNow } = setup();
   backend.textBinding = { instanceId: "instance-1", localSessionId: "local-1", portId: "text" };
   backend.textView = TEXT_VIEW;
@@ -409,10 +412,23 @@ test("結線後に準備完了が無いまま期限超過したら失敗表示�
   expect(failures).toHaveLength(1);
   expect(failures[0]?.kind).toBe("text");
   expect(failures[0]?.instanceId).toBe("instance-1");
+  // 原因の断定ではなく既知の可能性と復旧手順を示す。
+  expect(failures[0]?.reason).toContain("子画面の初期化が時間内に完了しませんでした。");
+  expect(failures[0]?.reason).toContain(
+    "このウィンドウをクリックしてから「再試行」を押してください。",
+  );
+  // 生成条件違反・結線例外とは別の理由である。
+  expect(failures[0]?.reason).not.toContain("生成条件");
+  expect(failures[0]?.reason).not.toContain("結線に失敗");
   // 現割当てが残っていても明示の再試行まで再配置しない。
   expect(coordinator.syncNow()).toBe(false);
   expect(coordinator.size).toBe(0);
   expect(coordinator.listFailures()).toHaveLength(1);
+  // 個体限定の再試行で配置を作り直せる。
+  expect(coordinator.retryFailed("instance-1")).toEqual({ ok: true });
+  expect(coordinator.listFailures()).toHaveLength(0);
+  expect(coordinator.size).toBe(1);
+  expect(coordinator.listPlacements()[0]?.instanceId).toBe("instance-1");
 });
 
 test("準備完了があれば期限超過で回収しない", () => {
@@ -555,6 +571,8 @@ test("結線の失敗をそのマウントに局所化する", () => {
   expect(coordinator.size).toBe(0);
   expect(view.removed).toBe(true);
   expect(coordinator.listFailures()).toHaveLength(1);
+  // 原因が分かる失敗は固有理由のままであり、準備完了待ちの案内文と混ぜない。
+  expect(coordinator.listFailures()[0]?.reason).toContain("結線に失敗");
 });
 
 test("子画面の読込み失敗をそのマウントに局所化する", () => {
