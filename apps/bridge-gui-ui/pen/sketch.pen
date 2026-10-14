@@ -1576,26 +1576,21 @@
                   "name": "Columns",
                   "width": "fill_container",
                   "height": "fill_container",
+                  "gap": 20,
                   "children": [
                     {
                       "type": "frame",
                       "id": "c0PTM",
                       "name": "Available Column",
-                      "width": "fill_container",
+                      "width": 300,
                       "height": "fill_container",
+                      "fill": "$r:--muted",
+                      "cornerRadius": 8,
                       "stroke": "$r:--border",
-                      "strokeWidth": {
-                        "right": 1
-                      },
                       "strokeAlignment": "inner",
                       "layout": "vertical",
                       "gap": 12,
-                      "padding": [
-                        0,
-                        24,
-                        0,
-                        0
-                      ],
+                      "padding": 16,
                       "children": [
                         {
                           "type": "text",
@@ -1612,6 +1607,7 @@
                           "id": "E5o2CT",
                           "name": "Plugin Row",
                           "width": "fill_container",
+                          "fill": "$surface",
                           "cornerRadius": 8,
                           "stroke": "$r:--border",
                           "strokeWidth": 1,
@@ -1696,6 +1692,7 @@
                           "id": "sWX2H",
                           "name": "Plugin Row",
                           "width": "fill_container",
+                          "fill": "$surface",
                           "cornerRadius": 8,
                           "stroke": "$r:--border",
                           "strokeWidth": 1,
@@ -1785,12 +1782,6 @@
                       "height": "fill_container",
                       "layout": "vertical",
                       "gap": 12,
-                      "padding": [
-                        0,
-                        0,
-                        0,
-                        24
-                      ],
                       "children": [
                         {
                           "type": "text",
@@ -1804,98 +1795,133 @@
                         },
                         {
                           "type": "frame",
-                          "id": "j34myL",
-                          "name": "Plugin Row",
+                          "id": "ujbtO",
+                          "name": "Plugin Card",
                           "width": "fill_container",
+                          "fill": "$surface",
                           "cornerRadius": 8,
                           "stroke": "$r:--border",
                           "strokeWidth": 1,
                           "strokeAlignment": "inner",
-                          "gap": 10,
-                          "padding": 12,
-                          "alignItems": "center",
+                          "layout": "vertical",
+                          "gap": 12,
+                          "padding": 16,
                           "children": [
                             {
                               "type": "frame",
-                              "id": "XJPWv",
-                              "name": "Plugin Icon",
-                              "width": 32,
-                              "height": 32,
-                              "fill": "$r:--accent",
-                              "cornerRadius": 8,
-                              "layout": "none",
-                              "children": [
-                                {
-                                  "type": "icon",
-                                  "id": "GYsEf",
-                                  "x": 7,
-                                  "y": 7,
-                                  "name": "Icon",
-                                  "width": 18,
-                                  "height": 18,
-                                  "icon": "message-square-text",
-                                  "library": "lucide",
-                                  "fill": "$r:--accent-foreground"
-                                }
-                              ]
-                            },
-                            {
-                              "type": "frame",
-                              "id": "Kqvwx",
-                              "name": "Plugin Info",
+                              "id": "kIkSh",
+                              "name": "Card Header",
                               "width": "fill_container",
-                              "layout": "vertical",
-                              "gap": 2,
+                              "gap": 10,
+                              "alignItems": "center",
                               "children": [
                                 {
-                                  "type": "text",
-                                  "id": "R32q1n",
-                                  "name": "Name",
-                                  "fill": "$text-primary",
-                                  "content": "テキスト送信",
-                                  "fontFamily": "Inter",
-                                  "fontSize": 14,
-                                  "fontWeight": "500"
+                                  "type": "frame",
+                                  "id": "Vd2Jf",
+                                  "name": "Plugin Icon",
+                                  "width": 32,
+                                  "height": 32,
+                                  "fill": "$r:--accent",
+                                  "cornerRadius": 8,
+                                  "layout": "none",
+                                  "children": [
+                                    {
+                                      "type": "icon",
+                                      "id": "vUXzf",
+                                      "x": 7,
+                                      "y": 7,
+                                      "name": "Icon",
+                                      "width": 18,
+                                      "height": 18,
+                                      "icon": "message-square-text",
+                                      "library": "lucide",
+                                      "fill": "$r:--accent-foreground"
+                                    }
+                                  ]
                                 },
                                 {
                                   "type": "frame",
-                                  "id": "SEvhe",
-                                  "name": "Status",
-                                  "gap": 6,
-                                  "alignItems": "center",
+                                  "id": "M9eMdp",
+                                  "name": "Plugin Info",
+                                  "width": "fill_container",
+                                  "layout": "vertical",
+                                  "gap": 2,
                                   "children": [
                                     {
-                                      "type": "ellipse",
-                                      "id": "R9u7X",
-                                      "name": "Dot",
-                                      "fill": "#22c55e",
-                                      "width": 7,
-                                      "height": 7
+                                      "type": "text",
+                                      "id": "b7pFJG",
+                                      "name": "Name",
+                                      "fill": "$text-primary",
+                                      "content": "テキスト送信",
+                                      "fontFamily": "Inter",
+                                      "fontSize": 14,
+                                      "fontWeight": "500"
                                     },
                                     {
-                                      "type": "text",
-                                      "id": "Uh3Bb",
-                                      "name": "Status Text",
-                                      "fill": "$r:--muted-foreground",
-                                      "content": "稼働中",
-                                      "fontFamily": "Inter",
-                                      "fontSize": 12,
-                                      "fontWeight": "normal"
+                                      "type": "frame",
+                                      "id": "J9Hix",
+                                      "name": "Status",
+                                      "gap": 6,
+                                      "alignItems": "center",
+                                      "children": [
+                                        {
+                                          "type": "ellipse",
+                                          "id": "z4Q0b",
+                                          "name": "Dot",
+                                          "fill": "#22c55e",
+                                          "width": 7,
+                                          "height": 7
+                                        },
+                                        {
+                                          "type": "text",
+                                          "id": "YbWbG",
+                                          "name": "Status Text",
+                                          "fill": "$r:--muted-foreground",
+                                          "content": "稼働中",
+                                          "fontFamily": "Inter",
+                                          "fontSize": 12,
+                                          "fontWeight": "normal"
+                                        }
+                                      ]
                                     }
                                   ]
+                                },
+                                {
+                                  "id": "qwRjN",
+                                  "type": "ref",
+                                  "ref": "r:hXOUF",
+                                  "name": "Remove Button",
+                                  "stroke": "$r:--destructive",
+                                  "descendants": {
+                                    "r:HDFDp": {
+                                      "icon": "x",
+                                      "fill": "$r:--destructive"
+                                    }
+                                  }
                                 }
                               ]
                             },
                             {
-                              "id": "KTdHL",
+                              "type": "rectangle",
+                              "id": "nVGc8",
+                              "name": "Divider",
+                              "fill": "$r:--border",
+                              "width": "fill_container",
+                              "height": 1
+                            },
+                            {
+                              "id": "qj67n",
                               "type": "ref",
-                              "ref": "r:hXOUF",
-                              "name": "Remove Button",
-                              "stroke": "$r:--destructive",
+                              "ref": "r:w5c1O",
+                              "name": "Session Select",
+                              "width": "fill_container",
+                              "rotation": 0,
                               "descendants": {
-                                "r:HDFDp": {
-                                  "icon": "x",
-                                  "fill": "$r:--destructive"
+                                "r:Yd2lV": {
+                                  "content": "接続先セッション"
+                                },
+                                "r:V1STL": {
+                                  "content": "セッションを選択"
                                 }
                               }
                             }
@@ -1903,98 +1929,133 @@
                         },
                         {
                           "type": "frame",
-                          "id": "JgLXJ",
-                          "name": "Plugin Row",
+                          "id": "FStNQ",
+                          "name": "Plugin Card",
                           "width": "fill_container",
+                          "fill": "$surface",
                           "cornerRadius": 8,
                           "stroke": "$r:--border",
                           "strokeWidth": 1,
                           "strokeAlignment": "inner",
-                          "gap": 10,
-                          "padding": 12,
-                          "alignItems": "center",
+                          "layout": "vertical",
+                          "gap": 12,
+                          "padding": 16,
                           "children": [
                             {
                               "type": "frame",
-                              "id": "gIoyV",
-                              "name": "Plugin Icon",
-                              "width": 32,
-                              "height": 32,
-                              "fill": "$r:--accent",
-                              "cornerRadius": 8,
-                              "layout": "none",
-                              "children": [
-                                {
-                                  "type": "icon",
-                                  "id": "Pd2p7",
-                                  "x": 7,
-                                  "y": 7,
-                                  "name": "Icon",
-                                  "width": 18,
-                                  "height": 18,
-                                  "icon": "activity",
-                                  "library": "lucide",
-                                  "fill": "$r:--accent-foreground"
-                                }
-                              ]
-                            },
-                            {
-                              "type": "frame",
-                              "id": "ZPpDM",
-                              "name": "Plugin Info",
+                              "id": "H65WS",
+                              "name": "Card Header",
                               "width": "fill_container",
-                              "layout": "vertical",
-                              "gap": 2,
+                              "gap": 10,
+                              "alignItems": "center",
                               "children": [
                                 {
-                                  "type": "text",
-                                  "id": "KAZH7",
-                                  "name": "Name",
-                                  "fill": "$text-primary",
-                                  "content": "診断（echo・ping）",
-                                  "fontFamily": "Inter",
-                                  "fontSize": 14,
-                                  "fontWeight": "500"
+                                  "type": "frame",
+                                  "id": "A6B5b",
+                                  "name": "Plugin Icon",
+                                  "width": 32,
+                                  "height": 32,
+                                  "fill": "$r:--accent",
+                                  "cornerRadius": 8,
+                                  "layout": "none",
+                                  "children": [
+                                    {
+                                      "type": "icon",
+                                      "id": "vGDyk",
+                                      "x": 7,
+                                      "y": 7,
+                                      "name": "Icon",
+                                      "width": 18,
+                                      "height": 18,
+                                      "icon": "activity",
+                                      "library": "lucide",
+                                      "fill": "$r:--accent-foreground"
+                                    }
+                                  ]
                                 },
                                 {
                                   "type": "frame",
-                                  "id": "G1LYOs",
-                                  "name": "Status",
-                                  "gap": 6,
-                                  "alignItems": "center",
+                                  "id": "xQqMO",
+                                  "name": "Plugin Info",
+                                  "width": "fill_container",
+                                  "layout": "vertical",
+                                  "gap": 2,
                                   "children": [
                                     {
-                                      "type": "ellipse",
-                                      "id": "aRnbY",
-                                      "name": "Dot",
-                                      "fill": "#22c55e",
-                                      "width": 7,
-                                      "height": 7
+                                      "type": "text",
+                                      "id": "mkRgg",
+                                      "name": "Name",
+                                      "fill": "$text-primary",
+                                      "content": "診断（echo・ping）",
+                                      "fontFamily": "Inter",
+                                      "fontSize": 14,
+                                      "fontWeight": "500"
                                     },
                                     {
-                                      "type": "text",
-                                      "id": "o7as6I",
-                                      "name": "Status Text",
-                                      "fill": "$r:--muted-foreground",
-                                      "content": "稼働中",
-                                      "fontFamily": "Inter",
-                                      "fontSize": 12,
-                                      "fontWeight": "normal"
+                                      "type": "frame",
+                                      "id": "HVr9b",
+                                      "name": "Status",
+                                      "gap": 6,
+                                      "alignItems": "center",
+                                      "children": [
+                                        {
+                                          "type": "ellipse",
+                                          "id": "XQ1Tt",
+                                          "name": "Dot",
+                                          "fill": "#22c55e",
+                                          "width": 7,
+                                          "height": 7
+                                        },
+                                        {
+                                          "type": "text",
+                                          "id": "RbxW4",
+                                          "name": "Status Text",
+                                          "fill": "$r:--muted-foreground",
+                                          "content": "稼働中",
+                                          "fontFamily": "Inter",
+                                          "fontSize": 12,
+                                          "fontWeight": "normal"
+                                        }
+                                      ]
                                     }
                                   ]
+                                },
+                                {
+                                  "id": "eQtK4",
+                                  "type": "ref",
+                                  "ref": "r:hXOUF",
+                                  "name": "Remove Button",
+                                  "stroke": "$r:--destructive",
+                                  "descendants": {
+                                    "r:HDFDp": {
+                                      "icon": "x",
+                                      "fill": "$r:--destructive"
+                                    }
+                                  }
                                 }
                               ]
                             },
                             {
-                              "id": "EvnoC",
+                              "type": "rectangle",
+                              "id": "Dpqxc",
+                              "name": "Divider",
+                              "fill": "$r:--border",
+                              "width": "fill_container",
+                              "height": 1
+                            },
+                            {
+                              "id": "q8XzVB",
                               "type": "ref",
-                              "ref": "r:hXOUF",
-                              "name": "Remove Button",
-                              "stroke": "$r:--destructive",
+                              "ref": "r:w5c1O",
+                              "name": "Session Select",
+                              "width": "fill_container",
+                              "rotation": 0,
                               "descendants": {
-                                "r:HDFDp": {
-                                  "icon": "x",
-                                  "fill": "$r:--destructive"
+                                "r:Yd2lV": {
+                                  "content": "接続先セッション"
+                                },
+                                "r:V1STL": {
+                                  "content": "セッションを選択"
                                 }
                               }
                             }
