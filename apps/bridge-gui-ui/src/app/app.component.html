@@ -44,7 +44,38 @@
     />
   </section>
 
-  <section data-panel="operations" [class.hidden]="selectedKey() !== 'operations'">
+  <section
+    data-panel="operations"
+    [class.hidden]="selectedKey() !== 'operations'"
+    class="flex flex-col gap-4"
+  >
+    <app-plugin-operations
+      [kinds]="snapshot()?.plugins.kinds ?? []"
+      [instances]="snapshot()?.plugins.instances ?? []"
+      [selectedInstanceId]="activeInstanceId()"
+      [mounts]="snapshot()?.pluginMounts ?? []"
+      [failures]="snapshot()?.pluginMountFailures ?? []"
+      (selectionRequested)="onSelectPluginInstance($event)"
+      (retryRequested)="onRetryPluginMounts()"
+    />
+
+    <section
+      aria-label="埋込み子画面"
+      class="flex flex-col gap-3"
+      style="
+        background: var(--background);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 20px;
+      "
+    >
+      <h2 class="m-0 text-[15px] font-bold text-[var(--foreground)]">埋込み子画面</h2>
+      <p class="m-0 text-[12px] text-[var(--muted-foreground)]">
+        選択中インスタンスの子画面だけが見える。他は隠す。
+      </p>
+      <div #pluginHost id="plugin-host"></div>
+    </section>
+
     <app-plugin-mounts
       [mounts]="snapshot()?.pluginMounts ?? []"
       [failures]="snapshot()?.pluginMountFailures ?? []"
@@ -60,7 +91,6 @@
     />
 
     <div #spikeHost id="spike-host"></div>
-    <div #pluginHost id="plugin-host"></div>
   </section>
 
   <section data-panel="log" [class.hidden]="selectedKey() !== 'log'">

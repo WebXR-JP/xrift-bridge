@@ -48,6 +48,23 @@ function describeActionError(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
+/**
+ * 子画面タグの `toggleHidden` 初期化待ちの上限（フレーム数）。
+ *
+ * append 直後は `webviewId` が `null` で `toggleHidden` が何もしないため、
+ * rAF で再試行する。無制限ループにしないための上限であり、超えたら諦めて
+ * 記録を残す。
+ */
+const PLUGIN_HIDDEN_RETRY_LIMIT = 120;
+
+/** `toggleHidden` と初期化標識を持つ子画面タグの最小形（試験の fake を含む）。 */
+interface PluginVisibilityTag {
+  /** 初期化済みの場合に数値。未初期化は `null` 等である。 */
+  readonly webviewId?: unknown;
+  /** 初期化済みの場合に native 表示を切り替える。未初期化は何もしない。 */
+  toggleHidden?: (hidden?: boolean) => void;
+}
+
 @Injectable({ providedIn: "root" })
 export class ManagementService {
   private readonly current = signal<ManagementSnapshot | null>(null);
@@ -103,6 +120,20 @@ export class ManagementService {
   private readonly pluginTags = new Map<string, HTMLElement>();
   private spikeHost: HTMLElement | null = null;
   private pluginHost: HTMLElement | null = null;
+
+  // ADR: native 子画面の表示は `toggleHidden` でのみ切り替える。HTML の
+  // `hidden` 属性は観測されず、CSS の `display:none` は native 子ビューの
+  // 非表示を保証しない。`OverlaySync` の矩形 0x0 停止も非表示にはならない。
+  // 表示対象は mountId 単位の所有表の `instanceId` で決め、タグの再生成・
+  // DOM 移動・`src` 再設定はしない。切替は業務 RPC を送らない。
+  // 状態は operations 画面の選択と選択中インスタンスだけであり、段0は対象外
+  // （開発用に常時表示のままにする）。
+  private pluginViewVisible = false;
+  private activePluginInstanceId: string | null = null;
+  private readonly pluginInstanceIds = new Map<string, string>();
+  private readonly pluginDesiredHidden = new Map<string, boolean>();
+  private readonly pluginHiddenRetries = new Map<string, number>();
+  private readonly pluginHiddenScheduled = new Set<string>();
 
   // 採用中 snapshot の遷移規則。backend が登録済み companion の解決済み
   // view パス集合から生成した値の写しであり、タグ属性に載せる正本である。
@@ -394,6 +425,7 @@ export class ManagementService {
       this.reconcilePluginTags(current.pluginMounts);
     }
     this.reconcileSpikeTags(this.spikeSummaries());
+    this.applyPluginVisibility();
   }
 
   /** 子画面タグを1つ作る。属性は所有表の発行値だけを載せる。 */
@@ -472,8 +504,9 @@ export class ManagementService {
    *
    * @param mountId - 所有表が発行したマウント識別子。
    * @param initialUrl - 所有表が発行した初期 URL。
+   * @param instanceId - 束縛した実インスタンスの識別子。表示対象の判定に使う。
    */
-  private placePluginTag(mountId: string, initialUrl: string): void {
+  private placePluginTag(mountId: string, initialUrl: string, instanceId: string): void {
     if (this.pluginTags.has(mountId) || this.pluginHost === null) {
       return;
     }
@@ -484,6 +517,10 @@ export class ManagementService {
     const tag = this.buildMountTag("plugin", mountId, initialUrl, JSON.stringify(rules));
     this.pluginHost.append(tag);
     this.pluginTags.set(mountId, tag);
+    this.pluginInstanceIds.set(mountId, instanceId);
+    this.pluginDesiredHidden.set(mountId, this.desiredPluginHidden(mountId));
+    this.pluginHiddenRetries.set(mountId, 0);
+    this.applyPluginHidden(mountId);
   }
 
   /** 配置中の実プラグイン用タグを外す。表示の破棄は main の対応付けが行う。 */
@@ -494,6 +531,10 @@ export class ManagementService {
     }
     tag.remove();
     this.pluginTags.delete(mountId);
+    this.pluginInstanceIds.delete(mountId);
+    this.pluginDesiredHidden.delete(mountId);
+    this.pluginHiddenRetries.delete(mountId);
+    this.pluginHiddenScheduled.delete(mountId);
   }
 
   /**
@@ -512,13 +553,111 @@ export class ManagementService {
     }
     for (const mount of mounts) {
       if (!this.pluginTags.has(mount.mountId)) {
-        this.placePluginTag(mount.mountId, mount.initialUrl);
+        this.placePluginTag(mount.mountId, mount.initialUrl, mount.instanceId);
         // host 未登録で置けなかった場合は記録しない（次回の登録・採用で置く）。
         if (this.pluginTags.has(mount.mountId)) {
           this.appendLog(`実プラグイン子画面を置いた mountId=${mount.mountId}`);
         }
       }
     }
+    this.applyPluginVisibility();
+  }
+
+  /**
+   * 子画面の表示対象を切り替える。表示切替だけであり、業務 RPC は送らない。
+   *
+   * 各タグの desired hidden は `!(可視 && そのタグの instanceId === 選択中)`
+   * であり、`toggleHidden` で適用する。未初期化のタグは rAF で上限付き
+   * 再試行し、desired を保持して初期化後に適用する。
+   *
+   * @param visible - operations 画面が選択されている場合に真。
+   * @param activeInstanceId - 表示対象のインスタンス識別子。無ければ `null`。
+   */
+  setPluginViewState(visible: boolean, activeInstanceId: string | null): void {
+    this.pluginViewVisible = visible;
+    this.activePluginInstanceId = activeInstanceId;
+    this.applyPluginVisibility();
+  }
+
+  /**
+   * タグの desired hidden を求める。可視かつ対象個体に一致する場合だけ偽である。
+   *
+   * @param mountId - 対象のマウント識別子。
+   * @returns 隠す場合に真。
+   */
+  private desiredPluginHidden(mountId: string): boolean {
+    if (!this.pluginViewVisible) {
+      return true;
+    }
+    if (this.activePluginInstanceId === null) {
+      return true;
+    }
+    return this.pluginInstanceIds.get(mountId) !== this.activePluginInstanceId;
+  }
+
+  /** 全タグの desired を求め直し、変わったものだけ再試行回数を捨てて適用する。 */
+  private applyPluginVisibility(): void {
+    for (const mountId of this.pluginTags.keys()) {
+      const desired = this.desiredPluginHidden(mountId);
+      if (this.pluginDesiredHidden.get(mountId) !== desired) {
+        this.pluginDesiredHidden.set(mountId, desired);
+        this.pluginHiddenRetries.set(mountId, 0);
+      }
+      this.applyPluginHidden(mountId);
+    }
+  }
+
+  /**
+   * 1つのタグへ desired を適用する。未初期化なら rAF で上限付き再試行する。
+   *
+   * `toggleHidden` が関数でない要素（happy-dom の未知要素）は no-op とし、
+   * タグの再生成・DOM 移動・`src` 再設定はしない。
+   *
+   * @param mountId - 対象のマウント識別子。
+   */
+  private applyPluginHidden(mountId: string): void {
+    const tag = this.pluginTags.get(mountId);
+    if (tag === undefined) {
+      return;
+    }
+    const desired = this.pluginDesiredHidden.get(mountId) ?? this.desiredPluginHidden(mountId);
+    this.pluginDesiredHidden.set(mountId, desired);
+    const candidate = tag as HTMLElement & PluginVisibilityTag;
+    if (typeof candidate.toggleHidden !== "function") {
+      return;
+    }
+    if (typeof candidate.webviewId !== "number") {
+      const retries = this.pluginHiddenRetries.get(mountId) ?? 0;
+      if (retries >= PLUGIN_HIDDEN_RETRY_LIMIT) {
+        this.pluginHiddenScheduled.delete(mountId);
+        this.appendLog(`実プラグイン子画面の表示切替を諦めた mountId=${mountId}`);
+        return;
+      }
+      this.pluginHiddenRetries.set(mountId, retries + 1);
+      if (this.pluginHiddenScheduled.has(mountId)) {
+        return;
+      }
+      const scheduler = (globalThis as { readonly requestAnimationFrame?: unknown })[
+        "requestAnimationFrame"
+      ];
+      if (typeof scheduler !== "function") {
+        this.pluginHiddenScheduled.delete(mountId);
+        this.appendLog(`実プラグイン子画面の表示切替を諦めた mountId=${mountId}`);
+        return;
+      }
+      this.pluginHiddenScheduled.add(mountId);
+      (scheduler as typeof requestAnimationFrame)(() => {
+        this.pluginHiddenScheduled.delete(mountId);
+        if (!this.pluginTags.has(mountId)) {
+          return;
+        }
+        this.applyPluginHidden(mountId);
+      });
+      return;
+    }
+    this.pluginHiddenScheduled.delete(mountId);
+    this.pluginHiddenRetries.set(mountId, 0);
+    candidate.toggleHidden(desired);
   }
 
   /** 所有一覧を読み直し、タグと表示を合わせる。 */

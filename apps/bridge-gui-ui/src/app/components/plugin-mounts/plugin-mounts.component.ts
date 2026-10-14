@@ -11,10 +11,12 @@ import type {
   PluginUiMountFailure,
   PluginUiMountPlacement,
 } from "bridge-gui-contract/plugin-instance";
+import { HlmButton } from "../../ui/button/hlm-button.ts";
 
 @Component({
   selector: "app-plugin-mounts",
   standalone: true,
+  imports: [HlmButton],
   templateUrl: "./plugin-mounts.component.html",
 })
 export class PluginMountsComponent {

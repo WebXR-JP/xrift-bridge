@@ -22,6 +22,7 @@ function prepareServiceStub() {
     fetchInitial: vi.fn(async () => {}),
     notifyReady: vi.fn(),
     registerMountHosts: vi.fn((_spike: HTMLElement, _plugin: HTMLElement) => {}),
+    setPluginViewState: vi.fn((_visible: boolean, _activeInstanceId: string | null) => {}),
     refreshSpike: vi.fn(async (_via: string) => {}),
     enableAcceptance: vi.fn(async () => {}),
     disableAcceptance: vi.fn(async () => {}),
@@ -194,5 +195,209 @@ describe("画面選択とパネル切替", () => {
     expect(stub.destroySpike).not.toHaveBeenCalled();
     expect(stub.resetSpikes).not.toHaveBeenCalled();
     expect(stub.retryPluginMounts).not.toHaveBeenCalled();
+  });
+});
+
+// プラグイン操作の選択と表示制御。タブ単位はインスタンスであり、
+// 改訂進行・追加では選択を変えず、消滅時だけ移すことを確かめる。
+// 表示切替は業務 RPC を送らず、表示制御への通知だけである。
+// native の見え方は自動検証できない（DOM・RPC レベルまでである）。
+
+/** 試験用の所有個体。 */
+function instanceOf(
+  instanceId: string,
+  pluginKind = "text",
+  localSessionId = "s1",
+): {
+  pluginKind: string;
+  pluginId: string;
+  instanceId: string;
+  localSessionId: string;
+  portId: string;
+  phase: "active";
+} {
+  return {
+    pluginKind,
+    pluginId: pluginKind,
+    instanceId,
+    localSessionId,
+    portId: pluginKind,
+    phase: "active",
+  };
+}
+
+/** 操作タブを押す。選択要求だけであり、業務 RPC は送らない。 */
+function selectOperationTab(fixture: ComponentFixture<AppComponent>, index: number): void {
+  const root = fixture.nativeElement as HTMLElement;
+  const tabs = root.querySelectorAll('[data-panel="operations"] [role="tab"]');
+  const tab = tabs[index];
+  if (tab === undefined || !(tab instanceof HTMLButtonElement)) {
+    throw new Error(`操作タブが無い: ${index}`);
+  }
+  tab.click();
+  fixture.detectChanges();
+}
+
+describe("プラグイン操作の選択と表示制御", () => {
+  it("初期は非表示から始まりoperations選択時のみ表示する", async () => {
+    const { fixture, stub } = await prepareRoot();
+    // 初期（connections 選択）は非表示である。
+    expect(stub.setPluginViewState).toHaveBeenCalledTimes(1);
+    expect(stub.setPluginViewState.mock.calls[0]?.[0]).toBe(false);
+    expect(stub.setPluginViewState.mock.calls[0]?.[1]).toBe(null);
+    stub.setPluginViewState.mockClear();
+    selectView(fixture, "operations");
+    await fixture.whenStable();
+    const last = stub.setPluginViewState.mock.calls.at(-1);
+    expect(last?.[0]).toBe(true);
+    selectView(fixture, "log");
+    await fixture.whenStable();
+    expect(stub.setPluginViewState.mock.calls.at(-1)?.[0]).toBe(false);
+  });
+
+  it("初期選択はtext種別であり無ければ先頭である", async () => {
+    const { fixture, stub } = await prepareRoot();
+    stub.snapshot.set(
+      makeSnapshot({
+        revision: 6,
+        plugins: {
+          kinds: [],
+          instances: [instanceOf("i-diag", "diagnostic"), instanceOf("i-text", "text")],
+          assignments: [],
+        },
+      }),
+    );
+    fixture.detectChanges();
+    await fixture.whenStable();
+    const last = stub.setPluginViewState.mock.calls.at(-1);
+    expect(last?.[1]).toBe("i-text");
+    stub.snapshot.set(
+      makeSnapshot({
+        revision: 7,
+        plugins: {
+          kinds: [],
+          instances: [instanceOf("i-a", "diagnostic"), instanceOf("i-b", "diagnostic")],
+          assignments: [],
+        },
+      }),
+    );
+    stub.setPluginViewState.mockClear();
+    // 所有が入れ替わって選択が消えた場合は残存の先頭へ移す。
+    fixture.detectChanges();
+    await fixture.whenStable();
+    expect(stub.setPluginViewState.mock.calls.at(-1)?.[1]).toBe("i-a");
+  });
+
+  it("改訂進行・別個体追加では選択を変えない", async () => {
+    const { fixture, stub } = await prepareRoot();
+    stub.snapshot.set(
+      makeSnapshot({
+        revision: 6,
+        plugins: { kinds: [], instances: [instanceOf("i1")], assignments: [] },
+      }),
+    );
+    fixture.detectChanges();
+    await fixture.whenStable();
+    expect(stub.setPluginViewState.mock.calls.at(-1)?.[1]).toBe("i1");
+    const callsAfterSelect = stub.setPluginViewState.mock.calls.length;
+    // 改訂だけが進んでも選択は変わらない。
+    stub.snapshot.set(
+      makeSnapshot({
+        revision: 7,
+        plugins: { kinds: [], instances: [instanceOf("i1")], assignments: [] },
+      }),
+    );
+    fixture.detectChanges();
+    await fixture.whenStable();
+    // 別個体が増えても選択は変わらない。
+    stub.snapshot.set(
+      makeSnapshot({
+        revision: 8,
+        plugins: {
+          kinds: [],
+          instances: [instanceOf("i1"), instanceOf("i2", "text", "s2")],
+          assignments: [],
+        },
+      }),
+    );
+    fixture.detectChanges();
+    await fixture.whenStable();
+    expect(fixture.componentInstance.activeInstanceId()).toBe("i1");
+    // 選択が変わらないため、新たな通知があっても対象は変わらない。
+    for (const call of stub.setPluginViewState.mock.calls.slice(callsAfterSelect)) {
+      expect(call[1]).toBe("i1");
+    }
+  });
+
+  it("選択個体が消えたときだけ残存個体へ移し所有0ならnullである", async () => {
+    const { fixture, stub } = await prepareRoot();
+    stub.snapshot.set(
+      makeSnapshot({
+        revision: 6,
+        plugins: {
+          kinds: [],
+          instances: [instanceOf("i1"), instanceOf("i2", "text", "s2")],
+          assignments: [],
+        },
+      }),
+    );
+    fixture.detectChanges();
+    await fixture.whenStable();
+    expect(stub.setPluginViewState.mock.calls.at(-1)?.[1]).toBe("i1");
+    // i1 が消えたら残存へ移す。
+    stub.snapshot.set(
+      makeSnapshot({
+        revision: 7,
+        plugins: { kinds: [], instances: [instanceOf("i2", "text", "s2")], assignments: [] },
+      }),
+    );
+    fixture.detectChanges();
+    await fixture.whenStable();
+    expect(stub.setPluginViewState.mock.calls.at(-1)?.[1]).toBe("i2");
+    // 所有が0なら `null` である。
+    stub.snapshot.set(makeSnapshot({ revision: 8 }));
+    fixture.detectChanges();
+    await fixture.whenStable();
+    expect(stub.setPluginViewState.mock.calls.at(-1)?.[1]).toBe(null);
+  });
+
+  it("タブ切替は表示制御だけであり業務RPCを送らずhostとタグの同一性を保つ", async () => {
+    const { fixture, stub } = await prepareRoot();
+    stub.snapshot.set(
+      makeSnapshot({
+        revision: 6,
+        plugins: {
+          kinds: [],
+          instances: [instanceOf("i1"), instanceOf("i2", "text", "s2")],
+          assignments: [],
+        },
+      }),
+    );
+    fixture.detectChanges();
+    await fixture.whenStable();
+    selectView(fixture, "operations");
+    const pluginHostBefore = fixture.nativeElement.querySelector("#plugin-host");
+    expect(pluginHostBefore).not.toBe(null);
+    selectOperationTab(fixture, 1);
+    await fixture.whenStable();
+    expect(stub.setPluginViewState.mock.calls.at(-1)).toEqual([true, "i2"]);
+    expect(fixture.nativeElement.querySelector("#plugin-host")).toBe(pluginHostBefore);
+    expect(fixture.nativeElement.querySelector("#spike-host")).not.toBe(null);
+    expect(stub.fetchInitial).toHaveBeenCalledTimes(1);
+    expect(stub.assignPlugin).not.toHaveBeenCalled();
+    expect(stub.unassignPlugin).not.toHaveBeenCalled();
+    expect(stub.retryPluginMounts).not.toHaveBeenCalled();
+  });
+
+  it("起動処理は1回でありoperations部品と配置・開発節を描画する", async () => {
+    const { fixture, stub } = await prepareRoot();
+    selectView(fixture, "operations");
+    const panel = panelOf(fixture, "operations");
+    expect(panel.querySelector("app-plugin-operations")).not.toBe(null);
+    expect(panel.querySelector("app-plugin-mounts")).not.toBe(null);
+    expect(panel.querySelector("app-spike-section")).not.toBe(null);
+    expect(panel.querySelector("#plugin-host")).not.toBe(null);
+    expect(stub.fetchInitial).toHaveBeenCalledTimes(1);
+    expect(stub.registerMountHosts).toHaveBeenCalledTimes(1);
   });
 });

@@ -79,10 +79,11 @@ describe("段0スパイク一覧の表示", () => {
     });
     const root = fixture.nativeElement as HTMLElement;
     const buttons = [...root.querySelectorAll("button")];
-    buttons.find((button) => button.textContent === "送る")?.click();
-    buttons.find((button) => button.textContent === "外す")?.click();
-    buttons.find((button) => button.textContent === "子画面を作る")?.click();
-    buttons.find((button) => button.textContent === "子画面を全て外す")?.click();
+    // ADR: helm 化後の整形でボタン文の前後に空白が入るため、照合は前後空白を除く。
+    buttons.find((button) => button.textContent?.trim() === "送る")?.click();
+    buttons.find((button) => button.textContent?.trim() === "外す")?.click();
+    buttons.find((button) => button.textContent?.trim() === "子画面を作る")?.click();
+    buttons.find((button) => button.textContent?.trim() === "子画面を全て外す")?.click();
     expect(pushed).toEqual(["spike-1"]);
     expect(destroyed).toEqual(["spike-1"]);
     expect(created).toBe(1);

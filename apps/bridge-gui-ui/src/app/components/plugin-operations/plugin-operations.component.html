@@ -1,0 +1,55 @@
+<!-- プラグイン操作（インスタンス単位のタブ＋選択中個体の子画面状態）。タブ切替でタグは動かさない。 -->
+<section class="flex flex-col gap-3" aria-label="プラグイン操作">
+  <h2 class="m-0 text-[15px] font-bold text-[var(--foreground)]">プラグイン操作</h2>
+  @if (instances().length === 0) {
+    <p class="m-0 text-[14px] text-[var(--muted-foreground)]">起動中のプラグインは無い</p>
+  } @else {
+    <div
+      role="tablist"
+      aria-label="起動中のプラグイン"
+      class="flex"
+      style="background: var(--secondary); border-radius: 6px; padding: 4px; gap: 8px"
+    >
+      @for (item of instances(); track item.instanceId) {
+        <button
+          type="button"
+          role="tab"
+          [attr.aria-selected]="isSelected(item)"
+          (click)="onSelect(item)"
+          style="border: 0; border-radius: 6px; padding: 6px 12px; font-size: 13px; cursor: pointer"
+          [style.background]="isSelected(item) ? 'var(--background)' : 'transparent'"
+          [style.color]="isSelected(item) ? 'var(--foreground)' : 'var(--muted-foreground)'"
+          [style.font-weight]="isSelected(item) ? '600' : '400'"
+        >
+          {{ tabLabelFor(item) }}
+        </button>
+      }
+    </div>
+    @if (selectedMounts().length === 0 && selectedFailures().length === 0) {
+      <p class="m-0 text-[12px] text-[var(--muted-foreground)]">子画面の準備中</p>
+    } @else {
+      <ul class="m-0 flex list-none flex-col gap-1 p-0">
+        @for (mount of selectedMounts(); track mount.mountId) {
+          <li class="m-0 text-[12px] text-[var(--muted-foreground)]">
+            {{ mount.mountId }}（{{ describeState(mount) }}・rev {{ mount.revision }}）
+          </li>
+        }
+        @for (
+          failure of selectedFailures();
+          track failure.kind + failure.reason + failure.instanceId
+        ) {
+          <li class="m-0 text-[12px] text-[var(--muted-foreground)]">
+            失敗（{{ failure.kind }}）: {{ failure.reason }}
+          </li>
+        }
+      </ul>
+      @if (selectedFailures().length > 0) {
+        <div>
+          <button hlmBtn variant="outline" type="button" (click)="retryRequested.emit()">
+            失敗を消して作り直す
+          </button>
+        </div>
+      }
+    }
+  }
+</section>

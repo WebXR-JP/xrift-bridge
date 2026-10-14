@@ -7,10 +7,12 @@
  */
 import { Component, input, output } from "@angular/core";
 import type { SpikeMountSummary } from "bridge-gui-contract/plugin-spike";
+import { HlmButton } from "../../ui/button/hlm-button.ts";
 
 @Component({
   selector: "app-spike-section",
   standalone: true,
+  imports: [HlmButton],
   templateUrl: "./spike-section.component.html",
 })
 export class SpikeSectionComponent {

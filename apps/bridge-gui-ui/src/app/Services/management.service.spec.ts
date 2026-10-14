@@ -554,3 +554,195 @@ describe("子画面操作の要求送出", () => {
     expect(service.eventLog().join("\n")).toContain("再試行を要求した");
   });
 });
+
+// 子画面の表示制御。native 表示は `toggleHidden` でのみ切り替え、
+// HTML の `hidden` 属性・CSS・矩形 0x0 では保証しないことを前提にする。
+// happy-dom では未知要素のため fake（`toggleHidden` と `webviewId`）で
+// desired の算出・適用・再試行・RPC 不送出・非再生成を確かめる。
+// native の見え方自体は自動検証できない。
+
+/** 実プラグイン配置の試験値（個体を指定できる）。 */
+function makePluginMountWithInstance(mountId: string, instanceId: string) {
+  return {
+    ...makePluginMount(mountId),
+    instanceId,
+  };
+}
+
+/** 配置済みタグへ fake の表示口を付ける。初期化済みとして扱う。 */
+function attachVisibilityFake(tag: Element | null | undefined) {
+  if (tag === null || tag === undefined) {
+    throw new Error("表示対象のタグが無い");
+  }
+  const fake = tag as unknown as { toggleHidden: ReturnType<typeof vi.fn>; webviewId: number };
+  fake.toggleHidden = vi.fn();
+  fake.webviewId = 7;
+  return fake;
+}
+
+/** 全 stub 呼び出し回数の写し。表示切替が業務 RPC を送らないことの照合用である。 */
+function rpcCallCounts(stub: ReturnType<typeof prepareRpcStub>["client"]) {
+  return [
+    stub.getSnapshot.mock.calls.length,
+    stub.enableAcceptance.mock.calls.length,
+    stub.disableAcceptance.mock.calls.length,
+    stub.getPairingView.mock.calls.length,
+    stub.approvePairing.mock.calls.length,
+    stub.rejectPairing.mock.calls.length,
+    stub.disconnectConnection.mock.calls.length,
+    stub.assignPlugin.mock.calls.length,
+    stub.unassignPlugin.mock.calls.length,
+    stub.quit.mock.calls.length,
+    stub.createSpike.mock.calls.length,
+    stub.destroySpike.mock.calls.length,
+    stub.pushSpike.mock.calls.length,
+    stub.listSpikes.mock.calls.length,
+    stub.resetSpike.mock.calls.length,
+    stub.retryPluginMounts.mock.calls.length,
+  ];
+}
+
+describe("子画面の表示制御", () => {
+  it("表示対象だけを見せ他を隠す", async () => {
+    const hosts = prepareMountHosts();
+    try {
+      const { service, stub } = prepareService();
+      service.registerMountHosts(hosts.spike, hosts.plugin);
+      stub.client.getSnapshot.mockResolvedValueOnce(
+        makeSnapshot({
+          revision: 3,
+          pluginMounts: [
+            makePluginMountWithInstance("plugin-text-1", "i1"),
+            makePluginMountWithInstance("plugin-text-2", "i2"),
+          ],
+        }),
+      );
+      await service.fetchInitial();
+      const first = attachVisibilityFake(hosts.plugin.querySelector("#plugin-plugin-text-1"));
+      const second = attachVisibilityFake(hosts.plugin.querySelector("#plugin-plugin-text-2"));
+      service.setPluginViewState(true, "i1");
+      expect(first.toggleHidden).toHaveBeenCalledWith(false);
+      expect(second.toggleHidden).toHaveBeenCalledWith(true);
+    } finally {
+      hosts.dispose();
+    }
+  });
+
+  it("operations 未選択・対象無しでは全て隠す", async () => {
+    const hosts = prepareMountHosts();
+    try {
+      const { service, stub } = prepareService();
+      service.registerMountHosts(hosts.spike, hosts.plugin);
+      stub.client.getSnapshot.mockResolvedValueOnce(
+        makeSnapshot({
+          revision: 3,
+          pluginMounts: [makePluginMountWithInstance("plugin-text-1", "i1")],
+        }),
+      );
+      await service.fetchInitial();
+      const tag = attachVisibilityFake(hosts.plugin.querySelector("electrobun-webview"));
+      service.setPluginViewState(false, "i1");
+      expect(tag.toggleHidden).toHaveBeenCalledWith(true);
+      service.setPluginViewState(true, null);
+      expect(tag.toggleHidden).toHaveBeenLastCalledWith(true);
+    } finally {
+      hosts.dispose();
+    }
+  });
+
+  it("切替でタグを作り直さず src を変えず業務RPCを送らない", async () => {
+    const hosts = prepareMountHosts();
+    try {
+      const { service, stub } = prepareService();
+      service.registerMountHosts(hosts.spike, hosts.plugin);
+      stub.client.getSnapshot.mockResolvedValueOnce(
+        makeSnapshot({
+          revision: 3,
+          pluginMounts: [makePluginMountWithInstance("plugin-text-1", "i1")],
+        }),
+      );
+      await service.fetchInitial();
+      const before = hosts.plugin.querySelector("electrobun-webview");
+      attachVisibilityFake(before);
+      const baseline = rpcCallCounts(stub.client);
+      service.setPluginViewState(true, "i1");
+      service.setPluginViewState(false, null);
+      service.setPluginViewState(true, "i1");
+      const after = hosts.plugin.querySelector("electrobun-webview");
+      expect(after).toBe(before);
+      expect(after?.getAttribute("src")).toBe("views://plugin-host/blank.html#mount=plugin-text-1");
+      expect(hosts.plugin.querySelectorAll("electrobun-webview").length).toBe(1);
+      expect(rpcCallCounts(stub.client)).toEqual(baseline);
+    } finally {
+      hosts.dispose();
+    }
+  });
+
+  it("toggleHiddenが無い要素では何もせず終える", async () => {
+    const hosts = prepareMountHosts();
+    try {
+      const { service, stub } = prepareService();
+      service.registerMountHosts(hosts.spike, hosts.plugin);
+      stub.client.getSnapshot.mockResolvedValueOnce(
+        makeSnapshot({
+          revision: 3,
+          pluginMounts: [makePluginMountWithInstance("plugin-text-1", "i1")],
+        }),
+      );
+      await service.fetchInitial();
+      // happy-dom の未知要素のまま（`toggleHidden` が無い）で呼ぶ。
+      expect(() => service.setPluginViewState(true, "i1")).not.toThrow();
+      expect(hosts.plugin.querySelectorAll("electrobun-webview").length).toBe(1);
+    } finally {
+      hosts.dispose();
+    }
+  });
+
+  it("未初期化ではrAFで再試行し初期化後に適用する", async () => {
+    const hosts = prepareMountHosts();
+    const frames: FrameRequestCallback[] = [];
+    const original = (globalThis as { requestAnimationFrame?: unknown })["requestAnimationFrame"];
+    (globalThis as unknown as Record<string, unknown>)["requestAnimationFrame"] = (
+      callback: FrameRequestCallback,
+    ): number => {
+      frames.push(callback);
+      return frames.length;
+    };
+    try {
+      const { service, stub } = prepareService();
+      service.registerMountHosts(hosts.spike, hosts.plugin);
+      stub.client.getSnapshot.mockResolvedValueOnce(
+        makeSnapshot({
+          revision: 3,
+          pluginMounts: [makePluginMountWithInstance("plugin-text-1", "i1")],
+        }),
+      );
+      await service.fetchInitial();
+      const tag = hosts.plugin.querySelector("electrobun-webview") as unknown as {
+        toggleHidden: ReturnType<typeof vi.fn>;
+        webviewId: number | null;
+      };
+      tag.toggleHidden = vi.fn();
+      tag.webviewId = null;
+      const before = hosts.plugin.querySelector("electrobun-webview");
+      service.setPluginViewState(true, "i1");
+      // 未初期化のため何も送らず、再試行を予約する。
+      expect(tag.toggleHidden).not.toHaveBeenCalled();
+      expect(frames.length).toBeGreaterThan(0);
+      // 初期化後に枠を進めると適用する。タグは作り直さない。
+      tag.webviewId = 11;
+      frames.splice(0).forEach((callback) => {
+        callback(0);
+      });
+      expect(tag.toggleHidden).toHaveBeenCalledWith(false);
+      expect(hosts.plugin.querySelector("electrobun-webview")).toBe(before);
+    } finally {
+      if (original === undefined) {
+        delete (globalThis as unknown as Record<string, unknown>)["requestAnimationFrame"];
+      } else {
+        (globalThis as unknown as Record<string, unknown>)["requestAnimationFrame"] = original;
+      }
+      hosts.dispose();
+    }
+  });
+});

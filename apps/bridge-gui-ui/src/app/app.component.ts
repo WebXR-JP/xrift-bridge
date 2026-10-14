@@ -5,7 +5,7 @@
  * 起動時の自動走行はしない（検証は明示の試験・ハーネスで行う）。
  * 比較コード本文・業務 payload・テキスト本文は扱わない。
  */
-import { Component, ElementRef, ViewChild, signal } from "@angular/core";
+import { Component, ElementRef, ViewChild, effect, signal } from "@angular/core";
 import type { OnInit } from "@angular/core";
 import { AcceptanceToggleComponent } from "./components/acceptance-toggle/acceptance-toggle.component.ts";
 import { ConnectionListComponent } from "./components/connection-list/connection-list.component.ts";
@@ -15,6 +15,7 @@ import { PendingListComponent } from "./components/pending-list/pending-list.com
 import type { ApproveRequest } from "./components/pending-row/pending-row.component.ts";
 import { PluginMountsComponent } from "./components/plugin-mounts/plugin-mounts.component.ts";
 import { PluginListComponent } from "./components/plugin-list/plugin-list.component.ts";
+import { PluginOperationsComponent } from "./components/plugin-operations/plugin-operations.component.ts";
 import { SessionListComponent } from "./components/session-list/session-list.component.ts";
 import { ShellComponent } from "./components/shell/shell.component.ts";
 import type { ShellStatus } from "./components/shell/shell.component.ts";
@@ -37,6 +38,7 @@ import type { ViewKey } from "./view-config.ts";
     PendingListComponent,
     PluginListComponent,
     PluginMountsComponent,
+    PluginOperationsComponent,
     SessionListComponent,
     ShellComponent,
     SpikeSectionComponent,
@@ -54,6 +56,15 @@ export class AppComponent implements OnInit {
 
   /** 選択中の画面キー。 */
   readonly selectedKey = this.selected.asReadonly();
+
+  // ADR: 操作対象の個体選択も App のローカル signal に閉じる。初期は `text`
+  // 種別があればそれ、無ければ先頭である。改訂進行・別個体追加では変えず、
+  // 選択個体が消えたときだけ残存個体へ移す。所有が0なら `null` である。
+  // タブ切替は表示制御だけであり、業務 RPC は送らない。
+  private readonly selectedInstance = signal<string | null>(null);
+
+  /** 現在選択中のプラグインインスタンス。所有が無い間は `null`。 */
+  readonly activeInstanceId = this.selectedInstance.asReadonly();
   /** 採用中の表示状態。 */
   get snapshot() {
     return this.management.snapshot;
@@ -128,13 +139,58 @@ export class AppComponent implements OnInit {
     this.selected.set(key);
   }
 
+  /**
+   * 操作対象の個体を選択する。表示切替だけであり、業務 RPC は送らない。
+   *
+   * 子画面タグは動かさない（選択は effect 経由で表示制御に伝わる）。
+   *
+   * @param instanceId - 選択するインスタンスの識別子。
+   */
+  onSelectPluginInstance(instanceId: string): void {
+    this.selectedInstance.set(instanceId);
+  }
+
   @ViewChild("spikeHost", { static: true })
   spikeHost?: ElementRef<HTMLElement>;
 
   @ViewChild("pluginHost", { static: true })
   pluginHost?: ElementRef<HTMLElement>;
 
-  constructor(private readonly management: ManagementService) {}
+  constructor(private readonly management: ManagementService) {
+    // ADR: 個体選択の同期と表示制御の通知は effect に閉じる。snapshot の
+    // 改訂進行で選択を戻さず、選択個体の消滅時だけ移す。通知は表示切替だけ
+    // であり、業務 RPC は送らない。初期は operations 未選択のため非表示である。
+    effect(() => {
+      const instances = this.management.snapshot()?.plugins.instances ?? [];
+      const current = this.selectedInstance();
+      if (instances.length === 0) {
+        if (current !== null) {
+          this.selectedInstance.set(null);
+        }
+        return;
+      }
+      if (current === null) {
+        const text = instances.find((item) => item.pluginKind === "text");
+        const initial = text ?? instances[0];
+        if (initial !== undefined) {
+          this.selectedInstance.set(initial.instanceId);
+        }
+        return;
+      }
+      if (!instances.some((item) => item.instanceId === current)) {
+        const text = instances.find((item) => item.pluginKind === "text");
+        const fallback = text ?? instances[0];
+        if (fallback !== undefined) {
+          this.selectedInstance.set(fallback.instanceId);
+        } else {
+          this.selectedInstance.set(null);
+        }
+      }
+    });
+    effect(() => {
+      this.management.setPluginViewState(this.selected() === "operations", this.selectedInstance());
+    });
+  }
 
   async ngOnInit(): Promise<void> {
     console.log("[bridge-gui-ng] Angular 画面を起動した");
