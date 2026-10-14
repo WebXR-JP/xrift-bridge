@@ -263,6 +263,12 @@ importers:
       bridge-app-core:
         specifier: workspace:*
         version: link:../../packages/bridge-app-core
+      bridge-plugin-diagnostic:
+        specifier: workspace:*
+        version: link:../../packages/bridge-plugin-diagnostic
+      bridge-plugin-text:
+        specifier: workspace:*
+        version: link:../../packages/bridge-plugin-text
       bridge-protocol:
         specifier: workspace:*
         version: link:../../packages/bridge-protocol
@@ -300,6 +306,12 @@ importers:
       bridge-gui-ui:
         specifier: workspace:*
         version: link:../bridge-gui-ui
+      bridge-plugin-diagnostic:
+        specifier: workspace:*
+        version: link:../../packages/bridge-plugin-diagnostic
+      bridge-plugin-text:
+        specifier: workspace:*
+        version: link:../../packages/bridge-plugin-text
       bridge-protocol:
         specifier: workspace:*
         version: link:../../packages/bridge-protocol
@@ -352,9 +364,6 @@ importers:
       '@spartan-ng/brain':
         specifier: 'catalog:'
         version: 1.6.3(06b6b96b2f4c44f8125d54bb5cff8909)
-      bridge-app-core:
-        specifier: workspace:*
-        version: link:../../packages/bridge-app-core
       bridge-gui-contract:
         specifier: workspace:*
         version: link:../../packages/bridge-gui-contract
@@ -437,9 +446,9 @@ importers:
       '@xrift/world-components':
         specifier: ^0.53.0
         version: 0.53.0(@react-three/drei@10.7.9(@react-three/fiber@9.8.1(@types/react@19.3.0)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(three@0.183.2))(@types/react@19.3.0)(@types/three@0.183.1)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(three@0.183.2))(@react-three/fiber@9.8.1(@types/react@19.3.0)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(three@0.183.2))(@react-three/rapier@2.2.0(@react-three/fiber@9.8.1(@types/react@19.3.0)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(three@0.183.2))(react@19.2.8)(three@0.183.2))(@react-three/uikit@1.0.76(@react-three/fiber@9.8.1(@types/react@19.3.0)(react-dom@19.2.8(react@19.2.8))(react@19.2.8)(three@0.183.2))(@types/react@19.3.0)(react@19.2.8)(three@0.183.2)(use-sync-external-store@1.7.0(react@19.2.8)))(hls.js@1.7.3)(react@19.2.8)(three@0.183.2)
-      bridge-app-core:
+      bridge-plugin-text:
         specifier: workspace:*
-        version: link:../../packages/bridge-app-core
+        version: link:../../packages/bridge-plugin-text
       react:
         specifier: ~19.2.4
         version: 19.2.8
@@ -526,9 +535,6 @@ importers:
       vite-plus:
         specifier: 'catalog:'
         version: 1.0.0(@types/node@24.19.1)(@vitest/ui@5.0.1)(esbuild@0.28.2)(happy-dom@20.14.5)(jiti@2.7.0)(sass-embedded@1.104.1)(sass@1.104.1)(typescript@7.0.2)(yaml@2.9.1)
-      world-client:
-        specifier: workspace:*
-        version: link:../world-client
 
   packages/bridge-gui-contract:
     dependencies:
@@ -561,6 +567,68 @@ importers:
       '@types/node':
         specifier: 'catalog:'
         version: 24.19.1
+      typescript:
+        specifier: 'catalog:'
+        version: 7.0.2
+      vite-plus:
+        specifier: 'catalog:'
+        version: 1.0.0(@types/node@24.19.1)(@vitest/ui@5.0.1)(esbuild@0.28.2)(happy-dom@20.14.5)(jiti@2.7.0)(sass-embedded@1.104.1)(sass@1.104.1)(typescript@7.0.2)(yaml@2.9.1)
+
+  packages/bridge-plugin-diagnostic:
+    dependencies:
+      bridge-app-core:
+        specifier: workspace:*
+        version: link:../bridge-app-core
+      bridge-gui-contract:
+        specifier: workspace:*
+        version: link:../bridge-gui-contract
+      bridge-gui-plugin-sdk:
+        specifier: workspace:*
+        version: link:../bridge-gui-plugin-sdk
+      bridge-plugin-text:
+        specifier: workspace:*
+        version: link:../bridge-plugin-text
+      bridge-protocol:
+        specifier: workspace:*
+        version: link:../bridge-protocol
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 24.19.1
+      bridge-server:
+        specifier: workspace:*
+        version: link:../bridge-server
+      typescript:
+        specifier: 'catalog:'
+        version: 7.0.2
+      vite-plus:
+        specifier: 'catalog:'
+        version: 1.0.0(@types/node@24.19.1)(@vitest/ui@5.0.1)(esbuild@0.28.2)(happy-dom@20.14.5)(jiti@2.7.0)(sass-embedded@1.104.1)(sass@1.104.1)(typescript@7.0.2)(yaml@2.9.1)
+      world-client:
+        specifier: workspace:*
+        version: link:../world-client
+
+  packages/bridge-plugin-text:
+    dependencies:
+      bridge-app-core:
+        specifier: workspace:*
+        version: link:../bridge-app-core
+      bridge-gui-contract:
+        specifier: workspace:*
+        version: link:../bridge-gui-contract
+      bridge-gui-plugin-sdk:
+        specifier: workspace:*
+        version: link:../bridge-gui-plugin-sdk
+    devDependencies:
+      '@types/node':
+        specifier: 'catalog:'
+        version: 24.19.1
+      bridge-protocol:
+        specifier: workspace:*
+        version: link:../bridge-protocol
+      bridge-server:
+        specifier: workspace:*
+        version: link:../bridge-server
       typescript:
         specifier: 'catalog:'
         version: 7.0.2

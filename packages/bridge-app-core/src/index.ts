@@ -1,67 +1,11 @@
 /**
- * ブリッジアプリのプラグイン基盤。
+ * ブリッジアプリのプラグイン基盤（汎用 entry）。
  *
- * プラグイン定義とインスタンス管理、接続口の適合判定、割当て・解除、
- * 失効処理、UI 非依存の状態と操作、同梱プラグインを提供する。
- * GUI ライブラリは参照しない。
+ * 公開内容は `./core` と同じであり、具象プラグイン（`textPlugin`・
+ * `diagnosticPlugin`・`TEXT_*`・`DIAGNOSTIC_*`・通信契約）は含まない。
+ * 具象を使う箇所は各プラグインパッケージ（`bridge-plugin-text`・
+ * `bridge-plugin-diagnostic`）を参照する。
  *
  * @packageDocumentation
  */
-export {
-  capabilityEquals,
-  type PluginDefinition,
-  type PluginInstance,
-  type PluginInstanceHandle,
-  type PluginPort,
-  type SessionCapability,
-} from "./plugin.ts";
-export {
-  wrapServerSession,
-  type AssignedLatestReceiverSession,
-  type AssignedLatestSenderSession,
-  type AssignedReliableSession,
-  type AssignedSession,
-  type RevocableAssignedSession,
-  type Unsubscribe,
-} from "./assigned-session.ts";
-export {
-  createBridgeAppCore,
-  type AssignmentInfo,
-  type BridgeAppCore,
-  type BridgeServerPort,
-} from "./app-core.ts";
-export {
-  DIAGNOSTIC_PLUGIN_ID,
-  DIAGNOSTIC_PORT_ID,
-  diagnosticPlugin,
-  type DiagnosticStats,
-} from "./plugins/diagnostic.ts";
-export {
-  TEXT_PLUGIN_ID,
-  TEXT_PORT_ID,
-  createTextPlugin,
-  textPlugin,
-  type TextPluginOperations,
-  type TextPluginOptions,
-  type TextPluginState,
-  type TextSendResult,
-  type TextStats,
-  type TextUnknownReason,
-} from "./plugins/text/plugin.ts";
-export {
-  TEXT_MAX_CODE_POINTS,
-  TEXT_RESPONSE_TIMEOUT_MS,
-  TEXT_SESSION_ID,
-  TEXT_SHOWN_OP,
-  TEXT_SHOW_OP,
-  countCodePoints,
-  isAckForRequest,
-  isCorrelationId,
-  isTextShowRequest,
-  isTextShownAck,
-  validateTextForSend,
-  type TextInputIssue,
-  type TextInputValidation,
-  type TextShowRequest,
-  type TextShownAck,
-} from "./text-contract.ts";
+export * from "./core.ts";

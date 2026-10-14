@@ -12,10 +12,10 @@
  * 自動再送しない。暫定フォームへの自動フォールバックは無い。
  */
 import { Electroview } from "electrobun/view";
-import { validateTextForSend } from "bridge-app-core/text-contract";
-import type { TextSendResult } from "bridge-app-core";
-import type { TextInstanceRpc, TextInstanceSnapshot } from "./contract.ts";
-import { TEXT_MOUNT_KIND, TEXT_SEND_REQUEST_TIMEOUT_MS } from "./contract.ts";
+import { validateTextForSend } from "../contract.ts";
+import type { TextSendResult } from "../plugin.ts";
+import type { TextInstanceRpc, TextInstanceSnapshot } from "../gui-contract.ts";
+import { TEXT_MOUNT_KIND, TEXT_SEND_REQUEST_TIMEOUT_MS } from "../gui-contract.ts";
 import {
   PLUGIN_INITIAL_FETCH_ATTEMPTS,
   PLUGIN_INITIAL_FETCH_RETRY_MS,
@@ -260,7 +260,8 @@ if (mountId === null || pluginMountKindOf(mountId) !== TEXT_MOUNT_KIND) {
     let fetched = false;
     for (let attempt = 1; attempt <= PLUGIN_INITIAL_FETCH_ATTEMPTS; attempt += 1) {
       try {
-        adopt(await rpc.request.getTextState({}));
+        const initial = await rpc.request.getTextState({});
+        adopt(initial);
         fetched = true;
         break;
       } catch (error: unknown) {

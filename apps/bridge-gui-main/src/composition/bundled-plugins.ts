@@ -2,11 +2,11 @@
  * 同梱プラグインの選択と登録順の宣言（composition root）。
  *
  * backend が具象を知らずに済むよう、同梱の選択と登録順（text→diagnostic）、
- * 管理記述子・companion factory の対応付けをここに宣言する。`plugin-ui` の
- * 具象を import してよいのはここだけであり、`main` 配下は汎用の登録関数
- * だけを受け取る。登録済みインスタンスや registry singleton を持たず、
- * 呼ぶたびに新しい companion・公開参照口を作るため、同じ登録関数を複数
- * backend で使い回せる。
+ * 管理記述子・companion factory の対応付けをここに宣言する。各プラグインの
+ * GUI 登録口（`bridge-plugin-text/gui`・`bridge-plugin-diagnostic/gui`）を import してよいのはここだけであり、
+ * `main` 配下は汎用の登録関数だけを受け取る。登録済みインスタンスや
+ * registry singleton を持たず、呼ぶたびに新しい companion・公開参照口を作る
+ * ため、同じ登録関数を複数 backend で使い回せる。
  *
  * companion factory は解決前の宣言（振る舞いと相対 entrypoint）だけを返し、
  * ここで静的 manifest（`bundled-plugin-assets.ts`）と照合して解決済み
@@ -17,10 +17,8 @@
 import type { GuiPluginRegistrar } from "bridge-gui-plugin-sdk/registration";
 import type { PluginCompanion, PluginCompanionDeclaration } from "bridge-gui-plugin-sdk/companion";
 import { BUNDLED_PLUGIN_ASSETS, resolveBundledViewPath } from "./bundled-plugin-assets.ts";
-import { createTextCompanion } from "../plugin-ui/text/companion.ts";
-import { textManagement } from "../plugin-ui/text/management.ts";
-import { createDiagnosticCompanion } from "../plugin-ui/diagnostic/companion.ts";
-import { diagnosticManagement } from "../plugin-ui/diagnostic/management.ts";
+import { createTextCompanion, textManagement } from "bridge-plugin-text/gui";
+import { createDiagnosticCompanion, diagnosticManagement } from "bridge-plugin-diagnostic/gui";
 
 /**
  * 解決前の宣言に解決済み view パスを付与する。相対 entrypoint は manifest と

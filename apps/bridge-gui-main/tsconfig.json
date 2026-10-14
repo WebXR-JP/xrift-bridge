@@ -28,5 +28,15 @@
   "include": ["src/**/*", "tests/**/*", "hutch.config.ts", "electrobun.config.ts"],
   // Angular の事前生成物の写し（`src/mainview-dist/*`）は Hutch の `copy` 素材であり、
   // 型検査の対象外とする。正本は `bridge-gui-ui` の `dist` である。
-  "exclude": ["node_modules", ".hutch", "build", "artifacts", "dist", "src/mainview-dist"]
+  // プラグインの staging（`src/plugin-view-dist/*`）も同じく `copy` 素材であり、
+  // 型検査の対象外とする。正本は各プラグインパッケージの `dist` である。
+  "exclude": [
+    "node_modules",
+    ".hutch",
+    "build",
+    "artifacts",
+    "dist",
+    "src/mainview-dist",
+    "src/plugin-view-dist"
+  ]
 }

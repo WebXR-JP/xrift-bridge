@@ -13,7 +13,7 @@
  */
 import { createInterface } from "node:readline";
 import { formatPairingCode } from "bridge-protocol";
-import type { DiagnosticStats } from "bridge-app-core";
+import type { DiagnosticStats } from "bridge-plugin-diagnostic";
 import { createBridgeServer, PRODUCTION_ORIGIN, type BridgeServer } from "bridge-server";
 import { startDiagnostics, type BridgeDiagnostics } from "./diagnostics.ts";
 

@@ -7,14 +7,10 @@
  * @packageDocumentation
  */
 import { afterEach, expect, test } from "vite-plus/test";
-import { createBridgeAppCore, type BridgeAppCore } from "../src/app-core.ts";
-import { wrapServerSession } from "../src/assigned-session.ts";
-import {
-  DIAGNOSTIC_PORT_ID,
-  diagnosticPlugin,
-  type DiagnosticStats,
-} from "../src/plugins/diagnostic.ts";
-import type { PluginInstanceHandle } from "../src/plugin.ts";
+import { createBridgeAppCore, type BridgeAppCore } from "bridge-app-core/core";
+import { wrapServerSession } from "bridge-app-core/core";
+import { DIAGNOSTIC_PORT_ID, diagnosticPlugin, type DiagnosticStats } from "../src/index.ts";
+import type { PluginInstanceHandle } from "bridge-app-core/core";
 import { 偽サーバー, type 偽ReliableSession } from "./fakes.ts";
 
 const cores: BridgeAppCore[] = [];
@@ -121,4 +117,18 @@ test("診断の接続口に合わない操作口ではattachできない", () =>
   }
   // 破棄後の割当ては `RangeError` になる。
   expect(() => instance.attach(DIAGNOSTIC_PORT_ID, reliable操作口)).toThrow(RangeError);
+});
+
+test("診断ハンドルは操作口を持たず初期統計を返す", () => {
+  // 診断プラグインに固有操作は無く、基盤のハンドル越しの `getOperations`
+  // は `undefined` を返す。割当て前の初期統計は echo・ping ともに 0 である。
+  // text 側の試験では build 循環を避けるため局所スタブで equivalent を
+  // 確かめており、診断本体の性質はここで固定する。この検査が無いと
+  // 操作口の意図せぬ追加・初期統計の崩れを見逃す。
+  const fake = new 偽サーバー();
+  const core = createBridgeAppCore(fake);
+  cores.push(core);
+  const handle = core.createInstance(diagnosticPlugin);
+  expect(handle.getOperations?.()).toBe(undefined);
+  expect(handle.getState()).toEqual({ diagnosticEcho: 0, diagnosticPing: 0 });
 });

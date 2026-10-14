@@ -9,7 +9,7 @@
  * @packageDocumentation
  */
 import { expect, test } from "vite-plus/test";
-import type { TextSendResult } from "bridge-app-core";
+import type { TextSendResult } from "bridge-plugin-text";
 import {
   PluginUiCoordinator,
   type PluginUiChannel,
@@ -21,8 +21,8 @@ import type { PluginCompanion } from "bridge-gui-plugin-sdk/companion";
 import type {
   DiagnosticInstanceSnapshot,
   DiagnosticInstanceView,
-} from "../src/plugin-ui/diagnostic/contract.ts";
-import type { TextInstanceSnapshot, TextInstanceView } from "../src/plugin-ui/text/contract.ts";
+} from "bridge-plugin-diagnostic/gui-contract";
+import type { TextInstanceSnapshot, TextInstanceView } from "bridge-plugin-text/gui-contract";
 import {
   BUNDLED_PLUGIN_ASSETS,
   getBundledPluginAsset,

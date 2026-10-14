@@ -19,7 +19,7 @@ import type {
 } from "bridge-server";
 import type { SessionEnd } from "bridge-protocol/transport";
 import { createBridgeServer, type BridgeServer as RealBridgeServer } from "bridge-server";
-import { TEXT_SESSION_ID } from "bridge-app-core";
+import { TEXT_SESSION_ID } from "bridge-plugin-text/contract";
 import { handleCommand } from "../src/index.ts";
 import { startDiagnostics, type BridgeDiagnostics } from "../src/diagnostics.ts";
 

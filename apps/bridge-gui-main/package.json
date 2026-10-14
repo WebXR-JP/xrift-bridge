@@ -5,21 +5,24 @@
   "description": "XRift Bridge の管理画面（Electrobun によるデスクトップ GUI。段1スパイク）。",
   "type": "module",
   "scripts": {
-    "build": "tsc --noEmit -p tsconfig.json",
+    "build": "tsc --noEmit -p tsconfig.json && pnpm stage:plugins",
     "test": "vp test",
     "test:types": "tsc --noEmit -p tsconfig.json",
     "check": "vp check",
-    "gui:prepare": "hutch electrobun prepare",
+    "gui:prepare": "vp run -F 'bridge-plugin-diagnostic...' build && hutch electrobun prepare",
+    "stage:plugins": "node --experimental-strip-types scripts/stage-bundled-plugins.ts",
     "gui:build:dev": "hutch electrobun build --env=dev",
-    "gui:run": "pnpm --filter bridge-gui-ui ng:build:dev && rm -rf src/mainview-dist/dev && mkdir -p src/mainview-dist && cp -R ../bridge-gui-ui/dist/dev/browser src/mainview-dist/dev && BRIDGE_GUI_UI_DIR=src/mainview-dist/dev hutch electrobun build --env=dev && hutch electrobun run",
-    "gui:run:console": "pnpm --filter bridge-gui-ui ng:build:dev && rm -rf src/mainview-dist/dev && mkdir -p src/mainview-dist && cp -R ../bridge-gui-ui/dist/dev/browser src/mainview-dist/dev && BRIDGE_GUI_UI_DIR=src/mainview-dist/dev hutch electrobun build --env=dev && BRIDGE_GUI_NG_DEBUG=1 BRIDGE_GUI_DEV_CONSOLE=1 hutch electrobun run",
-    "gui:build": "pnpm --filter bridge-gui-ui ng:build:prod && rm -rf src/mainview-dist/prod && mkdir -p src/mainview-dist && cp -R ../bridge-gui-ui/dist/prod/browser src/mainview-dist/prod && BRIDGE_GUI_UI_DIR=src/mainview-dist/prod hutch run build"
+    "gui:run": "pnpm --filter bridge-gui-ui ng:build:dev && rm -rf src/mainview-dist/dev && mkdir -p src/mainview-dist && cp -R ../bridge-gui-ui/dist/dev/browser src/mainview-dist/dev && pnpm gui:prepare && pnpm stage:plugins && BRIDGE_GUI_UI_DIR=src/mainview-dist/dev hutch electrobun build --env=dev && hutch electrobun run",
+    "gui:run:console": "pnpm --filter bridge-gui-ui ng:build:dev && rm -rf src/mainview-dist/dev && mkdir -p src/mainview-dist && cp -R ../bridge-gui-ui/dist/dev/browser src/mainview-dist/dev && pnpm gui:prepare && pnpm stage:plugins && BRIDGE_GUI_UI_DIR=src/mainview-dist/dev hutch electrobun build --env=dev && BRIDGE_GUI_NG_DEBUG=1 BRIDGE_GUI_DEV_CONSOLE=1 hutch electrobun run",
+    "gui:build": "pnpm --filter bridge-gui-ui ng:build:prod && rm -rf src/mainview-dist/prod && mkdir -p src/mainview-dist && cp -R ../bridge-gui-ui/dist/prod/browser src/mainview-dist/prod && pnpm gui:prepare && pnpm stage:plugins && BRIDGE_GUI_UI_DIR=src/mainview-dist/prod hutch run build"
   },
   "dependencies": {
     "bridge-app-core": "workspace:*",
     "bridge-gui-contract": "workspace:*",
     "bridge-gui-plugin-sdk": "workspace:*",
     "bridge-gui-ui": "workspace:*",
+    "bridge-plugin-diagnostic": "workspace:*",
+    "bridge-plugin-text": "workspace:*",
     "bridge-protocol": "workspace:*",
     "bridge-server": "workspace:*"
   },

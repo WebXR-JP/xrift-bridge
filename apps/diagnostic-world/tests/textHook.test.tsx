@@ -11,7 +11,7 @@ import { afterEach, expect, test } from "vite-plus/test";
 import { StrictMode, useEffect, useState } from "react";
 import { act } from "react";
 import { createRoot } from "react-dom/client";
-import { TEXT_SESSION_ID } from "bridge-app-core/text-contract";
+import { TEXT_SESSION_ID } from "bridge-plugin-text/contract";
 import {
   WorldClientError,
   type ConnectionRequest,

@@ -10,12 +10,9 @@
  * @packageDocumentation
  */
 import { afterEach, expect, test } from "vite-plus/test";
-import {
-  DIAGNOSTIC_PORT_ID,
-  TEXT_PORT_ID,
-  TEXT_SESSION_ID,
-  type TextSendResult,
-} from "bridge-app-core";
+import { DIAGNOSTIC_PORT_ID } from "bridge-plugin-diagnostic";
+import { TEXT_PORT_ID, type TextSendResult } from "bridge-plugin-text";
+import { TEXT_SESSION_ID } from "bridge-plugin-text/contract";
 import { createConnectionRequest, type SessionProvider } from "world-client";
 import type { InstanceBaseView } from "bridge-gui-contract/plugin-instance";
 import { GuiBackend } from "../src/main/backend.ts";
@@ -27,11 +24,11 @@ import type {
   TextInstanceChangedMessage,
   TextInstanceSnapshot,
   TextInstanceView,
-} from "../src/plugin-ui/text/contract.ts";
+} from "bridge-plugin-text/gui-contract";
 import type {
   DiagnosticInstanceSnapshot,
   DiagnosticInstanceView,
-} from "../src/plugin-ui/diagnostic/contract.ts";
+} from "bridge-plugin-diagnostic/gui-contract";
 import { selectNewerInstanceSnapshot } from "bridge-gui-contract/plugin-instance";
 
 /** 送信に使うダミー本文。表示・記録に残らないことを確かめる目印である。 */

@@ -12,7 +12,7 @@ export default {
   scripts: {
     // 注意: これらは Hutch 名前空間のタスクであり、package.json の同名
     // スクリプトとは別物である。相互に呼び出さない（無限ループ防止）。
-    // package.json の `build` は通常の再帰 build（型検査のみ）に合わせ、
+    // package.json の `build` は通常の再帰 build（型検査＋staging 生成）に合わせ、
     // ネイティブ包装を伴う Hutch ビルドは下記の opt-in 入口に分離する。
     dev: ["hutch", "electrobun", "dev", "--watch"],
     run: ["hutch", "electrobun", "run"],

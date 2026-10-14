@@ -17,8 +17,7 @@
  * @packageDocumentation
  */
 import { isJsonValue } from "bridge-protocol";
-import type { AssignedSession } from "../assigned-session.ts";
-import type { PluginDefinition, PluginInstance } from "../plugin.ts";
+import type { AssignedSession, PluginDefinition, PluginInstance } from "bridge-app-core/core";
 
 /** 診断プラグインの接続口識別子。 */
 export const DIAGNOSTIC_PORT_ID = "diagnostic";

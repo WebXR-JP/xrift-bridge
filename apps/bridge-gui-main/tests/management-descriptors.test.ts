@@ -8,17 +8,16 @@
  * @packageDocumentation
  */
 import { expect, test } from "vite-plus/test";
-import { TEXT_SESSION_ID, diagnosticPlugin, textPlugin } from "bridge-app-core";
+import { diagnosticPlugin } from "bridge-plugin-diagnostic";
+import { textPlugin } from "bridge-plugin-text";
+import { TEXT_SESSION_ID } from "bridge-plugin-text/contract";
 import { PluginInstanceManager } from "../src/main/plugin-instance-manager.ts";
 import type {
   PluginAssignmentCandidate,
   PluginOperationAccess,
 } from "bridge-gui-plugin-sdk/management";
-import { textManagement } from "../src/plugin-ui/text/management.ts";
-import {
-  DEFAULT_DIAGNOSTIC_POLL_MS,
-  diagnosticManagement,
-} from "../src/plugin-ui/diagnostic/management.ts";
+import { textManagement } from "bridge-plugin-text/gui";
+import { DEFAULT_DIAGNOSTIC_POLL_MS, diagnosticManagement } from "bridge-plugin-diagnostic/gui";
 
 /** 割当て候補の雛形。検証対象は記述子の選択のみである。 */
 function candidateOf(overrides?: Partial<PluginAssignmentCandidate>): PluginAssignmentCandidate {

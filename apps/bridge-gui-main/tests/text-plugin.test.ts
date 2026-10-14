@@ -12,13 +12,14 @@
  * @packageDocumentation
  */
 import { afterEach, expect, test } from "vite-plus/test";
-import { TEXT_PORT_ID, TEXT_SESSION_ID, isTextShowRequest } from "bridge-app-core";
-import type { TextSendResult } from "bridge-app-core";
+import { TEXT_PORT_ID } from "bridge-plugin-text";
+import type { TextSendResult } from "bridge-plugin-text";
+import { TEXT_SESSION_ID, isTextShowRequest } from "bridge-plugin-text/contract";
 import { createConnectionRequest, type ReliableSession, type SessionProvider } from "world-client";
 import { GuiBackend } from "../src/main/backend.ts";
 import { registerBundledPlugins } from "../src/composition/bundled-plugins.ts";
 import type { PluginCompanion } from "bridge-gui-plugin-sdk/companion";
-import type { TextInstanceView } from "../src/plugin-ui/text/contract.ts";
+import type { TextInstanceView } from "bridge-plugin-text/gui-contract";
 
 const TEST_ORIGIN = "https://gui-text-test.invalid";
 

@@ -20,9 +20,13 @@ import {
   isTextShownAck,
   validateTextForSend,
   type TextShowRequest,
-} from "../../text-contract.ts";
-import type { AssignedSession, Unsubscribe } from "../../assigned-session.ts";
-import type { PluginDefinition, PluginInstance } from "../../plugin.ts";
+} from "./contract.ts";
+import type {
+  AssignedSession,
+  PluginDefinition,
+  PluginInstance,
+  Unsubscribe,
+} from "bridge-app-core/core";
 
 /** テキストプラグインの識別子。 */
 export const TEXT_PLUGIN_ID = "text";

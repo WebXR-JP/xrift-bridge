@@ -11,7 +11,7 @@
  * @packageDocumentation
  */
 import { useEffect, useState } from "react";
-import { TEXT_SESSION_ID } from "bridge-app-core/text-contract";
+import { TEXT_SESSION_ID } from "bridge-plugin-text/contract";
 import { WorldClientError, type ReliableSession } from "world-client";
 import { TextReceiver, type TextSnapshot } from "./receiver.ts";
 import type { DiagnosticSession, DiagnosticSnapshot } from "../diagnostic/session.ts";

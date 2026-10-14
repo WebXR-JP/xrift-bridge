@@ -6,7 +6,7 @@
  * 反映してから反映確認を返す。echo／ping（`diag-echo`・`diag-ping`）とは別
  * セッションであり、この受信の異常終了で診断セッションや Connection を閉じない。
  *
- * 受信検証は契約（`bridge-app-core/text-contract`）の `isTextShowRequest` に寄せ、
+ * 受信検証は契約（`bridge-plugin-text/contract`）の `isTextShowRequest` に寄せ、
  * 本文の解釈（HTML・Markdown・コマンド実行）はしない。反映確認は「表示用状態に
  * 反映した」の意味であり、描画完了を保証しない。不正な表示要求は無視し、当該
  * セッションも Connection も閉じない（後続の正規要求を受け付けるため）。
@@ -14,7 +14,7 @@
  *
  * @packageDocumentation
  */
-import { TEXT_SHOWN_OP, isTextShowRequest, type TextShownAck } from "bridge-app-core/text-contract";
+import { TEXT_SHOWN_OP, isTextShowRequest, type TextShownAck } from "bridge-plugin-text/contract";
 import type { ReliableSession } from "world-client";
 
 /** テキスト受信の状態。直近本文の有無と専用セッションの終端を表す。 */

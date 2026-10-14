@@ -18,7 +18,7 @@ import {
   isTextShowRequest,
   isTextShownAck,
   validateTextForSend,
-} from "../src/text-contract.ts";
+} from "../src/contract.ts";
 
 test("正常な表示要求と本文を検証できる", () => {
   // 正常な受信検証が通ることを確かめる。
@@ -131,7 +131,7 @@ test("応答期限は10秒である", () => {
 test("契約ソースはサーバー依存をimportしない", () => {
   // ブラウザ安全の条件をソース検査で確かめる。
   // 契約は型と純粋関数のみで構成し、`bridge-server` 等を引き込まない。
-  const ソース = readFileSync(new URL("../src/text-contract.ts", import.meta.url), "utf8");
+  const ソース = readFileSync(new URL("../src/contract.ts", import.meta.url), "utf8");
   expect(ソース).not.toMatch(/bridge-server/);
   expect(ソース).not.toMatch(/bridge-protocol/);
   expect(ソース).not.toMatch(/^\s*import\s/m);
@@ -145,7 +145,7 @@ test("契約subpathが公開され成果物がサーバー依存を持たない"
   };
   // ADR: `as` は JSON 境界の読替えであり、後続の存在検査で不正を検出する。
   // `JSON.parse` の `any` をそのまま広げないための主張である。
-  const 成果物相対径 = 台帳.exports?.["./text-contract"];
+  const 成果物相対径 = 台帳.exports?.["./contract"];
   expect(typeof 成果物相対径).toBe("string");
   if (typeof 成果物相対径 !== "string") throw new Error("契約 subpath の公開がない。");
   const 成果物 = new URL(`../${成果物相対径}`, import.meta.url);

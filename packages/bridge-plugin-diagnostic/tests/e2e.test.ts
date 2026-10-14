@@ -11,10 +11,10 @@
 import { afterEach, expect, test } from "vite-plus/test";
 import { createConnectionRequest, type ReliableSession, type SessionProvider } from "world-client";
 import { createBridgeServer, type BridgeServer } from "bridge-server";
-import { createBridgeAppCore, type BridgeAppCore } from "../src/app-core.ts";
-import { DIAGNOSTIC_PORT_ID, diagnosticPlugin } from "../src/plugins/diagnostic.ts";
-import type { PluginInstanceHandle } from "../src/plugin.ts";
-import type { DiagnosticStats } from "../src/plugins/diagnostic.ts";
+import { createBridgeAppCore, type BridgeAppCore } from "bridge-app-core/core";
+import { DIAGNOSTIC_PORT_ID, diagnosticPlugin } from "../src/index.ts";
+import type { PluginInstanceHandle } from "bridge-app-core/core";
+import type { DiagnosticStats } from "../src/index.ts";
 
 const TEST_ORIGIN = "http://localhost:5173";
 

@@ -21,7 +21,6 @@
     "@ng-icons/core": "catalog:",
     "@ng-icons/lucide": "catalog:",
     "@spartan-ng/brain": "catalog:",
-    "bridge-app-core": "workspace:*",
     "bridge-gui-contract": "workspace:*",
     "bridge-server": "workspace:*",
     "class-variance-authority": "catalog:",

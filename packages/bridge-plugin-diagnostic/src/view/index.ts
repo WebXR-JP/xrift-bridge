@@ -10,8 +10,8 @@
  * 子は push を数えるだけである。汎用プラグイン基盤の再設計はしない。
  */
 import { Electroview } from "electrobun/view";
-import type { DiagnosticInstanceRpc, DiagnosticInstanceSnapshot } from "./contract.ts";
-import { DIAGNOSTIC_MOUNT_KIND } from "./contract.ts";
+import type { DiagnosticInstanceRpc, DiagnosticInstanceSnapshot } from "../gui-contract.ts";
+import { DIAGNOSTIC_MOUNT_KIND } from "../gui-contract.ts";
 import {
   PLUGIN_INITIAL_FETCH_ATTEMPTS,
   PLUGIN_INITIAL_FETCH_RETRY_MS,
@@ -90,7 +90,8 @@ if (mountId === null || pluginMountKindOf(mountId) !== DIAGNOSTIC_MOUNT_KIND) {
     let fetched = false;
     for (let attempt = 1; attempt <= PLUGIN_INITIAL_FETCH_ATTEMPTS; attempt += 1) {
       try {
-        adopt(await rpc.request.getDiagnosticState({}));
+        const initial = await rpc.request.getDiagnosticState({});
+        adopt(initial);
         fetched = true;
         break;
       } catch (error: unknown) {

@@ -20,8 +20,8 @@ import {
   registerNoPlugins,
   resolveCompanion,
 } from "../src/composition/bundled-plugins.ts";
-import { createTextCompanion } from "../src/plugin-ui/text/companion.ts";
-import { textManagement } from "../src/plugin-ui/text/management.ts";
+import { createTextCompanion } from "bridge-plugin-text/gui";
+import { textManagement } from "bridge-plugin-text/gui";
 import {
   alphaDescriptor,
   firstFitPolicy,

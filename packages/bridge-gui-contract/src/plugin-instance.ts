@@ -9,7 +9,7 @@
  * main が束縛した個体の現割当てだけを使う。実行時の依存を持たない。
  *
  * 種別ごとの固有契約（限定表示・snapshot・通知・RPC 型・相対 entrypoint）は各
- * companion が所有する（`apps/bridge-gui-main/src/plugin-ui/<種別>/contract.ts`）。
+ * プラグインパッケージが所有する（`bridge-plugin-text/gui-contract`・`bridge-plugin-diagnostic/gui-contract`）。
  * ここには全 companion で共通の手段だけを置く。
  *
  * @packageDocumentation

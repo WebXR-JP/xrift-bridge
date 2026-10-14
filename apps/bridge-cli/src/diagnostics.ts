@@ -11,13 +11,15 @@
 import type { BridgeServer, BridgeSessionInfo } from "bridge-server";
 import {
   createBridgeAppCore,
+  type BridgeAppCore,
+  type PluginInstanceHandle,
+} from "bridge-app-core/core";
+import {
   DIAGNOSTIC_PORT_ID,
   diagnosticPlugin,
-  TEXT_SESSION_ID,
-  type BridgeAppCore,
   type DiagnosticStats,
-  type PluginInstanceHandle,
-} from "bridge-app-core";
+} from "bridge-plugin-diagnostic";
+import { TEXT_SESSION_ID } from "bridge-plugin-text/contract";
 
 /**
  * CLI の診断実行状態の操作口。

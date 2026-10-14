@@ -1,0 +1,29 @@
+{
+  // ADR: `./.hutch/devkit/tsconfig.json` を extends しない。devkit 側の
+  // "baseUrl" が TypeScript 7 で廃止され、継承すると TS5102 になるためである
+  // （text・app と同じ理由・同じ対処の複製）。必要最小限の解決先だけを paths に写す。
+  // 子画面が使うのは `electrobun/view` だけであり、main 系は載せない。
+  // pin を上げたら `hutch electrobun prepare` 後に配置を確認すること。
+  "compilerOptions": {
+    "lib": ["ESNext", "DOM"],
+    "target": "ESNext",
+    "module": "ESNext",
+    "moduleDetection": "force",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+    "noEmit": true,
+    "strict": true,
+    "skipLibCheck": true,
+    "noFallthroughCasesInSwitch": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "types": ["node"],
+    "paths": {
+      "electrobun/view": ["./.hutch/devkit/api/browser/index.ts"]
+    }
+  },
+  "include": ["src/**/*", "tests/**/*", "hutch.config.ts", "vite.view.config.ts"],
+  // 生成物（`dist/view`）は型検査の対象外とする。正本は `src` である。
+  "exclude": ["node_modules", ".hutch", "dist"]
+}

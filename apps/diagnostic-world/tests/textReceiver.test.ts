@@ -6,7 +6,7 @@
  * DOM は使わない。
  */
 import { expect, test } from "vite-plus/test";
-import { TEXT_SESSION_ID } from "bridge-app-core/text-contract";
+import { TEXT_SESSION_ID } from "bridge-plugin-text/contract";
 import type { SessionEnd } from "world-client";
 import type { ReliableSession } from "world-client";
 import { TextReceiver } from "../src/text/receiver.ts";

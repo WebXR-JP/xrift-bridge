@@ -13,7 +13,7 @@ import { createConnectionRequest, type ReliableSession, type SessionProvider } f
 import { GuiBackend } from "../src/main/backend.ts";
 import { registerBundledPlugins } from "../src/composition/bundled-plugins.ts";
 import type { PluginCompanion } from "bridge-gui-plugin-sdk/companion";
-import type { DiagnosticInstanceView } from "../src/plugin-ui/diagnostic/contract.ts";
+import type { DiagnosticInstanceView } from "bridge-plugin-diagnostic/gui-contract";
 
 const TEST_ORIGIN = "https://gui-diagnostic-notify-test.invalid";
 

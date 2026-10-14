@@ -17,6 +17,8 @@
   },
   "dependencies": {
     "bridge-app-core": "workspace:*",
+    "bridge-plugin-diagnostic": "workspace:*",
+    "bridge-plugin-text": "workspace:*",
     "bridge-protocol": "workspace:*",
     "bridge-server": "workspace:*"
   },

@@ -9,9 +9,9 @@
  * @packageDocumentation
  */
 import { afterEach, expect, test } from "vite-plus/test";
-import { createBridgeAppCore, type BridgeAppCore } from "../src/app-core.ts";
-import { wrapServerSession } from "../src/assigned-session.ts";
-import type { PluginInstanceHandle } from "../src/plugin.ts";
+import { createBridgeAppCore, type BridgeAppCore } from "bridge-app-core/core";
+import { wrapServerSession } from "bridge-app-core/core";
+import type { PluginDefinition, PluginInstance, PluginInstanceHandle } from "bridge-app-core/core";
 import {
   TEXT_PORT_ID,
   createTextPlugin,
@@ -19,10 +19,41 @@ import {
   type TextPluginOperations,
   type TextPluginState,
   type TextSendResult,
-} from "../src/plugins/text/plugin.ts";
-import { isTextShowRequest } from "../src/text-contract.ts";
-import { diagnosticPlugin } from "../src/plugins/diagnostic.ts";
+} from "../src/plugin.ts";
+import { isTextShowRequest } from "../src/contract.ts";
 import { 偽サーバー, type 偽ReliableSession } from "./fakes.ts";
+
+/**
+ * 操作口を持たない検証用のプラグイン定義。
+ *
+ * 基盤が操作口なしの個体をどう扱うか（`getOperations` が `undefined`・
+ * 状態はそのまま通す）を確かめる材料であり、診断プラグイン本体には
+ * 依存しない（パッケージ間の build 循環を作らない）。
+ */
+interface StubNoOperationsState {
+  readonly stubCount: number;
+}
+
+/** 操作口を持たない検証用の個体。割当て・破棄だけを受け付ける。 */
+class StubNoOperationsInstance implements PluginInstance<StubNoOperationsState> {
+  /** {@inheritDoc PluginInstance.attach} */
+  attach(): void {}
+  /** {@inheritDoc PluginInstance.getState} */
+  getState(): StubNoOperationsState {
+    return { stubCount: 0 };
+  }
+  /** {@inheritDoc PluginInstance.dispose} */
+  dispose(): void {}
+}
+
+/** 操作口を持たない検証用のプラグイン定義。 */
+const stubNoOperationsPlugin: PluginDefinition<StubNoOperationsState> = {
+  pluginId: "stub-operations-less",
+  ports: [{ portId: "stub", accepts: [{ kind: "reliable", direction: "bidirectional" }] }],
+  create(): PluginInstance<StubNoOperationsState> {
+    return new StubNoOperationsInstance();
+  },
+};
 
 const cores: BridgeAppCore[] = [];
 
@@ -340,10 +371,10 @@ test("操作口はハンドル経由で取得できる", () => {
   // 汎用の任意 payload 送信口は作らない。
   expect(テキスト操作口).not.toHaveProperty("sendReliable");
 
-  // 操作口を持たない診断の振る舞いは変わらない。
-  const 診断ハンドル = core.createInstance(diagnosticPlugin);
-  expect(診断ハンドル.getOperations?.()).toBe(undefined);
-  expect(診断ハンドル.getState()).toEqual({ diagnosticEcho: 0, diagnosticPing: 0 });
+  // 操作口を持たない個体の振る舞いは変わらない。
+  const スタブハンドル = core.createInstance(stubNoOperationsPlugin);
+  expect(スタブハンドル.getOperations?.()).toBe(undefined);
+  expect(スタブハンドル.getState()).toEqual({ stubCount: 0 });
 });
 
 test("切替え時は旧要求を持ち越さない", async () => {
