@@ -150,6 +150,12 @@ body {
 }
 
 #plugin-host electrobun-webview {
+  /* ADR: 全タグをホストと同一矩形に重ねる。複数個体のタグは通常フローでは
+   * 縦に積まれ、2つ目以降の矩形が1つ目の高さぶん下にずれる（native 子ビュー
+   * もその矩形に置かれる）。非選択タグの非表示は `toggleHidden` に任せ、
+   * ここでは重ね順だけで切り替える（`hidden` 属性・`display:none` は使わない）。 */
+  position: absolute;
+  inset: 0;
   width: 100%;
   height: 100%;
   min-height: 320px;
