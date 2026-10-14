@@ -10,7 +10,6 @@ test("開発条件が揃い部品が取れるとき観測口が有効になる",
     componentMounted: true,
     revision: 3,
     webviewTagCount: 1,
-    spikeTagKept: true,
     execMark: true,
     hasGetComponent: true,
     resolvedComponent: true,
@@ -24,7 +23,6 @@ test("開発条件が揃い部品が取れるとき観測口が有効になる",
   expect(result.resolvedComponent).toBe(true);
   expect(result.revision).toBe(3);
   expect(result.webviewTagCount).toBe(1);
-  expect(result.spikeTagKept).toBe(true);
   expect(result.execMark).toBe(true);
 });
 
@@ -35,7 +33,6 @@ test("製品ビルドでは観測口が無効になる", () => {
     componentMounted: true,
     revision: 3,
     webviewTagCount: 1,
-    spikeTagKept: true,
     execMark: false,
     hasGetComponent: false,
     resolvedComponent: false,
@@ -52,7 +49,6 @@ test("未描画では観測口が無効になる", () => {
     componentMounted: false,
     revision: null,
     webviewTagCount: 0,
-    spikeTagKept: false,
     execMark: false,
     hasGetComponent: true,
     resolvedComponent: false,
@@ -69,7 +65,6 @@ test("取得の呼び出しに失敗しても有効性は保ち定型の理由�
     componentMounted: true,
     revision: 3,
     webviewTagCount: 1,
-    spikeTagKept: true,
     execMark: true,
     hasGetComponent: true,
     resolvedComponent: false,

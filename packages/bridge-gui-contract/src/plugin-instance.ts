@@ -54,10 +54,10 @@ export function selectNewerInstanceSnapshot<T extends { readonly revision: numbe
 }
 
 /**
- * 実プラグイン子画面の配置・表示契約（段2・段3）。
+ * 実プラグイン子画面の配置・表示契約。
  *
- * 段0スパイク（`plugin-spike.ts`）とは別の識別子名前空間・別の初期 URL・
- * 別の子画面を使い、検証専用の結線と混線させない。子画面は自分の束縛個体の
+ * マウント識別子は `plugin-<種別>-<連番>` の名前空間を使い、
+ * 子画面は自分の束縛個体の
  * 限定情報と操作だけを使い、受付・保留・照合・承認・接続断・割当て／解除・
  * インスタンス管理・終了といった管理操作、他個体の情報、候補一覧、
  * 保留情報はここに載せない。実行時の依存を持たない。
@@ -192,8 +192,7 @@ export function buildPluginNavigationRules(viewPaths: readonly string[]): readon
  *
  * main が発行する `#mount=plugin-<種別>-<連番>` だけを受け付ける。
  * 種別の既知・未登録はここでは問わず、呼び出し側の登録表が許可する。
- * 段0スパイクの識別子（`spike-<連番>`）は対象外であり、形式外・空は
- * `null` とし、呼び出し側が回収・拒否する。
+ * 形式外・空は `null` とし、呼び出し側が回収・拒否する。
  *
  * @param url - 照合・表示対象の URL。`null` の場合がある。
  * @returns マウント識別子。形式外なら `null`。

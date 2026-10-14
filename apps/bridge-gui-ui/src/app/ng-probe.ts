@@ -27,8 +27,6 @@ export interface NgProbeInput {
   readonly revision: number | null;
   /** 文書にある `electrobun-webview` 要素の数。 */
   readonly webviewTagCount: number;
-  /** 配置した子画面タグが文書に残っている場合に真。 */
-  readonly spikeTagKept: boolean;
   /** main の JS 実行標識を検出した場合に真。 */
   readonly execMark: boolean;
 }
@@ -60,7 +58,6 @@ export function buildNgDebugProbeResult(input: NgProbeInput): NgDebugProbeResult
     resolvedComponent: input.resolvedComponent,
     revision: input.revision,
     webviewTagCount: input.webviewTagCount,
-    spikeTagKept: input.spikeTagKept,
     execMark: input.execMark,
   };
 }

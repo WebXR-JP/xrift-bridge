@@ -442,11 +442,105 @@ test("再試行で現割当てへ再配置する", () => {
   setNow(PLUGIN_PENDING_TIMEOUT_MS + 1);
   coordinator.syncNow();
   expect(coordinator.listFailures()).toHaveLength(1);
-  expect(coordinator.retryFailed()).toEqual({ ok: true });
+  expect(coordinator.retryFailed("instance-1")).toEqual({ ok: true });
   expect(coordinator.listFailures()).toHaveLength(0);
   expect(coordinator.size).toBe(1);
   // 識別子は使い回さない。
   expect(coordinator.listPlacements()[0]?.mountId).toBe("plugin-text-2");
+});
+
+test("個体限定の再試行は対象個体だけに作用する", () => {
+  const { backend, coordinator, setNow } = setup();
+  backend.textBinding = { instanceId: "instance-1", localSessionId: "local-1", portId: "text" };
+  backend.textView = TEXT_VIEW;
+  backend.diagnostics = [
+    { instanceId: "instance-9", localSessionId: "local-9", portId: "diagnostic" },
+  ];
+  backend.diagnosticView = DIAGNOSTIC_VIEW;
+  coordinator.syncNow();
+  expect(coordinator.size).toBe(2);
+  // 両方を期限超過で失敗表示に回す。
+  setNow(PLUGIN_PENDING_TIMEOUT_MS + 1);
+  coordinator.syncNow();
+  expect(coordinator.size).toBe(0);
+  expect(coordinator.listFailures()).toHaveLength(2);
+  // テキスト側の結線済み配置を用意し、再試行の前後で保全されることを見る。
+  // まず対象個体だけを再試行し、診断の失敗は残る。
+  expect(coordinator.retryFailed("instance-1")).toEqual({ ok: true });
+  const failures = coordinator.listFailures();
+  expect(failures).toHaveLength(1);
+  expect(failures[0]?.instanceId).toBe("instance-9");
+  // 対象個体だけが再配置され、他個体の再配置は起きない。
+  const placements = coordinator.listPlacements();
+  expect(placements).toHaveLength(1);
+  expect(placements[0]?.instanceId).toBe("instance-1");
+  expect(placements[0]?.mountId).toBe("plugin-text-3");
+  // 割当ての実体には触らない（要望側の束縛は保つ）。
+  expect(backend.textBinding?.instanceId).toBe("instance-1");
+  expect(backend.diagnostics.map((binding) => binding.instanceId)).toEqual(["instance-9"]);
+});
+
+test("未知の個体の再試行は例外にせず何も変えない", () => {
+  const { backend, coordinator, setNow } = setup();
+  backend.textBinding = { instanceId: "instance-1", localSessionId: "local-1", portId: "text" };
+  backend.textView = TEXT_VIEW;
+  coordinator.syncNow();
+  setNow(PLUGIN_PENDING_TIMEOUT_MS + 1);
+  coordinator.syncNow();
+  expect(coordinator.listFailures()).toHaveLength(1);
+  const before = coordinator.listPlacements().map((placement) => placement.mountId);
+  // 現所有・失敗のいずれにも無い識別子は作用なしで受付とする。
+  expect(coordinator.retryFailed("instance-unknown")).toEqual({ ok: true });
+  expect(coordinator.listFailures()).toHaveLength(1);
+  expect(coordinator.listPlacements().map((placement) => placement.mountId)).toEqual(before);
+  // 形違いの指定も例外にしない。
+  expect(coordinator.retryFailed("")).toEqual({ ok: true });
+  expect(coordinator.retryFailed(null)).toEqual({ ok: true });
+  expect(coordinator.listFailures()).toHaveLength(1);
+});
+
+test("破棄後の再試行は受付だけを返す", () => {
+  const { coordinator } = setup();
+  coordinator.dispose();
+  expect(coordinator.retryFailed("instance-1")).toEqual({ ok: true });
+});
+
+test("個体限定の再試行は正常マウントと送信に触らない", () => {
+  const { backend, coordinator, setNow, textPushes } = setup();
+  backend.textBinding = { instanceId: "instance-1", localSessionId: "local-1", portId: "text" };
+  backend.textView = TEXT_VIEW;
+  backend.diagnostics = [
+    { instanceId: "instance-9", localSessionId: "local-9", portId: "diagnostic" },
+  ];
+  backend.diagnosticView = DIAGNOSTIC_VIEW;
+  coordinator.syncNow();
+  // テキスト側だけを結線して準備完了にし、診断側は生成待ちのまま期限切れにする。
+  const textMountId = coordinator
+    .listPlacements()
+    .find((placement) => placement.kind === "text")?.mountId;
+  if (textMountId === undefined) throw new Error("テキストの配置が無い。");
+  const textView = new FakeView(11, 7, buildPluginBlankUrl(textMountId));
+  coordinator.handleTagCreated(textView);
+  coordinator.readSnapshot("text", textMountId);
+  coordinator.markReady(textMountId);
+  coordinator.pushBound();
+  expect(textPushes.get(textMountId)).toHaveLength(1);
+  setNow(PLUGIN_PENDING_TIMEOUT_MS + 1);
+  coordinator.syncNow();
+  // 準備完了のテキストは残り、診断だけが失敗表示に回る。
+  expect(coordinator.listPlacements().map((placement) => placement.mountId)).toEqual([textMountId]);
+  expect(coordinator.listFailures()).toHaveLength(1);
+  expect(coordinator.listFailures()[0]?.instanceId).toBe("instance-9");
+  // 診断個体だけを再試行し、テキストの配置・改訂・push 先に触らない。
+  expect(coordinator.retryFailed("instance-9")).toEqual({ ok: true });
+  expect(coordinator.listPlacements().some((placement) => placement.mountId === textMountId)).toBe(
+    true,
+  );
+  expect(textPushes.get(textMountId)).toHaveLength(1);
+  expect(
+    coordinator.listPlacements().find((placement) => placement.mountId === textMountId)?.revision,
+  ).toBe(1);
+  expect(coordinator.listFailures()).toHaveLength(0);
 });
 
 test("結線の失敗をそのマウントに局所化する", () => {

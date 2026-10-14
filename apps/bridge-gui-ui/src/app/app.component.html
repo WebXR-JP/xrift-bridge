@@ -54,44 +54,27 @@
       [kinds]="snapshot()?.plugins.kinds ?? []"
       [instances]="snapshot()?.plugins.instances ?? []"
       [selectedInstanceId]="activeInstanceId()"
-      [mounts]="snapshot()?.pluginMounts ?? []"
       [failures]="snapshot()?.pluginMountFailures ?? []"
       (selectionRequested)="onSelectPluginInstance($event)"
-      (retryRequested)="onRetryPluginMounts()"
     />
 
-    <section
-      aria-label="埋込み子画面"
-      class="flex flex-col gap-3"
-      style="
-        background: var(--background);
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        padding: 20px;
-      "
+    <!-- ADR: 子画面スロットは外枠なし。`#plugin-host` を `@if` に入れず常時置き、
+      子画面タグの再生成・移動・`src` 再設定をしない。代替表示と同一矩形に重ね、
+      縦積みの余白を作らない。 -->
+    <div
+      id="plugin-slot"
+      role="tabpanel"
+      aria-label="選択中プラグインの子画面"
+      [attr.aria-labelledby]="pluginSlotLabelledBy()"
+      tabindex="0"
     >
-      <h2 class="m-0 text-[15px] font-bold text-[var(--foreground)]">埋込み子画面</h2>
-      <p class="m-0 text-[12px] text-[var(--muted-foreground)]">
-        選択中インスタンスの子画面だけが見える。他は隠す。
-      </p>
       <div #pluginHost id="plugin-host"></div>
-    </section>
-
-    <app-plugin-mounts
-      [mounts]="snapshot()?.pluginMounts ?? []"
-      [failures]="snapshot()?.pluginMountFailures ?? []"
-      (retryRequested)="onRetryPluginMounts()"
-    />
-
-    <app-spike-section
-      [spikes]="spikeMounts()"
-      (createRequested)="onCreateSpike()"
-      (pushRequested)="onPushSpike($event)"
-      (destroyRequested)="onDestroySpike($event)"
-      (resetRequested)="onResetSpikes()"
-    />
-
-    <div #spikeHost id="spike-host"></div>
+      <app-plugin-view-fallback
+        [state]="pluginViewState()"
+        (retryRequested)="onRetryPluginView()"
+        (reloadRequested)="onReloadSnapshot()"
+      />
+    </div>
   </section>
 
   <section data-panel="log" [class.hidden]="selectedKey() !== 'log'">

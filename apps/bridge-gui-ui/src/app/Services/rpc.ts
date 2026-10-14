@@ -23,11 +23,6 @@ import type {
   UnassignPluginResult,
 } from "bridge-gui-contract/management";
 import type { ApprovalResult, RejectionResult } from "bridge-server";
-import type {
-  PluginMountDto,
-  SpikeMountSummary,
-  SpikePushResult,
-} from "bridge-gui-contract/plugin-spike";
 
 /** `stateChanged` push の受信処理。採用判断は呼び出し側が行う。 */
 export type StateChangedHandler = (message: StateChangedMessage) => void;
@@ -217,61 +212,16 @@ export class ManagementRpcClient {
   }
 
   /**
-   * 段0スパイクの子画面配置を要求する。配置用 DTO（識別子＋初期 URL）を返す。
+   * 実プラグイン子画面の失敗消去と現割当てへの再配置を対象個体だけに要求する。
    *
-   * @returns 所有表が発行した配置用 DTO。
-   */
-  createSpike(): Promise<PluginMountDto> {
-    return this.rpc.request.spikeCreate({});
-  }
-
-  /**
-   * 段0スパイクの子画面破棄を要求する。所有表からの削除と表示の破棄を行う。
+   * 指定した実インスタンスの失敗表示だけを消し、その個体が現割当てに
+   * あれば配置を作り直す。他個体の失敗・既存の配置・割当て・送信には
+   * 触らない。受付であり準備完了を保証しない。
    *
-   * @param mountId - 外す子画面のマウント識別子。
+   * @param instanceId - 再試行する対象のインスタンス識別子。
    * @returns 受付応答。
    */
-  destroySpike(mountId: string): Promise<OperationAck> {
-    return this.rpc.request.spikeDestroy({ mountId });
-  }
-
-  /**
-   * 段0スパイクの子画面へ push を送る。混線の確認用である。
-   *
-   * @param mountId - 送り先マウントの識別子。
-   * @returns 送った改訂番号。
-   */
-  pushSpike(mountId: string): Promise<SpikePushResult> {
-    return this.rpc.request.spikePush({ mountId });
-  }
-
-  /**
-   * 段0スパイクの所有中マウント一覧を取得する。表示用である。
-   *
-   * @returns 所有中のマウント一覧。
-   */
-  listSpikes(): Promise<readonly SpikeMountSummary[]> {
-    return this.rpc.request.spikeList({});
-  }
-
-  /**
-   * 段0スパイクの全マウント破棄を要求する。再読込み掃除と終了処理に使う。
-   *
-   * @returns 受付応答。
-   */
-  resetSpike(): Promise<OperationAck> {
-    return this.rpc.request.spikeReset({});
-  }
-
-  /**
-   * 実プラグイン子画面の失敗消去と現割当てへの再配置を要求する。
-   *
-   * 失敗表示を消し、現在の割当てに配置が無いものを作り直す。
-   * 既存の配置・割当て・送信には触らない。
-   *
-   * @returns 受付応答。
-   */
-  retryPluginMounts(): Promise<OperationAck> {
-    return this.rpc.request.retryPluginMounts({});
+  retryPluginMount(instanceId: string): Promise<OperationAck> {
+    return this.rpc.request.retryPluginMount({ instanceId });
   }
 }

@@ -1,0 +1,69 @@
+<!-- 子画面スロットの代替表示。ready のときは状態文を出さず子画面のみにする。 -->
+@switch (state().kind) {
+  @case ("loading") {
+    <p class="m-0 text-[12px] text-[var(--muted-foreground)]">
+      プラグインの状態を読み込んでいます…
+    </p>
+  }
+  @case ("loadFailed") {
+    <p class="m-0 text-[12px] text-[var(--muted-foreground)]">
+      プラグインの状態を取得できませんでした。
+    </p>
+    <div>
+      <!-- 受け口自体は透過させるため、操作可能なこのボタンのみ受け付ける。 -->
+      <button
+        hlmBtn
+        variant="outline"
+        type="button"
+        style="pointer-events: auto"
+        (click)="reloadRequested.emit()"
+      >
+        再読み込み
+      </button>
+    </div>
+  }
+  @case ("empty") {
+    <p class="m-0 text-[12px] text-[var(--muted-foreground)]">起動中のプラグインはありません。</p>
+  }
+  @case ("starting") {
+    <p class="m-0 text-[12px] text-[var(--muted-foreground)]">プラグインを起動しています…</p>
+  }
+  @case ("preparing") {
+    <p class="m-0 text-[12px] text-[var(--muted-foreground)]">子画面を準備しています…</p>
+  }
+  @case ("failed") {
+    <p class="m-0 text-[12px] text-[var(--muted-foreground)]">子画面を表示できませんでした。</p>
+    <p class="m-0 text-[12px] text-[var(--muted-foreground)]">{{ failureReason() }}</p>
+    @if (isRetryRequestFailed()) {
+      <p class="m-0 text-[12px] text-[var(--muted-foreground)]">
+        再試行を開始できませんでした。もう一度お試しください。
+      </p>
+    }
+    <div>
+      <!-- 受け口自体は透過させるため、操作可能なこのボタンのみ受け付ける。 -->
+      <button
+        hlmBtn
+        variant="outline"
+        type="button"
+        data-plugin-view-retry
+        style="pointer-events: auto"
+        [disabled]="isRetryPending()"
+        (click)="retryRequested.emit()"
+      >
+        {{ isRetryPending() ? "再試行中…" : "再試行" }}
+      </button>
+    </div>
+  }
+  @case ("releasing") {
+    <p class="m-0 text-[12px] text-[var(--muted-foreground)]">プラグインを終了しています…</p>
+  }
+  @case ("cleanupFailed") {
+    <p class="m-0 text-[12px] text-[var(--muted-foreground)]">
+      プラグインの終了処理に失敗しました。
+    </p>
+    <p class="m-0 text-[12px] text-[var(--muted-foreground)]">
+      このプラグインは操作できません。アプリ終了時に回収を試みます。
+    </p>
+  }
+  @case ("ready") {}
+}

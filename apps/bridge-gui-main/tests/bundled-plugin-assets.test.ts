@@ -172,22 +172,21 @@ test("view 名と配置先は重複せずホスト資産と衝突しない", () 
   expect(new Set(viewNames).size).toBe(viewNames.length);
   expect(new Set(viewPaths).size).toBe(viewPaths.length);
   expect(new Set(targets).size).toBe(targets.length);
-  // ホスト資産（mainview・plugin-host・段0 spike）と衝突しない。
-  const hostViewNames = ["mainview", "plugin-spike"];
+  // ホスト資産（mainview・plugin-host）と衝突しない。
+  const hostViewNames = ["mainview"];
   for (const viewName of viewNames) {
     expect(hostViewNames).not.toContain(viewName);
   }
-  const hostTargets = [
-    "views/plugin-spike/index.html",
-    "views/plugin-spike/index.css",
-    "views/plugin-host/blank.html",
-  ];
+  const hostTargets = ["views/plugin-host/blank.html"];
   for (const target of targets) {
     expect(hostTargets).not.toContain(target);
     expect(target.startsWith("views/mainview")).toBe(false);
   }
   // config 実体にもホスト資産が残っている（別扱いの維持の確認である）。
+  // 段0検証用の子画面は同梱しない。
   expect(views["mainview"]).toBeDefined();
-  expect(views["plugin-spike"]).toBeDefined();
+  expect(views["plugin-spike"]).toBeUndefined();
+  expect(copy["src/plugin-spike/index.html"]).toBeUndefined();
+  expect(copy["src/plugin-spike/index.css"]).toBeUndefined();
   expect(copy["src/plugin-host/blank.html"]).toBe("views/plugin-host/blank.html");
 });

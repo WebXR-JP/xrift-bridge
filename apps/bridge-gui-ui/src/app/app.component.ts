@@ -13,18 +13,18 @@ import { EventLogComponent } from "./components/event-log/event-log.component.ts
 import { ManagementService } from "./Services/management.service.ts";
 import { PendingListComponent } from "./components/pending-list/pending-list.component.ts";
 import type { ApproveRequest } from "./components/pending-row/pending-row.component.ts";
-import { PluginMountsComponent } from "./components/plugin-mounts/plugin-mounts.component.ts";
 import { PluginListComponent } from "./components/plugin-list/plugin-list.component.ts";
 import { PluginOperationsComponent } from "./components/plugin-operations/plugin-operations.component.ts";
+import { PluginViewFallbackComponent } from "./components/plugin-view-fallback/plugin-view-fallback.component.ts";
 import { SessionListComponent } from "./components/session-list/session-list.component.ts";
 import { ShellComponent } from "./components/shell/shell.component.ts";
 import type { ShellStatus } from "./components/shell/shell.component.ts";
-import { SpikeSectionComponent } from "./components/spike-section/spike-section.component.ts";
 import { StatusSummaryComponent } from "./components/status-summary/status-summary.component.ts";
 import type {
   PluginAssignRequest,
   PluginUnassignRequest,
 } from "./components/plugin-list/plugin-list.component.ts";
+import type { PluginViewState } from "./plugin-view-state.ts";
 import { DEFAULT_VIEW_KEY, VIEW_DEFINITIONS } from "./view-config.ts";
 import type { ViewKey } from "./view-config.ts";
 
@@ -37,11 +37,10 @@ import type { ViewKey } from "./view-config.ts";
     EventLogComponent,
     PendingListComponent,
     PluginListComponent,
-    PluginMountsComponent,
     PluginOperationsComponent,
+    PluginViewFallbackComponent,
     SessionListComponent,
     ShellComponent,
-    SpikeSectionComponent,
     StatusSummaryComponent,
   ],
   templateUrl: "./app.component.html",
@@ -90,9 +89,21 @@ export class AppComponent implements OnInit {
     return this.management.snapshot() !== null;
   }
 
-  /** 段0スパイクの所有一覧。 */
-  get spikeMounts() {
-    return this.management.spikeMounts;
+  /**
+   * 選択個体のスロット状態。共有の導出と同じ判定であり、代替表示と可視制御で
+   * 食い違わない。snapshot の複製は作らず、都度導出する。
+   */
+  pluginViewState(): PluginViewState {
+    return this.management.pluginViewStateFor(this.selectedInstance());
+  }
+
+  /**
+   * 子画面スロット（tabpanel）の関連付け先。選択中タブの識別子であり、
+   * 所有が無い間は `null`（`aria-labelledby` を付けない）。
+   */
+  pluginSlotLabelledBy(): string | null {
+    const active = this.selectedInstance();
+    return active === null ? null : `plugin-tab-${active}`;
   }
 
   /**
@@ -155,9 +166,6 @@ export class AppComponent implements OnInit {
     this.selectedInstance.set(instanceId);
   }
 
-  @ViewChild("spikeHost", { static: true })
-  spikeHost?: ElementRef<HTMLElement>;
-
   @ViewChild("pluginHost", { static: true })
   pluginHost?: ElementRef<HTMLElement>;
 
@@ -201,18 +209,14 @@ export class AppComponent implements OnInit {
     console.log("[bridge-gui-ng] Angular 画面を起動した");
     // ADR: 子画面タグの配置先は安定した host 要素に固定し、テンプレートでは
     // 描画しない。表示状態の更新で作り替えない。
-    // ADR: 読み込み直しの残存掃除（vanilla の init `spikeReset` 相当）は main
-    // 側の `did-navigate` が遷移時に行うため、ここでは送らない（重複排除）。
+    // ADR: 読み込み直しの残存掃除は main 側の `did-navigate` が実プラグインの
+    // 対応付け破棄として行うため、ここでは送らない（重複排除）。
     // 初期化では所有一覧の読直しだけを行い、タグと表示を合わせる。
-    if (this.spikeHost !== undefined && this.pluginHost !== undefined) {
-      this.management.registerMountHosts(
-        this.spikeHost.nativeElement,
-        this.pluginHost.nativeElement,
-      );
+    if (this.pluginHost !== undefined) {
+      this.management.registerPluginHost(this.pluginHost.nativeElement);
     }
     await this.management.fetchInitial();
     this.management.notifyReady();
-    await this.management.refreshSpike("初期化");
   }
 
   /** 受付を有効化する（人間の操作用）。 */
@@ -290,36 +294,17 @@ export class AppComponent implements OnInit {
     await this.management.quit();
   }
 
-  /** 子画面を作る（人間の操作用）。 */
-  async onCreateSpike(): Promise<void> {
-    await this.management.createSpike();
+  /** 選択中個体の子画面の再試行を要求する（人間の操作用）。対象個体だけに作用する。 */
+  async onRetryPluginView(): Promise<void> {
+    const target = this.selectedInstance();
+    if (target === null) {
+      return;
+    }
+    await this.management.retryPluginMount(target);
   }
 
-  /**
-   * 子画面へ送る（人間の操作用）。混線の確認用である。
-   *
-   * @param mountId - 送り先マウントの識別子。
-   */
-  async onPushSpike(mountId: string): Promise<void> {
-    await this.management.pushSpike(mountId);
-  }
-
-  /**
-   * 子画面を外す（人間の操作用）。
-   *
-   * @param mountId - 外す子画面のマウント識別子。
-   */
-  async onDestroySpike(mountId: string): Promise<void> {
-    await this.management.destroySpike(mountId);
-  }
-
-  /** 子画面を全て外す（人間の操作用）。 */
-  async onResetSpikes(): Promise<void> {
-    await this.management.resetSpikes();
-  }
-
-  /** 実プラグイン子画面の再試行を要求する（人間の操作用）。 */
-  async onRetryPluginMounts(): Promise<void> {
-    await this.management.retryPluginMounts();
+  /** 表示状態を読み直す（人間の操作用）。代替表示の「再読み込み」が使う。 */
+  async onReloadSnapshot(): Promise<void> {
+    await this.management.reloadSnapshot();
   }
 }

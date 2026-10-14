@@ -42,12 +42,7 @@ export const DEV_OPS = [
   "disconnectConnection",
   "assignPlugin",
   "unassignPlugin",
-  "spikeCreate",
-  "spikeDestroy",
-  "spikePush",
-  "spikeList",
-  "spikeReset",
-  "retryPluginMounts",
+  "retryPluginMount",
 ] as const;
 
 /** 開発接続口で呼び出せる操作名。 */
@@ -287,10 +282,7 @@ export type DevBusinessSummary =
       readonly instanceId: string;
       readonly portId: string;
     }
-  | { readonly kind: "unassignment"; readonly released: boolean; readonly issues: number }
-  | { readonly kind: "spikeCreated"; readonly mountId: string }
-  | { readonly kind: "spikePushed"; readonly revision: number }
-  | { readonly kind: "spikeList"; readonly count: number };
+  | { readonly kind: "unassignment"; readonly released: boolean; readonly issues: number };
 
 /**
  * 業務結果を応答用の要約に落とす。
@@ -343,9 +335,7 @@ export function summarizeBusinessResult(op: DevOpName, result: unknown): DevBusi
       };
     }
     case "disconnectConnection":
-    case "spikeDestroy":
-    case "spikeReset":
-    case "retryPluginMounts": {
+    case "retryPluginMount": {
       return { kind: "ack" };
     }
     case "assignPlugin": {
@@ -365,21 +355,6 @@ export function summarizeBusinessResult(op: DevOpName, result: unknown): DevBusi
         released: table["released"] === true,
         issues: Array.isArray(issues) ? issues.length : 0,
       };
-    }
-    case "spikeCreate": {
-      return {
-        kind: "spikeCreated",
-        mountId: typeof table["mountId"] === "string" ? table["mountId"] : "",
-      };
-    }
-    case "spikePush": {
-      return {
-        kind: "spikePushed",
-        revision: typeof table["revision"] === "number" ? table["revision"] : -1,
-      };
-    }
-    case "spikeList": {
-      return { kind: "spikeList", count: Array.isArray(result) ? result.length : 0 };
     }
   }
 }

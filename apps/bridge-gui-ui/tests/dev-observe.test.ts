@@ -93,4 +93,24 @@ describe("段階観測の応答組み立て", () => {
       expect(keys.has(element.key)).toBe(true);
     }
   });
+
+  it("固定表はスロット構成であり旧節を載せない", () => {
+    const keys = DEV_OBSERVE_TARGETS.map((target) => target.key);
+    for (const key of [
+      "plugin-operations",
+      "plugin-view-retry",
+      "plugin-view-fallback",
+      "plugin-slot",
+      "plugin-host",
+      "panel-operations",
+    ]) {
+      expect(keys).toContain(key);
+    }
+    for (const key of ["plugin-mounts", "spike-section", "spike-host"]) {
+      expect(keys).not.toContain(key);
+    }
+    // 包含要素より具体部品を先に置く（焦点の吸収を避ける）。
+    expect(keys.indexOf("plugin-view-retry")).toBeLessThan(keys.indexOf("plugin-view-fallback"));
+    expect(keys.indexOf("plugin-view-fallback")).toBeLessThan(keys.indexOf("plugin-slot"));
+  });
 });

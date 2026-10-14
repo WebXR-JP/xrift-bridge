@@ -131,34 +131,38 @@ body {
  * （utilities より低優先で見た目を保つ層）は不要になった。`.container` と
  * preset の `container` utility の同名衝突も解消される。 */
 
-/* ADR: 子画面 host の規則は大域に残す。host 下の要素は命令的に足され、
- * 部品 CSS の擬似 encapsulation が届かないため。`electrobun-webview` の
- * 高さもここで保つ。 */
-#spike-host {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 8px;
+/* ADR: 子画面スロットの規則は大域に残す。host 下の要素は命令的に足され、
+ * 部品 CSS の擬似 encapsulation が届かないため。スロットは外枠なしで、
+ * 子画面タグと代替表示を同一矩形に重ねる（縦積みの余白を作らない）。
+ * `electrobun-webview` の高さもここで保つ。ホスト側の外枠は付けない。 */
+#plugin-slot {
+  position: relative;
+  display: block;
+  min-height: 320px;
 }
 
-#spike-host electrobun-webview {
-  width: 100%;
-  height: 240px;
-  border: 1px solid #cbd5e1;
-  border-radius: 8px;
-}
-
-/* 実プラグイン子画面の配置先（vanilla の plugin-container 相当）。 */
+/* ADR: `#plugin-host` を `@if` に入れず常時置く。表示の差替えは重ね順だけ
+ * で行い、タグの再生成・移動・`src` 再設定をしない。 */
 #plugin-host {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin-top: 8px;
+  position: absolute;
+  inset: 0;
+  display: block;
 }
 
 #plugin-host electrobun-webview {
   width: 100%;
-  height: 320px;
-  border: 1px solid #cbd5e1;
-  border-radius: 8px;
+  height: 100%;
+  min-height: 320px;
+  border: 0;
+  border-radius: 0;
+}
+
+app-plugin-view-fallback {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  align-items: flex-start;
+  justify-content: flex-start;
 }

@@ -10,11 +10,9 @@ import {
   type DevConsole,
 } from "./dev-console.ts";
 import { createManagementRpc } from "./rpc.ts";
-import type { PluginUiOperations, SpikeMountOperations } from "./rpc.ts";
+import type { PluginUiOperations } from "./rpc.ts";
 import { ElectrobunPluginUiChildView, createPluginUiChannelFactory } from "./instance-rpc.ts";
-import { PluginMountManager } from "./plugin-mounts.ts";
 import { PluginUiCoordinator } from "./plugin-ui-mounts.ts";
-import { ElectrobunMountChildView, createChannelFactory } from "./spike-rpc.ts";
 
 /**
  * 同梱ページだけを許可する遷移規則。全面拒否を先に置き、
@@ -64,8 +62,6 @@ let shutdownTask: Promise<void> | null = null;
 // 満たすときだけ起動し、終了処理で必ず閉じる。stable は環境変数を
 // 設定しても開かない。
 let devConsole: DevConsole | null = null;
-// 段0スパイクの所有表。窓の生成後に結び付け、終了処理で破棄する。
-let spikeMounts: PluginMountManager | null = null;
 // 実プラグイン子画面の対応付け。窓の生成後に結び付け、終了処理で破棄する。
 let pluginUi: PluginUiCoordinator | null = null;
 // 後始末が終わり、終了・閉鎖の再要求を許可できるか。
@@ -88,9 +84,7 @@ function shutdown(): Promise<void> {
           await devConsole.close();
           devConsole = null;
         }
-        // 子画面の所有表を先に破棄し、BrowserView・購読を残さない。
-        spikeMounts?.resetAll("終了");
-        spikeMounts = null;
+        // 子画面の対応付けを先に破棄し、BrowserView・購読を残さない。
         // 実プラグイン子画面も対応付けの削除と表示の破棄を行い残さない。
         pluginUi?.resetAll("終了");
         pluginUi = null;
@@ -119,15 +113,6 @@ function quitAfterShutdown(): void {
       Electrobun.Utils.quit();
     }
   });
-}
-
-/**
- * 子画面の所有表が無い状態での要求拒否。窓の生成前には到達しない。
- *
- * @throws `Error` — 常に投げる。
- */
-function failSpike(): never {
-  throw new Error("子画面の所有表が無い。");
 }
 
 /**
@@ -167,16 +152,6 @@ void backendPromise.then((ready) => {
   /** 要求の到達回数。Webview 側の到達証明用に数える（内容は残さない）。 */
   let snapshotRequestCount = 0;
 
-  // 段0スパイクの操作口。所有表は窓の生成後に結び付けるため、
-  // 到達時点では必ず存在する（RPC 到達は窓の生成より後である）。
-  // 開発接続口と共有するため、RPC 定義の前に束ねる。
-  const spikeOps: SpikeMountOperations = {
-    createSpikeMount: () => spikeMounts?.createMount() ?? failSpike(),
-    destroySpikeMount: (mountId: unknown) => spikeMounts?.destroyMount(mountId) ?? failSpike(),
-    pushSpikeMount: (mountId: unknown) => spikeMounts?.pushMount(mountId) ?? failSpike(),
-    listSpikeMounts: () => spikeMounts?.listMounts() ?? [],
-    resetSpikeMounts: () => spikeMounts?.resetAll("管理画面の要求") ?? { ok: true as const },
-  };
   // 実プラグイン子画面の配置操作口。読み取りは管理が無ければ空とし、
   // 書込み（再試行）は結線の不備として拒否する。開発接続口と共有する。
   const pluginUiOps: PluginUiOperations = {
@@ -185,7 +160,8 @@ void backendPromise.then((ready) => {
     },
     listPluginUiMounts: () => pluginUi?.listPlacements() ?? [],
     listPluginUiFailures: () => pluginUi?.listFailures() ?? [],
-    retryPluginUiMounts: () => pluginUi?.retryFailed() ?? failPluginUi(),
+    retryPluginUiMount: (instanceId: unknown) =>
+      pluginUi?.retryFailed(instanceId) ?? failPluginUi(),
   };
 
   const rpc = createManagementRpc(
@@ -207,7 +183,6 @@ void backendPromise.then((ready) => {
         quitAfterShutdown();
       },
     },
-    spikeOps,
     pluginUiOps,
   );
 
@@ -215,7 +190,7 @@ void backendPromise.then((ready) => {
   // loopback に開き、終了処理で閉じる。許可操作は既存操作への委譲であり、
   // DOM 反映の観測は限定 Webview RPC（`ngDevObserve`）で行う。
   if (shouldStartDevConsole()) {
-    devConsole = startDevConsole(ready, spikeOps, pluginUiOps, {
+    devConsole = startDevConsole(ready, pluginUiOps, {
       observeDom: (revision) => rpc.request.ngDevObserve({ revision }),
     });
     console.log(
@@ -278,11 +253,8 @@ void backendPromise.then((ready) => {
     return "詳細不明";
   }
 
-  // 段0スパイクの所有表。親 Webview の識別子でタグ生成元を照合する。
-  // タグ生成は管理画面の読込みより後であるため、ここでの登録で間に合う。
-  spikeMounts = new PluginMountManager(mainWindow.webview.id, createChannelFactory());
   // 実プラグイン子画面の対応付け。backend の現割当てへの追随と
-  // 個体別チャネルの結線を担い、段0とは名前空間を分ける。
+  // 個体別チャネルの結線を担う。
   // companion 登録表は backend が生成したものを注入する（共有 singleton は使わない）。
   const registry = ready.companionRegistry;
   pluginUi = new PluginUiCoordinator(
@@ -314,8 +286,8 @@ void backendPromise.then((ready) => {
   });
 
   BrowserView.on("created", (view) => {
-    // 実プラグインと段0スパイクは識別子の名前空間で振り分ける。
-    // 互いの所有表が相手の生成を回収しない（混線させない）。
+    // 実プラグインの生成だけを対応付けが消費・回収する。
+    // 他名前空間の生成には触らず無視する。
     const pluginCandidate = new ElectrobunPluginUiChildView(view);
     if (parsePluginMountId(pluginCandidate.currentUrl) !== null) {
       if (pluginUi === null) {
@@ -338,14 +310,10 @@ void backendPromise.then((ready) => {
       }
       return;
     }
-    spikeMounts?.handleTagCreated(new ElectrobunMountChildView(view));
   });
 
   mainWindow.webview.on("did-navigate", (event: unknown) => {
     console.log(`[bridge-gui] Webview が遷移した: ${describeNavigation(event)}`);
-    // 管理画面の再読込みでは配置が作り直されるため、所有表に残さない。
-    // 初回遷移では所有が空であり、何もしない。
-    spikeMounts?.resetAll("管理画面の遷移");
     // 実プラグイン子画面も対応付けの削除と表示の破棄を行い残さない。
     // 現割当てへの再配置は次回の状態通知・取得で作り直す。
     pluginUi?.resetAll("管理画面の遷移");
@@ -363,7 +331,7 @@ void backendPromise.then((ready) => {
           const result = await rpc.request.ngDebugProbe({});
           // 許可 DTO の要点だけを残す。
           console.log(
-            `[bridge-gui] 開発口の観測結果: available=${result.available} hasNg=${result.hasNg} mounted=${result.componentMounted} getFn=${result.hasGetComponent} got=${result.resolvedComponent} revision=${result.revision} tags=${result.webviewTagCount} kept=${result.spikeTagKept} exec=${result.execMark} reason=${result.reason}`,
+            `[bridge-gui] 開発口の観測結果: available=${result.available} hasNg=${result.hasNg} mounted=${result.componentMounted} getFn=${result.hasGetComponent} got=${result.resolvedComponent} revision=${result.revision} tags=${result.webviewTagCount} exec=${result.execMark} reason=${result.reason}`,
           );
         } catch (error: unknown) {
           console.log(`[bridge-gui] 開発口の観測に失敗した: ${String(error)}`);

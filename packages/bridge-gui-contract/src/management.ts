@@ -12,7 +12,6 @@ import type {
   ConnectionPhase,
   RejectionResult,
 } from "bridge-server";
-import type { PluginMountDto, SpikeMountSummary, SpikePushResult } from "./plugin-spike.ts";
 import type { PluginUiMountFailure, PluginUiMountPlacement } from "./plugin-instance.ts";
 
 /** GUI バックエンドの起動状態。 */
@@ -283,8 +282,6 @@ export interface NgDebugProbeResult {
   readonly revision: number | null;
   /** 文書にある `electrobun-webview` 要素の数。 */
   readonly webviewTagCount: number;
-  /** 配置した子画面タグが文書に残っている場合に真。 */
-  readonly spikeTagKept: boolean;
   /** main の JS 実行標識を検出した場合に真。 */
   readonly execMark: boolean;
 }
@@ -403,38 +400,13 @@ export type ManagementRpc = {
         response: UnassignPluginResult;
       };
       /**
-       * 段0スパイクの子画面配置。配置用 DTO（識別子＋初期 URL）を返す。
+       * 実プラグイン子画面の失敗消去と現割当てへの再配置（個体限定）。
        *
-       * 識別子は再利用しない。初期 URL は空ページに限る。
+       * 指定した実インスタンスの失敗表示だけを消し、その個体が現割当てに
+       * あれば配置を作り直す。他個体の失敗・既存の配置・割当て・送信には
+       * 触らない。受付であり準備完了を保証しない。
        */
-      spikeCreate: { params: {}; response: PluginMountDto };
-      /**
-       * 段0スパイクの子画面破棄。所有表からの削除と表示の破棄を行う。
-       *
-       * 配置待ちの破棄では遅延生成の回収に回す。
-       */
-      spikeDestroy: { params: { mountId: string }; response: OperationAck };
-      /**
-       * 段0スパイクの子画面へ push を送る。混線の確認用である。
-       *
-       * 当該マウントだけに送り、他には届けない。
-       */
-      spikePush: { params: { mountId: string }; response: SpikePushResult };
-      /** 段0スパイクの所有中マウント一覧。表示用である。 */
-      spikeList: { params: {}; response: readonly SpikeMountSummary[] };
-      /**
-       * 段0スパイクの全マウント破棄。再読込み掃除と終了処理に使う。
-       *
-       * 識別子の連番は巻き戻さない。
-       */
-      spikeReset: { params: {}; response: OperationAck };
-      /**
-       * 実プラグイン子画面の失敗消去と現割当てへの再配置。
-       *
-       * 失敗表示を消し、現在の割当てに配置が無いものを作り直す。
-       * 既存の配置・割当て・送信には触らない。
-       */
-      retryPluginMounts: { params: {}; response: OperationAck };
+      retryPluginMount: { params: { instanceId: string }; response: OperationAck };
       /** アプリ終了を要求する。後始末完了後に終了する。 */
       quit: { params: {}; response: OperationAck };
     },

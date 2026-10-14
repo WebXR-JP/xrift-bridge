@@ -77,26 +77,18 @@ function prepareContext(observer?: DevConsoleObserver): {
     }),
     unassignPlugin: () => ({ released: true, issues: [] }),
   };
-  const spike = {
-    createSpikeMount: () => ({ mountId: "spike-1", initialUrl: "views://blank" }),
-    destroySpikeMount: () => ({ ok: true as const }),
-    pushSpikeMount: () => ({ revision: 2 }),
-    listSpikeMounts: () => [],
-    resetSpikeMounts: () => ({ ok: true as const }),
-  };
   const pluginUi = {
     syncPluginUi: () => {},
     listPluginUiMounts: () => [],
     listPluginUiFailures: () => [],
-    retryPluginUiMounts: () => ({ ok: true as const }),
+    retryPluginUiMount: () => ({ ok: true as const }),
   };
-  // ADR: `as` は実行時の検証にならないため、主張する型が成立する根拠を残す。
+  // ADR: `as` は実行時の検証にならないため、主張する型が成立する根拠を残す.
   // 代役は接続口の試験用であり、使う操作（取得・受付・比較コード取得・
-  // 承認・割当て・送信・子画面・再試行）の項目だけを満たす。対象外の
+  // 承認・割当て・解除・子画面・再試行）の項目だけを満たす。対象外の
   // backend 内部（server・core）は持たない。
   const context = {
     backend,
-    spike,
     pluginUi,
     observer: observer ?? { observeDom: async (revision: number) => makeDom(revision) },
     token,
@@ -327,7 +319,18 @@ test("操作全体の期限超過は定型の失敗応答になり秘密を載�
 
 test("旧管理操作名は許可外として拒否する", async () => {
   const { context, upstream } = prepareContext();
-  for (const op of ["assignDiagnostics", "assignText", "sendText", "unassignText"]) {
+  for (const op of [
+    "assignDiagnostics",
+    "assignText",
+    "sendText",
+    "unassignText",
+    "spikeCreate",
+    "spikeDestroy",
+    "spikePush",
+    "spikeList",
+    "spikeReset",
+    "retryPluginMounts",
+  ]) {
     const response = await handleDevConsoleRequest(
       makeRequest("/dev/op", { body: JSON.stringify({ op }) }),
       upstream,
@@ -358,4 +361,15 @@ test("旧管理操作名は許可外として拒否する", async () => {
     context,
   );
   expect(released.status).toBe(200);
+  const retried = await handleDevConsoleRequest(
+    makeRequest("/dev/op", {
+      body: JSON.stringify({
+        op: "retryPluginMount",
+        params: { instanceId: "i1" },
+      }),
+    }),
+    upstream,
+    context,
+  );
+  expect(retried.status).toBe(200);
 });

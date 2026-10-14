@@ -14,12 +14,11 @@
  * - 配置は backend の現割当てへの追随だけが作る。子からの識別子指定は
  *   受け付けず、main が束縛した個体の現割当てだけを使う。
  * - マウント識別子は単調な連番で発行し、破棄後も使い回さない。
- *   段0スパイク（`spike-<連番>`）とは名前空間を分け、混線させない。
  * - タグ生成の照合は main が発行した初期 URL の完全一致で行い、
  *   画面の申告（任意 URL・HTML・preload）は受け付けない。
  * - 破棄は対応付けの削除（unbind）と表示の破棄で行い、DOM 削除だけに
- *   依存しない。初期化前 DOM 削除でも native 生成が止まらない段0の対策
- *   （退役集合・遅延生成回収）を実結線にも適用する。
+ *   依存しない。初期化前 DOM 削除でも native 生成が止まらない場合に備え、
+ *   退役集合・遅延生成回収で残存を残さない。
  * - 失敗はそのマウントに局所化する。生成・読込み・初期 RPC の失敗と
  *   生成待ち・準備完了待ちの期限超過は対応付けを回収して失敗表示に回し、
  *   インスタンスや Session を自動解除せず、送信も自動再実行しない。再生成は明示の
@@ -421,19 +420,30 @@ export class PluginUiCoordinator implements CompanionRequestEnv {
   }
 
   /**
-   * 失敗表示を消し、現割当てへ再配置する。
+   * 失敗表示を消し、現割当てへ再配置する（個体限定）。
    *
-   * 既存の配置・割当て・送信には触らない。再配置の成否は後続の
-   * 状態通知で受け取る。
+   * 指定した実インスタンスの失敗記録だけを消し、その個体が現割当てに
+   * あれば配置を作り直す。他個体の失敗・既存の配置・割当て・送信には
+   * 触らない。対象が現所有・失敗のいずれにも無い場合は作用なしとする。
+   * 再配置の成否は後続の状態通知で受け取る（受付であり準備完了を保証しない）。
    *
+   * @param instanceId - 再試行する実インスタンスの識別子。
    * @returns 受付応答。
    */
-  retryFailed(): { ok: true } {
+  retryFailed(instanceId: unknown): { ok: true } {
     if (this.disposed) {
       return { ok: true };
     }
-    this.failures.length = 0;
-    this.failedInstances.clear();
+    if (typeof instanceId !== "string" || instanceId.length === 0) {
+      return { ok: true };
+    }
+    const target = instanceId;
+    for (let index = this.failures.length - 1; index >= 0; index -= 1) {
+      if (this.failures[index]?.instanceId === target) {
+        this.failures.splice(index, 1);
+      }
+    }
+    this.failedInstances.delete(target);
     console.log("[bridge-gui] 実プラグイン子画面の再試行を受け付けた");
     this.syncNow();
     return { ok: true };

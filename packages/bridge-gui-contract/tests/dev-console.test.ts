@@ -47,12 +47,7 @@ test("許可操作は固定一覧に載るものだけである", () => {
   expect(isDevOpName("disconnectConnection")).toBe(true);
   expect(isDevOpName("assignPlugin")).toBe(true);
   expect(isDevOpName("unassignPlugin")).toBe(true);
-  expect(isDevOpName("spikeCreate")).toBe(true);
-  expect(isDevOpName("spikeDestroy")).toBe(true);
-  expect(isDevOpName("spikePush")).toBe(true);
-  expect(isDevOpName("spikeList")).toBe(true);
-  expect(isDevOpName("spikeReset")).toBe(true);
-  expect(isDevOpName("retryPluginMounts")).toBe(true);
+  expect(isDevOpName("retryPluginMount")).toBe(true);
 });
 
 test("終了・旧管理操作・任意名は許可操作に含めない", () => {
@@ -60,6 +55,12 @@ test("終了・旧管理操作・任意名は許可操作に含めない", () =>
   expect(isDevOpName("assignText")).toBe(false);
   expect(isDevOpName("sendText")).toBe(false);
   expect(isDevOpName("unassignText")).toBe(false);
+  expect(isDevOpName("spikeCreate")).toBe(false);
+  expect(isDevOpName("spikeDestroy")).toBe(false);
+  expect(isDevOpName("spikePush")).toBe(false);
+  expect(isDevOpName("spikeList")).toBe(false);
+  expect(isDevOpName("spikeReset")).toBe(false);
+  expect(isDevOpName("retryPluginMounts")).toBe(false);
   expect(isDevOpName("quit")).toBe(false);
   expect(isDevOpName("eval")).toBe(false);
   expect(isDevOpName("")).toBe(false);
@@ -173,8 +174,7 @@ test("業務要約に秘密（本文・payload）が載らない", () => {
       instanceId: "i1",
       portId: "diagnostic",
     }),
-    summarizeBusinessResult("spikeCreate", { mountId: "spike-1", initialUrl: secret }),
-    summarizeBusinessResult("spikeList", [{ mountId: "spike-1" }]),
+    summarizeBusinessResult("retryPluginMount", { ok: true, text: secret }),
   ] as const;
   for (const summary of cases) {
     expect(JSON.stringify(summary)).not.toContain(secret);

@@ -1,8 +1,7 @@
 /**
- * 段1の SDK 適合層。`BrowserView` への依存はこの小さな層に隔離する。
+ * 個体別チャネルの SDK 適合層。`BrowserView` への依存はこの小さな層に隔離する。
  *
- * 段0（`spike-rpc.ts`）とは別の RPC 定義で結線し、検証専用のスパイクと
- * 混線させない。要求処理の表は各 companion のアダプターが組み立て、
+ * 要求処理の表は各 companion のアダプターが組み立て、
  * ここでは登録表の記述子を使った汎用の transport 結線と push 口の適合だけを
  * 担う。型検査で確認できた形だけを採用する。
  *
@@ -91,7 +90,6 @@ export function createCompanionChannel(
  * `BrowserView` への `PluginUiChildView` 適合。
  *
  * 生成時の照合に必要な読み取りと、対応付けからの破棄だけを公開する。
- * 段0の適合層（`spike-rpc.ts`）とは別の型であり、取り違えない。
  */
 export class ElectrobunPluginUiChildView implements PluginUiChildView {
   private readonly inner: BrowserView;

@@ -13,8 +13,8 @@
  *   してよい（同梱の選択と登録順を宣言する唯一の場所である）。
  * - 起動 entry `src/main/index.ts` は `src/composition/` を import してよい
  *   （明示配線の注入元である）。
- * - 共有契約の `views://plugin-host/*`・`views://plugin-spike/*` は汎用
- *   （空ページ・段0検証用）であり、具象種別の直書きとはみなさない。
+ * - 共有契約の `views://plugin-host/*` は汎用
+ *   （空ページ）であり、具象種別の直書きとはみなさない。
  *
  * @packageDocumentation
  */
@@ -245,9 +245,9 @@ test("SDKは具象・表示・ホスト・実行系に依存しない", () => {
 });
 
 test("共有契約にプラグイン固有のURL直書きを残さない", () => {
-  // `views://plugin-host/*`（空ページ）と `views://plugin-spike/*`（段0検証用）は
+  // `views://plugin-host/*`（空ページ）は
   // 汎用であり許容する。具象種別の scope（例 `views://plugin-text/*`）だけを禁じる。
-  const forbidden = /views:\/\/plugin-(?!host\/|spike\/)/;
+  const forbidden = /views:\/\/plugin-(?!host\/)/;
   for (const absolute of listContractSources()) {
     const source = readSource(absolute);
     expect(forbidden.test(source), `契約に具象URLが残っている: ${absolute}`).toBe(false);

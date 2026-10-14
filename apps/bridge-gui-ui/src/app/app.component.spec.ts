@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from "vite-plus/test";
 import { AppComponent } from "./app.component.ts";
 import { ManagementService } from "./Services/management.service.ts";
 import type { EventLogEntry } from "./Services/management.service.ts";
+import type { PluginViewState } from "./plugin-view-state.ts";
 import { makeSnapshot } from "./snapshot-fixture.ts";
 
 // 入れ物の起動時の振る舞い。初回取得と準備完了通知だけを行い、
@@ -12,20 +13,21 @@ import { makeSnapshot } from "./snapshot-fixture.ts";
 
 // ADR: `as` は実行時の検証にならないため、主張する型が成立する根拠を残す。
 // 代役は入れ物の試験用であり、入れ物が使う項目（表示信号・初回取得・通知・
-// 受付・保留・接続・セッション・テキスト・終了・子画面作成）だけを持つ。
-// 主張は、入れ物の呼び出し項目と代役表の項目が一致することで成り立つ。
+// 受付・保留・接続・セッション・テキスト・終了・個体限定再試行・再読み込み）
+// だけを持つ。主張は、入れ物の呼び出し項目と代役表の項目が一致することで成り立つ。
 function prepareServiceStub() {
   return {
     snapshot: signal(makeSnapshot({ revision: 5 })),
     pairingViews: signal(new Map()),
     eventLog: signal([] as readonly EventLogEntry[]),
-    spikeMounts: signal([] as readonly never[]),
     pluginError: signal(""),
+    pluginViewStateFor: vi.fn((_instanceId: string | null): PluginViewState => ({
+      kind: "preparing",
+    })),
     fetchInitial: vi.fn(async () => {}),
     notifyReady: vi.fn(),
-    registerMountHosts: vi.fn((_spike: HTMLElement, _plugin: HTMLElement) => {}),
+    registerPluginHost: vi.fn((_plugin: HTMLElement) => {}),
     setPluginViewState: vi.fn((_visible: boolean, _activeInstanceId: string | null) => {}),
-    refreshSpike: vi.fn(async (_via: string) => {}),
     enableAcceptance: vi.fn(async () => {}),
     disableAcceptance: vi.fn(async () => {}),
     showPairingView: vi.fn(async (_requestId: string) => {}),
@@ -37,11 +39,8 @@ function prepareServiceStub() {
       async (_instanceId: string, _localSessionId: string, _portId: string) => {},
     ),
     quit: vi.fn(async () => {}),
-    createSpike: vi.fn(async () => {}),
-    pushSpike: vi.fn(async (_mountId: string) => {}),
-    destroySpike: vi.fn(async (_mountId: string) => {}),
-    resetSpikes: vi.fn(async () => {}),
-    retryPluginMounts: vi.fn(async () => {}),
+    retryPluginMount: vi.fn(async (_instanceId: string) => {}),
+    reloadSnapshot: vi.fn(async () => {}),
   };
 }
 
@@ -65,7 +64,6 @@ describe("入れ物の起動", () => {
     expect(stub.notifyReady).toHaveBeenCalledTimes(1);
     expect(stub.enableAcceptance).not.toHaveBeenCalled();
     expect(stub.disableAcceptance).not.toHaveBeenCalled();
-    expect(stub.createSpike).not.toHaveBeenCalled();
   });
 
   it("状態要約と受付操作を描画する", async () => {
@@ -88,15 +86,16 @@ describe("入れ物の起動", () => {
     expect(text).toContain("受信記録");
   });
 
-  it("子画面の一覧と配置先を描画し初期化で所有を読み直す", async () => {
+  it("子画面スロットと配置先を描画し単一hostだけを登録する", async () => {
     const { fixture, stub } = await prepareRoot();
-    const text: string = fixture.nativeElement.textContent ?? "";
-    expect(text).toContain("実プラグイン");
-    expect(text).toContain("段0スパイク");
-    expect(fixture.nativeElement.querySelector("#spike-host")).not.toBe(null);
+    expect(fixture.nativeElement.querySelector("#plugin-slot")).not.toBe(null);
     expect(fixture.nativeElement.querySelector("#plugin-host")).not.toBe(null);
-    expect(stub.registerMountHosts).toHaveBeenCalledTimes(1);
-    expect(stub.refreshSpike).toHaveBeenCalledWith("初期化");
+    expect(fixture.nativeElement.querySelector("app-plugin-view-fallback")).not.toBe(null);
+    // 撤去した要素は残らない。
+    expect(fixture.nativeElement.querySelector("#spike-host")).toBe(null);
+    expect(fixture.nativeElement.querySelector("app-plugin-mounts")).toBe(null);
+    expect(fixture.nativeElement.querySelector("app-spike-section")).toBe(null);
+    expect(stub.registerPluginHost).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -150,8 +149,8 @@ describe("画面選択とパネル切替", () => {
     expect(root.querySelector("header h1")?.textContent).toContain("セッション一覧");
     // 常時マウントのため、非表示パネルの部品も破棄されない。
     expect(panelOf(fixture, "connections").querySelector("app-status-summary")).not.toBe(null);
-    expect(fixture.nativeElement.querySelector("#spike-host")).not.toBe(null);
     expect(fixture.nativeElement.querySelector("#plugin-host")).not.toBe(null);
+    expect(fixture.nativeElement.querySelector("#plugin-slot")).not.toBe(null);
   });
 
   it("選択はsnapshot更新で戻らない", async () => {
@@ -209,11 +208,8 @@ describe("画面選択とパネル切替", () => {
     expect(stub.assignPlugin).not.toHaveBeenCalled();
     expect(stub.unassignPlugin).not.toHaveBeenCalled();
     expect(stub.quit).not.toHaveBeenCalled();
-    expect(stub.createSpike).not.toHaveBeenCalled();
-    expect(stub.pushSpike).not.toHaveBeenCalled();
-    expect(stub.destroySpike).not.toHaveBeenCalled();
-    expect(stub.resetSpikes).not.toHaveBeenCalled();
-    expect(stub.retryPluginMounts).not.toHaveBeenCalled();
+    expect(stub.retryPluginMount).not.toHaveBeenCalled();
+    expect(stub.reloadSnapshot).not.toHaveBeenCalled();
   });
 });
 
@@ -380,7 +376,7 @@ describe("プラグイン操作の選択と表示制御", () => {
     expect(stub.setPluginViewState.mock.calls.at(-1)?.[1]).toBe(null);
   });
 
-  it("タブ切替は表示制御だけであり業務RPCを送らずhostとタグの同一性を保つ", async () => {
+  it("タブ切替は表示制御だけであり業務RPCを送らずhostの同一性を保つ", async () => {
     const { fixture, stub } = await prepareRoot();
     stub.snapshot.set(
       makeSnapshot({
@@ -396,27 +392,73 @@ describe("プラグイン操作の選択と表示制御", () => {
     await fixture.whenStable();
     selectView(fixture, "operations");
     const pluginHostBefore = fixture.nativeElement.querySelector("#plugin-host");
+    const slotBefore = fixture.nativeElement.querySelector("#plugin-slot");
     expect(pluginHostBefore).not.toBe(null);
+    expect(slotBefore).not.toBe(null);
     selectOperationTab(fixture, 1);
     await fixture.whenStable();
     expect(stub.setPluginViewState.mock.calls.at(-1)).toEqual([true, "i2"]);
+    // `#plugin-host` を `@if` に入れないため、参照は保たれる。
     expect(fixture.nativeElement.querySelector("#plugin-host")).toBe(pluginHostBefore);
-    expect(fixture.nativeElement.querySelector("#spike-host")).not.toBe(null);
+    expect(fixture.nativeElement.querySelector("#plugin-slot")).toBe(slotBefore);
+    expect(fixture.nativeElement.querySelector("#spike-host")).toBe(null);
     expect(stub.fetchInitial).toHaveBeenCalledTimes(1);
     expect(stub.assignPlugin).not.toHaveBeenCalled();
     expect(stub.unassignPlugin).not.toHaveBeenCalled();
-    expect(stub.retryPluginMounts).not.toHaveBeenCalled();
+    expect(stub.retryPluginMount).not.toHaveBeenCalled();
   });
 
-  it("起動処理は1回でありoperations部品と配置・開発節を描画する", async () => {
+  it("起動処理は1回でありoperations部品とスロットを描画する", async () => {
     const { fixture, stub } = await prepareRoot();
     selectView(fixture, "operations");
     const panel = panelOf(fixture, "operations");
     expect(panel.querySelector("app-plugin-operations")).not.toBe(null);
-    expect(panel.querySelector("app-plugin-mounts")).not.toBe(null);
-    expect(panel.querySelector("app-spike-section")).not.toBe(null);
+    expect(panel.querySelector("app-plugin-view-fallback")).not.toBe(null);
+    expect(panel.querySelector("#plugin-slot")).not.toBe(null);
     expect(panel.querySelector("#plugin-host")).not.toBe(null);
+    expect(panel.querySelector("app-plugin-mounts")).toBe(null);
+    expect(panel.querySelector("app-spike-section")).toBe(null);
     expect(stub.fetchInitial).toHaveBeenCalledTimes(1);
-    expect(stub.registerMountHosts).toHaveBeenCalledTimes(1);
+    expect(stub.registerPluginHost).toHaveBeenCalledTimes(1);
+  });
+
+  it("スロットは子画面タグの入れ物と代替表示を常時置く", async () => {
+    const { fixture } = await prepareRoot();
+    selectView(fixture, "operations");
+    const slot = panelOf(fixture, "operations").querySelector("#plugin-slot");
+    if (slot === null) {
+      throw new Error("スロットが無い");
+    }
+    // 差し替えるのは表示だけであり、host は `@if` に入れない。
+    expect(slot.querySelector("#plugin-host")).not.toBe(null);
+    expect(slot.querySelector("app-plugin-view-fallback")).not.toBe(null);
+    expect(slot.getAttribute("role")).toBe("tabpanel");
+  });
+
+  it("代替表示の再試行は選択個体だけに作用する", async () => {
+    const { fixture, stub } = await prepareRoot();
+    stub.snapshot.set(
+      makeSnapshot({
+        revision: 6,
+        plugins: { kinds: [], instances: [instanceOf("i1")], assignments: [] },
+      }),
+    );
+    fixture.detectChanges();
+    await fixture.whenStable();
+    selectView(fixture, "operations");
+    const fallback = fixture.nativeElement.querySelector("app-plugin-view-fallback");
+    if (fallback === null) {
+      throw new Error("代替表示が無い");
+    }
+    // 代替表示の再試行は App 経由で選択個体だけに送る。
+    await fixture.componentInstance.onRetryPluginView();
+    expect(stub.retryPluginMount).toHaveBeenCalledWith("i1");
+    expect(stub.retryPluginMount).toHaveBeenCalledTimes(1);
+  });
+
+  it("代替表示の再読み込みは表示状態を読み直す", async () => {
+    const { fixture, stub } = await prepareRoot();
+    await fixture.componentInstance.onReloadSnapshot();
+    expect(stub.reloadSnapshot).toHaveBeenCalledTimes(1);
   });
 });

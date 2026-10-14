@@ -17,7 +17,7 @@
  * 隔離実行は構造で保つ（`127.0.0.1` 束縛・実行ごとの乱数 token・
  * `Origin`／`Host` 制限・CORS 無効・終了時の閉鎖）。
  *
- * ADR: 操作の実行は `GuiBackend`・段0所有表・実プラグイン対応付けの
+ * ADR: 操作の実行は `GuiBackend`・実プラグイン対応付けの
  * 既存操作に委譲し、接続口側に業務 logic を複写しない。応答の要約は
  * 契約（`bridge-gui-contract/dev-console`）の純粋関数で行い、比較コード
  * 本文・業務 payload・テキスト本文を落とす。RPC 成功や rAF を描画完了
@@ -49,7 +49,7 @@ import {
 } from "bridge-gui-contract/dev-console";
 import type { ManagementSnapshot, NgDevObserveResult } from "bridge-gui-contract/management";
 import type { GuiBackend } from "./backend.ts";
-import type { PluginUiOperations, SpikeMountOperations } from "./rpc.ts";
+import type { PluginUiOperations } from "./rpc.ts";
 
 /** 開発接続口の明示 opt-in の環境変数。 */
 export const DEV_CONSOLE_OPT_IN_ENV = "BRIDGE_GUI_DEV_CONSOLE";
@@ -197,7 +197,6 @@ export function raceDevOpWithTimeout(
  * 業務操作を実行する。既存操作への委譲であり、業務 logic を複写しない。
  *
  * @param backend - 表示状態の提供元と限定操作の実行先。
- * @param spike - 段0スパイクのマウント操作口。
  * @param pluginUi - 実プラグイン子画面の配置操作口。
  * @param op - 許可操作名。
  * @param params - 操作引数（中身の検証は各操作側が行う）。
@@ -207,7 +206,6 @@ export function raceDevOpWithTimeout(
  */
 export async function runDevOperation(
   backend: GuiBackend,
-  spike: SpikeMountOperations,
   pluginUi: PluginUiOperations,
   op: DevOpName,
   params: Record<string, unknown>,
@@ -238,18 +236,8 @@ export async function runDevOperation(
         localSessionId: params["localSessionId"],
         portId: params["portId"],
       });
-    case "spikeCreate":
-      return spike.createSpikeMount();
-    case "spikeDestroy":
-      return spike.destroySpikeMount(params["mountId"]);
-    case "spikePush":
-      return spike.pushSpikeMount(params["mountId"]);
-    case "spikeList":
-      return spike.listSpikeMounts();
-    case "spikeReset":
-      return spike.resetSpikeMounts();
-    case "retryPluginMounts":
-      return pluginUi.retryPluginUiMounts();
+    case "retryPluginMount":
+      return pluginUi.retryPluginUiMount(params["instanceId"]);
   }
 }
 
@@ -260,7 +248,6 @@ export async function runDevOperation(
  * 必ず閉じる（`close` を `GuiBackend.close()` と同じ終了経路に結線する）。
  *
  * @param backend - 表示状態の提供元と限定操作の実行先。
- * @param spike - 段0スパイクのマウント操作口。
  * @param pluginUi - 実プラグイン子画面の配置操作口。
  * @param observer - DOM 段階観測の Webview 呼び出し口。
  * @param options - 待ち受けポートの設定。
@@ -268,7 +255,6 @@ export async function runDevOperation(
  */
 export function startDevConsole(
   backend: GuiBackend,
-  spike: SpikeMountOperations,
   pluginUi: PluginUiOperations,
   observer: DevConsoleObserver,
   options: DevConsoleOptions = {},
@@ -296,7 +282,6 @@ export function startDevConsole(
       };
       return handleDevConsoleRequest(request, adapter, {
         backend,
-        spike,
         pluginUi,
         observer,
         token,
@@ -321,7 +306,6 @@ export function startDevConsole(
 /** 要求処理に要る実行時の結線。 */
 export interface DevRequestContext {
   readonly backend: GuiBackend;
-  readonly spike: SpikeMountOperations;
   readonly pluginUi: PluginUiOperations;
   readonly observer: DevConsoleObserver;
   readonly token: string;
@@ -438,13 +422,7 @@ export async function handleDevConsoleRequest(
   const work = (async (): Promise<Response> => {
     let business: DevBusinessSummary;
     try {
-      const result = await runDevOperation(
-        context.backend,
-        context.spike,
-        context.pluginUi,
-        op,
-        parsed.params,
-      );
+      const result = await runDevOperation(context.backend, context.pluginUi, op, parsed.params);
       business = summarizeBusinessResult(op, result);
     } catch (error: unknown) {
       // 引数・状態の不備は 400、終了中・起動失敗は 500 に写す。

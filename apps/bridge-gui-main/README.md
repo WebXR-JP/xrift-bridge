@@ -99,9 +99,11 @@ AI からの自動操作用の loopback 接続口。Bun main 上で完結し、�
   待受自身の起点だけを通す。応答に `Access-Control-Allow-Origin` は載せない。
   本文上限は 64 KiB、操作1件の期限は 10 秒（超過時は `504` の定型応答）、DOM 観測の待ち上限は 5 秒である。
 - 許可操作は固定 allowlist のみである: `getSnapshot`・受付の有効/無効・
-  `getPairingView`・承認/取り下げ・接続切断・診断割当て・テキスト割当て/送信/解除・
-  段0スパイク操作・再試行。アプリ終了（`quit`）・任意 JS・任意関数名・DOM 全文・
+  `getPairingView`・承認/取り下げ・接続切断・汎用プラグインの割当て/解除・
+  個体限定の再試行（`retryPluginMount`）。アプリ終了（`quit`）・任意 JS・任意関数名・DOM 全文・
   実体/injector 取得口は持たない。`ng.*` は可否・件数等の補助観測のみである。
+  プラグイン操作画面は簡素化後であり、段0スパイク操作と全体再試行は持たない。
+  失敗した個体は対象の実インスタンスを指定して再試行し、他個体には触れない。
 - 応答は段階を分けて返す: 操作受付（`acceptedAt`）／業務結果の要約／snapshot 採用
   （`snapshotRevision`）／Angular の DOM 反映（`dom`。`ngDevObserve` の到達を観測と
   し、RPC 成功や rAF を描画完了とは呼ばない）／native 画素観測（`native`。

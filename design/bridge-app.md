@@ -21,7 +21,7 @@ flowchart LR
 | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `bridge-server`                             | 接続前検証・ペアリング・Connection認可・輸送・生存セッションの公開・輸送統計                                                                                                                                                                                 |
 | `packages/bridge-app-core`                  | プラグイン定義とインスタンス管理、接続口の適合判定、割当て・解除、失効処理、UI非依存の状態と操作、同梱プラグイン。`./core` は具象プラグインを再 export しない汎用 entry であり、ホスト汎用層と公開 SDK はここだけを参照する。root は同梱プラグインも公開する |
-| `packages/bridge-gui-contract`              | 共有契約（管理RPC・個体別の共有手段と微少ランタイム）。`management`／`plugin-instance`／`plugin-spike`／`dev-console` の subpath を分ける。`plugin-instance` が持つのは共有手段のみであり、子画面固有契約は持たない                                          |
+| `packages/bridge-gui-contract`              | 共有契約（管理RPC・個体別の共有手段と微少ランタイム）。`management`／`plugin-instance`／`dev-console` の subpath を分ける。`plugin-instance` が持つのは共有手段のみであり、子画面固有契約は持たない                                                          |
 | `packages/bridge-gui-plugin-sdk`            | プラグイン実装者が参照する公開契約（管理記述子・公開参照口・割当て方針・監視方式・固有操作口・companion 宣言（相対 `viewEntry`）・登録口・資産宣言）。具象 import・副作用・実行実体・ホストパス参照を持たない                                                |
 | `apps/bridge-gui-main/src/plugin-ui/<種別>` | プラグイン所有の GUI companion（固有RPC契約・限定DTO・子画面UI・main側アダプター・管理記述子）。`contract.ts`・`companion.ts`・`management.ts`・子画面（`index.ts/html/css`）を一組で持つ                                                                    |
 | `apps/bridge-gui-main/src/composition`      | 同梱 composition root。同梱の選択と登録順の宣言（`bundled-plugins.ts`。`plugin-ui` を import してよいのはここだけ）と静的資産 manifest（`bundled-plugin-assets.ts`。platform・companion factory を import しない）を持つ                                     |
@@ -106,7 +106,7 @@ mainview を Angular に本移行する。本節が設計変更の正本であ�
 - 移行方針：既定の管理画面は Angular であり、vanilla 製の旧管理画面は削除済みである。恒久的な二重実装・フォールバックは残さない。
 - 契約境界：共有契約（DTO・限定操作・純粋な微少ランタイム＝`selectNewer`、汎用URL組立て／解析、navigation-rules 生成等）を `packages/bridge-gui-contract` へ切り出す。管理契約は汎用操作（`assignPlugin`／`unassignPlugin`）だけを持ち、テキスト固有 DTO・固有操作は持たない。固有の表示・操作は companion に置く。開発専用操作も汎用操作だけを通す。依存方向・禁止は「三層の責務」節を正本とする。
 - ビルド：Angular 成果物は UI パッケージ自身の `dist` に生成する（`dist/dev/browser`・`dist/prod/browser` の分離で混在させない）。再帰 `build` に Angular production AOT を含める（`tsc --noEmit` だけではテンプレートを検証できない）。GUI から UI への `workspace:*` ビルド依存を明示する。URL は `views://mainview/index.html` に統一し、Hutch stub＋生成物の写しのコピーとする。成果物が無ければ失敗させる。コピーは生成された chunks／assets を含める。
-- Angular 構造：RPC アダプター（接続・型付き request／push。表示状態や DOM を持たない）／状態・操作サービス（signals で snapshot 採用、初期同期、共通操作処理、実行中／失敗表示、安全な受信記録）／表示コンポーネント（状態要約＋受付＋終了、保留一覧・行、接続一覧、表示専用のセッション一覧、割当て管理を行うプラグイン一覧。固有の統計・送信は子画面に限る）／子画面ホスト（登録表駆動の実プラグイン配置・失敗・再試行、段0スパイク操作。共通の対応付け・結線に種別分岐を持たない。タグ同一性保持）／開発専用デバッグアダプター。汎用ストア・ルーターは追加しない。比較コードは保留行の一時状態だけに置き、消滅後の遅延取得は再表示しない。子画面は安定領域へ命令的に追加・削除し、revision 更新で再生成しない。スパイクの起動時自動走行は削除する。
+- Angular 構造：RPC アダプター（接続・型付き request／push。表示状態や DOM を持たない）／状態・操作サービス（signals で snapshot 採用、初期同期、共通操作処理、実行中／失敗表示、安全な受信記録）／表示コンポーネント（状態要約＋受付＋終了、保留一覧・行、接続一覧、表示専用のセッション一覧、割当て管理を行うプラグイン一覧。固有の統計・送信は子画面に限る）／子画面ホスト（登録表駆動の実プラグイン配置・失敗・再試行。共通の対応付け・結線に種別分岐を持たない。タグ同一性保持。段0スパイクを持たない）／開発専用デバッグアダプター。汎用ストア・ルーターは追加しない。比較コードは保留行の一時状態だけに置き、消滅後の遅延取得は再表示しない。子画面は安定領域へ命令的に追加・削除し、revision 更新で再生成しない。
 - AI 観測口：開発ビルド＋明示 opt-in＋隔離実行の三条件で有効化する。経路は AI → loopback 接続口 → Bun main → 限定 Webview RPC → 共通操作サービス → 既存管理 RPC → backend とする。`127.0.0.1`・実行ごとランダム token・Origin／Host 制限・入力検証・サイズ／期限制限を設け、ブラウザ向け CORS は開かない。stable は環境変数を設定しても待受けを開かない。許可操作と DTO だけを通し、任意 JS・関数名・DOM 全文・実体取得口は持たない。`ng.*` は可否・件数等の補助観測だけに使う。操作受付・業務結果・snapshot 採用・Angular の DOM 反映は別々に返す（RPC 成功や rAF を描画完了と呼ばない）。native 画素観測は自動化の対象外とし、ここでは扱わない。比較コード取得からの自動承認はしない。汎用ジョブ履歴・再送基盤は作らない。
 - 描画確認：native 画素観測（`Screen.captureRegion()` 等）と実入力送信（cliclick／System Events 等）の自動化は行わない（非目標）。`Screen.captureRegion()` はデスクトップ矩形で Webview 単体捕獲ではないため採用しない。自動観測は開発専用の操作・観測口による DOM 観測までとし、固定要素キー・矩形・表示／disabled・`document.hasFocus()`・activeElement キーだけを返し、入力値・本文は返さない。描画・フォーカス・操作フローの最終確認は人間の GUI セッションで行う。
 - 確認済み：Hutch のディレクトリコピーは package 内配置で成立する（生成物の写しディレクトリ→`views/mainview/`。`index.html`・`main.js`・`styles.css` の同梱を実測）。package 外の直接指定は `UnsafeOutputPath` で却下されるため、UI の `dist` からの写しを経由する。`@angular/build:unit-test`（Vitest runner）は現 Vite+ override 下で動作し（`ng test --watch=false` が緑）、再帰 `test` に組込済みである。native 画素観測・実入力送信の自動化は非目標として確定し、本項目の対象外とする。
@@ -120,12 +120,17 @@ mainview を Angular に本移行する。本節が設計変更の正本であ�
 - 意匠基盤：Tailwind CSS v4 と spartan/ui を用いる。`@spartan-ng/brain` に加え、helm ソースを `apps/bridge-gui-ui/src/app/ui/` に取り込んで所有する。導入は採用版を固定した手動取り込みとし、`@spartan-ng/cli` は常設しない。
 - テーマ：pen に実値がある色・寸法は pen を採り、pen が参照する shadcn 由来値（pen から読めない分）は採用版 spartan の既定で近似する。`--background`／`--card`／`--foreground`／`--muted-foreground`／`--border`／`--radius` と成功色 `#22c55e` を pen 実値から設定し、実値は pen・コードを正本とする。配色は `light` 固定とし、dark 対応は対象外とする。角丸（12／8／10／6px）は箇所ごとの個別指定であり、単一変数での統一はしない。
 - 書体：本文の Inter と受信記録の JetBrains Mono はローカルの WOFF2 同梱とし、実行時の外部取得はしない。許諾全文（OFL）を同梱する。和文はシステム書体へフォールバックする。
-- 状態・画面遷移：Router・汎用ストアは追加しない。画面選択は App のローカル signal が持ち、5パネルは常時マウントして表示だけを切り替える。子画面ホスト（`#pluginHost`／`#spikeHost`）は安定要素とし、revision 更新・画面切替で再生成しない。
+- 状態・画面遷移：Router・汎用ストアは追加しない。画面選択は App のローカル signal が持ち、5パネルは常時マウントして表示だけを切り替える。子画面ホスト（`#plugin-host`）は常時存在する安定要素とし、revision 更新・画面切替で再生成しない。段0スパイクと `#spike-host` は製品コードに持たない。
 - 操作統合：セッション一覧は表示専用とし、割当て・解除の操作はプラグイン一覧へ統合する。使用可能種別の正本は採用中 snapshot の `plugins.kinds` とし、静的表は表示補助に留める。追加は一覧の追加操作から接続先セッションを選んで起動と割当てを一体で行う。契約が生成と割当てを一体に持つため、未割当て起動は設けない。起動済み個体の接続先変更は非目標とする。pen の「起動中のプラグイン」カードが接続先の選択 UI を描いているのに対し、接続先変更は非目標であるため実装は現在の接続先の読み取り表示に留め、pen 側は修正せず pen で表せない内容は Angular 実装に寄せる正本分担で吸収する。種別適合の判定は backend が担い、画面は生存セッションから使用中を除いた候補を示すに留める。
-- 子画面の表示制御：プラグイン操作画面は個体単位のタブとし、切替ではタグの再生成・DOM 移動・`src` 再設定をしない。`<electrobun-webview>` の公式の可視切替（main の `webviewTagSetHidden`）で制御し、操作画面の選択時かつ選択個体のタグだけを可視とする。開発用の段0子画面（スパイク）のタグも同じ可視制御（`toggleHidden`）の対象とし、操作画面の非選択時に残像として残さない。切替は業務 RPC を送らない。
+- プラグイン操作画面の構成：個体単位のタブ＋`#plugin-slot`＋`#plugin-host`＋代替表示（`app-plugin-view-fallback`）とする。`#plugin-slot` は外枠を持たず、同一矩形に子画面タグを重ねる配置節とする。`#plugin-host` はタグを命令的に保持する常設の保持節とする。切替で差し替えるのは表示だけであり、ホスト・子画面タグの再生成・DOM 移動・`src` 再設定はしない。`app-plugin-mounts`（子画面の配置節）は持たない。部品内の二重見出し、タブ外のプラグイン名・個体識別行、`mountId`・改訂番号などの開発寄り表示、「埋込み子画面」の外枠・説明文は持たない。
+- 子画面の表示制御：可視条件は操作画面の選択中かつ選択個体かつ `active` かつマウント `ready` とする。未 `ready` でもタグ生成・結線・初回取得は継続し、表示だけを隠す。切替は業務 RPC を送らない。子は対象個体を選べない方針、子への生 Session・`BridgeServer`・管理 backend の非受渡し、承認・割当て／解除のホスト所有は変えない。
+- 代替表示：初回 snapshot 未取得／初回取得失敗＋再読み込み／所有0件／`initializing`／準備中表示（子画面を準備しています…）／マウント失敗（理由付き）＋再試行／再試行中（操作不可）／`ready`（ホスト文言なし・子画面のみ）／`releasing`／`cleanupFailed`（操作不可）とする。所有段階の判定をマウント状態より優先し、`cleanupFailed` を準備中に読み替えない。companion 無し種別は今回扱わず、現行 backend では到達不能としておく。文言・条件の詳細はコードを正本とする。
+- 復旧操作：再試行は個体限定の `retryPluginMount({ instanceId })` とする。全体再試行は持たない。
+- タブ表示：同種複数は表示名＋短い個体識別とし、衝突時は識別部分を延長する。非選択個体の警告印はマウント失敗または `cleanupFailed` のときだけ付け、準備中・`ready` には付けない。警告は色だけに依存しない。
+- 開発観測の固定要素：維持するものは `plugin-operations`・`plugin-host`・`panel-operations`、削除するものは `plugin-mounts`・`spike-section`・`spike-host`、追加するものは `plugin-slot`・`plugin-view-fallback`・`plugin-view-retry` とする。実セレクタはコードを正本とする。
 - 受信記録：記録時刻は管理画面で記録した時刻とし、backend の発生時刻ではない。比較コード本文・ペイロード・DTO 全文はここでは載せず、既存の契約境界を維持する。
 - pen の既知誤記：生存セッション画面のシェル参照におけるサイドバー状態行ラベルは pen 側の上書き誤りであり、実装・pen とも「生存セッション」に統一する。
-- 検証：型・AOT・TestBed（`ng test`）・再帰 test・check は自動で確認済みとする。native 子 Webview の実表示の見え方は未確認とし、人間の GUI 確認事項として残す。native 画素観測・実入力の自動化は非目標のままとする。
+- 検証：型・AOT・TestBed（`ng test`）・再帰 test・check は自動で確認済みとする。native 子 Webview の実表示の見え方は人間の GUI 確認で確認済み（2026-10-14。詳細は[アプリの検証計画](../docs/verification/bridge-app.md)を正本とする）とする。描画・フォーカス・操作フローの最終確認は人間の GUI セッションで行い、native 画素観測・実入力の自動化は非目標のままとする。
 
 ## 対象プラットフォームと GUI 基盤
 
@@ -144,7 +149,7 @@ mainview を Angular に本移行する。本節が設計変更の正本であ�
 - [プロトコル](protocol.md)：輸送・配送・方向・終了の契約。
 - コード：公開型・フィールド・操作名・データ形状。
 - テキスト契約 subpath（`packages/bridge-app-core` の公開するテキスト契約）：固定テキスト表示の形状・論理名・上限・応答期限・検証規則。
-- 契約パッケージ（`packages/bridge-gui-contract` の `management`／`plugin-instance`／`plugin-spike`／`dev-console` subpath）：共有GUI契約の形状・検証規則。`plugin-instance` が持つのは共有手段のみとし、子画面の固有契約は持たない。`dev-console` の許可操作は汎用操作だけとする。
+- 契約パッケージ（`packages/bridge-gui-contract` の `management`／`plugin-instance`／`dev-console` subpath）：共有GUI契約の形状・検証規則。`plugin-instance` が持つのは共有手段のみとし、子画面の固有契約は持たない。`dev-console` の許可操作は汎用操作だけとする。
 - 公開 SDK（`packages/bridge-gui-plugin-sdk`）：管理記述子・公開参照口・割当て方針・監視方式・固有操作口・companion 宣言・登録口・資産宣言の形状。
 - 同梱 composition root（`apps/bridge-gui-main/src/composition/bundled-plugins.ts`・`bundled-plugin-assets.ts`）：同梱の選択と登録順、相対 entry から解決済み view パス・`views`／`copy` 表への対応付け。
 - 各 companion（`apps/bridge-gui-main/src/plugin-ui/<種別>/contract.ts`）：子画面の固有RPC契約・限定DTO・相対資産 entry の正本。main側アダプターは同じ companion の `companion.ts`（factory で公開参照口を capture する結線アダプター）、管理記述子は同じ companion の `management.ts` を正本とする。

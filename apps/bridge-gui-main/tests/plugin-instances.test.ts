@@ -20,14 +20,9 @@ import { createConnectionRequest, type SessionProvider } from "world-client";
 import type { InstanceBaseView } from "bridge-gui-contract/plugin-instance";
 import { GuiBackend } from "../src/main/backend.ts";
 import { registerBundledPlugins } from "../src/composition/bundled-plugins.ts";
-import { asMountLiveness, PluginInstanceBinder } from "../src/main/plugin-instances.ts";
+import { PluginInstanceBinder } from "../src/main/plugin-instances.ts";
 import { PluginCompanionRegistry } from "../src/main/plugin-companions.ts";
 import type { CompanionRequestEnv, PluginCompanion } from "bridge-gui-plugin-sdk/companion";
-import {
-  PluginMountManager,
-  type MountChildView,
-  type SpikeChannelFactory,
-} from "../src/main/plugin-mounts.ts";
 import type {
   TextInstanceChangedMessage,
   TextInstanceSnapshot,
@@ -191,29 +186,11 @@ function bindBoth(): {
   assembled.store.views.set(TEXT_VIEW.instanceId, TEXT_VIEW);
   assembled.store.views.set(DIAGNOSTIC_VIEW.instanceId, DIAGNOSTIC_VIEW);
   assembled.store.sent.set(TEXT_VIEW.instanceId, []);
-  assembled.live.add("spike-1");
-  assembled.live.add("spike-2");
-  assembled.binder.bindMount("spike-1", "text", TEXT_VIEW.instanceId);
-  assembled.binder.bindMount("spike-2", "diagnostic", DIAGNOSTIC_VIEW.instanceId);
+  assembled.live.add("plugin-text-1");
+  assembled.live.add("plugin-diagnostic-1");
+  assembled.binder.bindMount("plugin-text-1", "text", TEXT_VIEW.instanceId);
+  assembled.binder.bindMount("plugin-diagnostic-1", "diagnostic", DIAGNOSTIC_VIEW.instanceId);
   return assembled;
-}
-
-/** 検証用の偽子画面。生存照合の入力に使う。 */
-class FakeView implements MountChildView {
-  removed = false;
-  constructor(
-    readonly viewId: number,
-    readonly hostWebviewId: number | undefined,
-    readonly renderer = "native",
-    readonly sandbox = false,
-    readonly preload: string | null = null,
-    readonly navigationRules: string | null = null,
-    readonly currentUrl: string | null = null,
-  ) {}
-  loadSpikeUrl(_url: string): void {}
-  removeView(): void {
-    this.removed = true;
-  }
 }
 
 test("子画面の要求口に管理操作が無い", () => {
@@ -230,11 +207,6 @@ test("子画面の要求口に管理操作が無い", () => {
     "assignPlugin",
     "unassignPlugin",
     "quit",
-    "spikeCreate",
-    "spikeDestroy",
-    "spikePush",
-    "spikeList",
-    "spikeReset",
     "getSnapshot",
   ]) {
     expect(surface[name]).toBeUndefined();
@@ -248,11 +220,11 @@ test("子画面の要求口に管理操作が無い", () => {
   const diagnostic = registry.get("diagnostic");
   if (text === undefined || diagnostic === undefined) throw new Error("companion が無い。");
   const env = toRequestEnv(binder);
-  expect(Object.keys(text.buildRequestHandlers("spike-1", env)).sort()).toEqual([
+  expect(Object.keys(text.buildRequestHandlers("plugin-text-1", env)).sort()).toEqual([
     "getTextState",
     "sendText",
   ]);
-  expect(Object.keys(diagnostic.buildRequestHandlers("spike-2", env))).toEqual([
+  expect(Object.keys(diagnostic.buildRequestHandlers("plugin-diagnostic-1", env))).toEqual([
     "getDiagnosticState",
   ]);
 });
@@ -262,22 +234,27 @@ test("束縛した個体以外の情報を取得できない", () => {
   // ADR: `as` を使う理由は、汎用口が種別を問わない `unknown` を返し、試験で
   // 束縛種別の具象表示を取り出すためである。根拠は、対応付けが同一種別の
   // 記述子で読み・付番を対にすることである。
-  const text = binder.readSnapshot("text", "spike-1") as TextInstanceSnapshot;
+  const text = binder.readSnapshot("text", "plugin-text-1") as TextInstanceSnapshot;
   expect(text.instanceId).toBe(TEXT_VIEW.instanceId);
   expect(text.localSessionId).toBe(TEXT_VIEW.localSessionId);
-  const diagnostic = binder.readSnapshot("diagnostic", "spike-2") as DiagnosticInstanceSnapshot;
+  const diagnostic = binder.readSnapshot(
+    "diagnostic",
+    "plugin-diagnostic-1",
+  ) as DiagnosticInstanceSnapshot;
   expect(diagnostic.instanceId).toBe(DIAGNOSTIC_VIEW.instanceId);
   // 種別外の口では取れない（テキスト束縛で診断取得・逆も拒否）。
-  expect(() => binder.readSnapshot("diagnostic", "spike-1")).toThrow(RangeError);
-  expect(() => binder.readSnapshot("text", "spike-2")).toThrow(RangeError);
-  expect(() => binder.send("text", "spike-2", { text: DUMMY_TEXT })).toThrow(RangeError);
+  expect(() => binder.readSnapshot("diagnostic", "plugin-text-1")).toThrow(RangeError);
+  expect(() => binder.readSnapshot("text", "plugin-diagnostic-1")).toThrow(RangeError);
+  expect(() => binder.send("text", "plugin-diagnostic-1", { text: DUMMY_TEXT })).toThrow(
+    RangeError,
+  );
   // 取得に識別子の指定口は無く、自分の個体だけが返る。
   const registry = new PluginCompanionRegistry();
   const store = stubStore();
   registry.register(stubTextCompanion(store));
   const companion = registry.get("text");
   if (companion === undefined) throw new Error("companion が無い。");
-  const getTextState = companion.buildRequestHandlers("spike-1", toRequestEnv(binder))[
+  const getTextState = companion.buildRequestHandlers("plugin-text-1", toRequestEnv(binder))[
     "getTextState"
   ] as () => TextInstanceSnapshot;
   expect(getTextState().instanceId).toBe(TEXT_VIEW.instanceId);
@@ -286,52 +263,63 @@ test("束縛した個体以外の情報を取得できない", () => {
 test("失効したマウントの要求を拒否する", () => {
   const { live, binder } = bindBoth();
   // push 口の未登録も拒否する。
-  expect(() => binder.push("spike-1")).toThrow(RangeError);
-  binder.setSink("spike-1", "text", () => {});
+  expect(() => binder.push("plugin-text-1")).toThrow(RangeError);
+  binder.setSink("plugin-text-1", "text", () => {});
   // 所有表から消えた（破棄相当）後の要求は全て拒否する。
-  live.delete("spike-1");
-  expect(() => binder.readSnapshot("text", "spike-1")).toThrow(RangeError);
-  expect(() => binder.send("text", "spike-1", { text: DUMMY_TEXT })).toThrow(RangeError);
-  expect(() => binder.push("spike-1")).toThrow(RangeError);
+  live.delete("plugin-text-1");
+  expect(() => binder.readSnapshot("text", "plugin-text-1")).toThrow(RangeError);
+  expect(() => binder.send("text", "plugin-text-1", { text: DUMMY_TEXT })).toThrow(RangeError);
+  expect(() => binder.push("plugin-text-1")).toThrow(RangeError);
   // 生存側は使える。
   expect(
-    (binder.readSnapshot("diagnostic", "spike-2") as DiagnosticInstanceSnapshot).instanceId,
+    (binder.readSnapshot("diagnostic", "plugin-diagnostic-1") as DiagnosticInstanceSnapshot)
+      .instanceId,
   ).toBe(DIAGNOSTIC_VIEW.instanceId);
   // 対応付けを外した後も拒否する（購読の残存を使えない）。
-  binder.unbindMount("spike-2");
-  expect(() => binder.readSnapshot("diagnostic", "spike-2")).toThrow(RangeError);
+  binder.unbindMount("plugin-diagnostic-1");
+  expect(() => binder.readSnapshot("diagnostic", "plugin-diagnostic-1")).toThrow(RangeError);
   // 未対応付け・空識別子の要求も拒否する。
-  expect(() => binder.readSnapshot("text", "spike-9")).toThrow(RangeError);
+  expect(() => binder.readSnapshot("text", "plugin-text-9")).toThrow(RangeError);
   expect(() => binder.push("")).toThrow(RangeError);
   expect(() => binder.unbindMount("")).toThrow(RangeError);
 });
 
-test("現割当てが失効した要求を拒否する", async () => {
-  const { store, binder } = bindBoth();
-  binder.setSink("spike-1", "text", () => {});
-  store.lapsed.add(TEXT_VIEW.instanceId);
-  // 失効後の取得・送信・push は拒否し、古い割当てへ転送しない。
-  expect(() => binder.readSnapshot("text", "spike-1")).toThrow(RangeError);
-  await expect(binder.send("text", "spike-1", { text: DUMMY_TEXT })).rejects.toThrow(RangeError);
-  expect(() => binder.push("spike-1")).toThrow(RangeError);
-  // 失効した個体への束縛し直しも拒否する。
-  binder.unbindMount("spike-1");
-  expect(() => binder.bindMount("spike-1", "text", TEXT_VIEW.instanceId)).toThrow(RangeError);
+test("所有側の結線状態が生存確認の正本である", () => {
+  const { store, live, binder } = setup();
+  store.views.set(TEXT_VIEW.instanceId, TEXT_VIEW);
+  // 未結線（所有側に無い）マウントには束縛できない。
+  expect(() => binder.bindMount("plugin-text-1", "text", TEXT_VIEW.instanceId)).toThrow(RangeError);
+  // 所有側が結線済みを示したら束縛でき、固有要求表で読める。
+  live.add("plugin-text-1");
+  binder.bindMount("plugin-text-1", "text", TEXT_VIEW.instanceId);
+  const snapshot = binder.readSnapshot("text", "plugin-text-1") as TextInstanceSnapshot;
+  expect(snapshot.instanceId).toBe(TEXT_VIEW.instanceId);
+  const registry = new PluginCompanionRegistry();
+  registry.register(stubTextCompanion(store));
+  const companion = registry.get("text");
+  if (companion === undefined) throw new Error("companion が無い。");
+  const handlers = companion.buildRequestHandlers("plugin-text-1", toRequestEnv(binder));
+  expect(Object.keys(handlers).sort()).toEqual(["getTextState", "sendText"]);
+  // 所有側の退役後は失効として拒否し、束縛し直しもできない。
+  live.delete("plugin-text-1");
+  expect(() => binder.readSnapshot("text", "plugin-text-1")).toThrow(RangeError);
+  binder.unbindMount("plugin-text-1");
+  expect(() => binder.bindMount("plugin-text-1", "text", TEXT_VIEW.instanceId)).toThrow(RangeError);
 });
 
-test("対応付けは結線済みの所有だけを生存とする", () => {
-  const factory: SpikeChannelFactory = () => ({ pushState: () => {} });
-  const manager = new PluginMountManager(7, factory);
-  const liveness = asMountLiveness(manager);
-  const dto = manager.createMount();
-  // 配置待ちは生存ではない。
-  expect(liveness.isLive(dto.mountId)).toBe(false);
-  const view = new FakeView(11, 7, "native", false, null, null, dto.initialUrl);
-  manager.handleTagCreated(view);
-  expect(liveness.isLive(dto.mountId)).toBe(true);
-  manager.destroyMount(dto.mountId);
-  expect(liveness.isLive(dto.mountId)).toBe(false);
-  expect(liveness.isLive("spike-999")).toBe(false);
+test("現割当てが失効した要求を拒否する", async () => {
+  const { store, binder } = bindBoth();
+  binder.setSink("plugin-text-1", "text", () => {});
+  store.lapsed.add(TEXT_VIEW.instanceId);
+  // 失効後の取得・送信・push は拒否し、古い割当てへ転送しない。
+  expect(() => binder.readSnapshot("text", "plugin-text-1")).toThrow(RangeError);
+  await expect(binder.send("text", "plugin-text-1", { text: DUMMY_TEXT })).rejects.toThrow(
+    RangeError,
+  );
+  expect(() => binder.push("plugin-text-1")).toThrow(RangeError);
+  // 失効した個体への束縛し直しも拒否する。
+  binder.unbindMount("plugin-text-1");
+  expect(() => binder.bindMount("plugin-text-1", "text", TEXT_VIEW.instanceId)).toThrow(RangeError);
 });
 
 test("テキスト送信が束縛個体の現割当てに委譲される", async () => {
@@ -340,7 +328,7 @@ test("テキスト送信が束縛個体の現割当てに委譲される", async
   registry.register(stubTextCompanion(store));
   const companion = registry.get("text");
   if (companion === undefined) throw new Error("companion が無い。");
-  const handlers = companion.buildRequestHandlers("spike-1", toRequestEnv(binder));
+  const handlers = companion.buildRequestHandlers("plugin-text-1", toRequestEnv(binder));
   // ADR: `as` を使う理由は、要求表が種別を問わない汎用表であり、試験で
   // 束縛種別の具象口を取り出すためである。根拠は、対応付けが同一種別の
   // 記述子で結線・送信を対にすることである。
@@ -372,28 +360,28 @@ test("push は改訂を進めて当該マウントだけに届く", () => {
   assembled.store.views.set(secondView.instanceId, secondView);
   assembled.store.sent.set(firstView.instanceId, []);
   assembled.store.sent.set(secondView.instanceId, []);
-  assembled.live.add("spike-1");
-  assembled.live.add("spike-2");
-  assembled.binder.bindMount("spike-1", "text", firstView.instanceId);
-  assembled.binder.bindMount("spike-2", "text", secondView.instanceId);
+  assembled.live.add("plugin-text-1");
+  assembled.live.add("plugin-diagnostic-1");
+  assembled.binder.bindMount("plugin-text-1", "text", firstView.instanceId);
+  assembled.binder.bindMount("plugin-diagnostic-1", "text", secondView.instanceId);
   const { binder } = assembled;
   const first: TextInstanceChangedMessage[] = [];
   const second: TextInstanceChangedMessage[] = [];
   // ADR: `as` を使う理由は、汎用 push 口が `unknown` で運ぶ通知を試験で
   // 種別の具象形として集めるためである。根拠は、対応付けが同一種別の
   // 記述子で作った通知を変えずに運ぶことである。
-  binder.setSink("spike-1", "text", (message) => {
+  binder.setSink("plugin-text-1", "text", (message) => {
     first.push(message as TextInstanceChangedMessage);
   });
-  binder.setSink("spike-2", "text", (message) => {
+  binder.setSink("plugin-diagnostic-1", "text", (message) => {
     second.push(message as TextInstanceChangedMessage);
   });
   // 初期取得は改訂 0 で、読み取りでは進まない。
-  const initial = binder.readSnapshot("text", "spike-1") as TextInstanceSnapshot;
+  const initial = binder.readSnapshot("text", "plugin-text-1") as TextInstanceSnapshot;
   expect(initial.revision).toBe(0);
-  expect((binder.readSnapshot("text", "spike-1") as TextInstanceSnapshot).revision).toBe(0);
+  expect((binder.readSnapshot("text", "plugin-text-1") as TextInstanceSnapshot).revision).toBe(0);
   // 当該マウントだけに push が届き、改訂が進む。
-  expect(binder.push("spike-1")).toEqual({ revision: 1 });
+  expect(binder.push("plugin-text-1")).toEqual({ revision: 1 });
   expect(first).toHaveLength(1);
   expect(second).toHaveLength(0);
   const pushed = first[0];

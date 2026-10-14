@@ -24,7 +24,7 @@ import {
 const uiSource = process.env.BRIDGE_GUI_UI_DIR?.trim() || "src/mainview-dist/prod";
 
 // プラグイン部分の view・copy 表は静的 manifest から純粋関数で導く。
-// mainview・plugin-host・段0 spike はホスト資産として別扱いであり、
+// mainview・plugin-host はホスト資産として別扱いであり、
 // ここに直書きしない。config から `bundled-plugins.ts` 全体は import しない
 // （companion factory の具象を build 時に引き込まない）。
 const bundledPluginViews = buildBundledPluginViews(BUNDLED_PLUGIN_ASSETS);
@@ -50,9 +50,6 @@ export default {
       mainview: {
         entrypoint: "src/mainview-stub.ts",
       },
-      "plugin-spike": {
-        entrypoint: "src/plugin-spike/index.ts",
-      },
       ...bundledPluginViews,
     },
     // UI バンドルは Hutch の build.views＋HTML/CSS コピーで足りる。Vite は増やさない。
@@ -63,8 +60,6 @@ export default {
       // `outputHashing: none` 生成を含む。将来 chunks／assets が増えた場合も
       // `gui:run`・`gui:build` の写し経由で同梱される）。
       [uiSource]: "views/mainview",
-      "src/plugin-spike/index.html": "views/plugin-spike/index.html",
-      "src/plugin-spike/index.css": "views/plugin-spike/index.css",
       "src/plugin-host/blank.html": "views/plugin-host/blank.html",
       ...bundledPluginCopy,
     },

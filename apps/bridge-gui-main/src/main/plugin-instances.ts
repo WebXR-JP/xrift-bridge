@@ -1,5 +1,5 @@
 /**
- * マウントと実インスタンスの対応付け。段0所有表の生存照合と backend の
+ * マウントと実インスタンスの対応付け。マウント生存の照合と backend の
  * 現割当て照合を両方行い、そのマウントに束縛した個体別 RPC の要求に応答する。
  *
  * Electrobun の SDK 呼び出しは持たない。`BrowserView` への結線は
@@ -20,12 +20,11 @@
  *
  * @packageDocumentation
  */
-import type { PluginMountManager } from "./plugin-mounts.ts";
 import type { PluginCompanion } from "bridge-gui-plugin-sdk/companion";
 import type { PluginCompanionRegistry } from "./plugin-companions.ts";
 
 /**
- * マウント生存の照合口。段0所有表の読み取り側が実装する。
+ * マウント生存の照合口。対応付け側の所有表の読み取り側が実装する。
  */
 export interface MountLiveness {
   /**
@@ -35,22 +34,6 @@ export interface MountLiveness {
    * @returns 結線済みで所有中なら真。
    */
   isLive(mountId: string): boolean;
-}
-
-/**
- * 段0所有表を生存照合口として読む。
- *
- * 結線済み（`bound`）の所有だけを生存とし、配置待ち・破棄済みは
- * 利用できない。所有表の変更はしない。
- *
- * @param manager - 段0スパイクのマウント管理。
- * @returns 生存照合口。
- */
-export function asMountLiveness(manager: PluginMountManager): MountLiveness {
-  return {
-    isLive: (mountId) =>
-      manager.listMounts().some((mount) => mount.mountId === mountId && mount.phase === "bound"),
-  };
 }
 
 /** 汎用の push 口。当該マウントの結線だけに送る。 */
@@ -99,7 +82,7 @@ export class PluginInstanceBinder {
   private readonly bindings = new Map<string, BindingRecord>();
 
   /**
-   * @param liveness - 段0所有表の生存照合口。
+   * @param liveness - マウント生存の照合口。
    * @param registry - 種別トークンから記述子を引く登録表。backend ごとに生成して渡す。
    */
   constructor(
