@@ -177,12 +177,12 @@ function isPublicPluginEntry(specifier: string): boolean {
  *
  * @param fromFile - 参照元の実パス。
  * @param specifier - 検査する specifier。
- * @returns 解決先が `packages/bridge-plugin-*` 配下なら真。
+ * @returns 解決先が `packages/plugins/bridge-plugin-*` 配下なら真。
  */
 function resolvesToBridgePluginPackage(fromFile: string, specifier: string): boolean {
   if (!specifier.startsWith(".")) return false;
   const resolved = resolve(dirname(fromFile), specifier);
-  return resolved.includes("packages/bridge-plugin-");
+  return resolved.includes("packages/plugins/bridge-plugin-");
 }
 
 /**
@@ -409,7 +409,7 @@ test("coreに具象公開と逆依存を残さない", () => {
 
 test("プラグインはホストソースとcompositionと他パッケージの内部ソースを参照しない", () => {
   for (const kind of ["text", "diagnostic"] as const) {
-    const pluginDir = packagesPath(`bridge-plugin-${kind}`);
+    const pluginDir = packagesPath(`plugins/bridge-plugin-${kind}`);
     const sources = listProductionSources(pluginDir, [...SOURCE_EXTENSIONS]);
     expect(sources.length).toBeGreaterThan(0);
     for (const absolute of sources) {
@@ -599,8 +599,8 @@ test("テスト補助の複写は3者で同一である", () => {
   // 新規パッケージを作らず、3者が同一であることを機械的に検査する。
   // この検査が無いと複写の乖離（片方だけの修正）を見逃す。
   const core = readSource(packagesPath("bridge-app-core/tests/fakes.ts"));
-  const text = readSource(packagesPath("bridge-plugin-text/tests/fakes.ts"));
-  const diagnostic = readSource(packagesPath("bridge-plugin-diagnostic/tests/fakes.ts"));
+  const text = readSource(packagesPath("plugins/bridge-plugin-text/tests/fakes.ts"));
+  const diagnostic = readSource(packagesPath("plugins/bridge-plugin-diagnostic/tests/fakes.ts"));
   expect(text, "text の fakes が core と一致しない").toBe(core);
   expect(diagnostic, "diagnostic の fakes が core と一致しない").toBe(core);
 });
@@ -616,8 +616,12 @@ test("production sourceにrequireによる迂回を残さない", () => {
     ...listProductionSources(packagesPath("bridge-gui-plugin-sdk/src"), [...SOURCE_EXTENSIONS]),
     ...listProductionSources(packagesPath("bridge-gui-contract/src"), [...SOURCE_EXTENSIONS]),
     ...listProductionSources(packagesPath("bridge-app-core/src"), [...SOURCE_EXTENSIONS]),
-    ...listProductionSources(packagesPath("bridge-plugin-text/src"), [...SOURCE_EXTENSIONS]),
-    ...listProductionSources(packagesPath("bridge-plugin-diagnostic/src"), [...SOURCE_EXTENSIONS]),
+    ...listProductionSources(packagesPath("plugins/bridge-plugin-text/src"), [
+      ...SOURCE_EXTENSIONS,
+    ]),
+    ...listProductionSources(packagesPath("plugins/bridge-plugin-diagnostic/src"), [
+      ...SOURCE_EXTENSIONS,
+    ]),
     ...listProductionSources(appsPath("diagnostic-world/src"), [...SOURCE_EXTENSIONS]),
   ];
   expect(targets.length).toBeGreaterThan(0);

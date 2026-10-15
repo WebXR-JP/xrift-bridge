@@ -13,27 +13,27 @@ flowchart LR
     G --- C["契約<br/>(bridge-gui-contract + bridge-gui-plugin-sdk)"]
 ```
 
-三層の関係は、公開された生存セッションを割当てで結び、画面に埋め込む大枠である。画面と backend が共有する手段だけを `bridge-gui-contract` に置き、プラグイン実装者が参照する公開契約は `bridge-gui-plugin-sdk` に置く。具象プラグインの本体・GUI companion・子画面は種別ごとのパッケージ（`packages/bridge-plugin-*`）が所有する。同梱の選択と登録順は composition root が宣言する。詳細は本文に置く。
+三層の関係は、公開された生存セッションを割当てで結び、画面に埋め込む大枠である。画面と backend が共有する手段だけを `bridge-gui-contract` に置き、プラグイン実装者が参照する公開契約は `bridge-gui-plugin-sdk` に置く。具象プラグインの本体・GUI companion・子画面は種別ごとのパッケージ（`packages/plugins/bridge-plugin-*`）が所有する。同梱の選択と登録順は composition root が宣言する。詳細は本文に置く。
 
 ## 三層の責務
 
-| 層                                     | 担うこと                                                                                                                                                                                                                                                                                |
-| -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `bridge-server`                        | 接続前検証・ペアリング・Connection認可・輸送・生存セッションの公開・輸送統計                                                                                                                                                                                                            |
-| `packages/bridge-app-core`             | プラグイン定義とインスタンス管理、接続口の適合判定、割当て・解除、失効処理、UI非依存の状態と操作。汎用基盤だけを持ち、具象プラグイン・テキスト通信契約を公開しない。root と `./core` の公開内容は同一である                                                                             |
-| `packages/bridge-gui-contract`         | 共有契約（管理RPC・個体別の共有手段と微少ランタイム）。`management`／`plugin-instance`／`dev-console` の subpath を分ける。`plugin-instance` が持つのは共有手段のみであり、子画面固有契約は持たない                                                                                     |
-| `packages/bridge-gui-plugin-sdk`       | プラグイン実装者が参照する公開契約（管理記述子・公開参照口・割当て方針・監視方式・固有操作口・companion 宣言（相対 `viewEntry`）・登録口・資産宣言）。具象 import・副作用・実行実体・ホストパス参照を持たない                                                                           |
-| `packages/bridge-plugin-text`          | テキストプラグインの所有者（本体・テキスト通信契約・子画面固有契約・管理記述子・companion factory・資産宣言・子画面）。公開 entry は `.`・`./contract`（ブラウザ安全）・`./gui-contract`（実行環境非依存）・`./gui`・`./assets` である                                                  |
-| `packages/bridge-plugin-diagnostic`    | 診断プラグインの所有者（本体・子画面固有契約・管理記述子・companion factory・資産宣言・子画面）。公開 entry は `.`・`./gui-contract`・`./gui`・`./assets` である。テキスト通信契約の論理名を参照するため text へ依存する                                                                |
-| `apps/bridge-gui-main/src/composition` | 同梱 composition root。同梱の選択と登録順の宣言（`bundled-plugins.ts`。具象プラグインを production source で import してよいのはここだけ）と静的資産 manifest（`bundled-plugin-assets.ts`。各パッケージの `./assets` 宣言から導き、platform・companion factory を import しない）を持つ |
-| `apps/bridge-gui-ui`                   | 管理画面（mainview）の Angular 実装。契約だけを参照する                                                                                                                                                                                                                                 |
-| `apps/bridge-gui-main`                 | 起動・終了、比較コード表示と承認操作、Angular 画面の包装・表示、プラグインUIの埋込み、デスクトップ機能、画面との通信                                                                                                                                                                    |
+| 層                                          | 担うこと                                                                                                                                                                                                                                                                                |
+| ------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bridge-server`                             | 接続前検証・ペアリング・Connection認可・輸送・生存セッションの公開・輸送統計                                                                                                                                                                                                            |
+| `packages/bridge-app-core`                  | プラグイン定義とインスタンス管理、接続口の適合判定、割当て・解除、失効処理、UI非依存の状態と操作。汎用基盤だけを持ち、具象プラグイン・テキスト通信契約を公開しない。root と `./core` の公開内容は同一である                                                                             |
+| `packages/bridge-gui-contract`              | 共有契約（管理RPC・個体別の共有手段と微少ランタイム）。`management`／`plugin-instance`／`dev-console` の subpath を分ける。`plugin-instance` が持つのは共有手段のみであり、子画面固有契約は持たない                                                                                     |
+| `packages/bridge-gui-plugin-sdk`            | プラグイン実装者が参照する公開契約（管理記述子・公開参照口・割当て方針・監視方式・固有操作口・companion 宣言（相対 `viewEntry`）・登録口・資産宣言）。具象 import・副作用・実行実体・ホストパス参照を持たない                                                                           |
+| `packages/plugins/bridge-plugin-text`       | テキストプラグインの所有者（本体・テキスト通信契約・子画面固有契約・管理記述子・companion factory・資産宣言・子画面）。公開 entry は `.`・`./contract`（ブラウザ安全）・`./gui-contract`（実行環境非依存）・`./gui`・`./assets` である                                                  |
+| `packages/plugins/bridge-plugin-diagnostic` | 診断プラグインの所有者（本体・子画面固有契約・管理記述子・companion factory・資産宣言・子画面）。公開 entry は `.`・`./gui-contract`・`./gui`・`./assets` である。テキスト通信契約の論理名を参照するため text へ依存する                                                                |
+| `apps/bridge-gui-main/src/composition`      | 同梱 composition root。同梱の選択と登録順の宣言（`bundled-plugins.ts`。具象プラグインを production source で import してよいのはここだけ）と静的資産 manifest（`bundled-plugin-assets.ts`。各パッケージの `./assets` 宣言から導き、platform・companion factory を import しない）を持つ |
+| `apps/bridge-gui-ui`                        | 管理画面（mainview）の Angular 実装。契約だけを参照する                                                                                                                                                                                                                                 |
+| `apps/bridge-gui-main`                      | 起動・終了、比較コード表示と承認操作、Angular 画面の包装・表示、プラグインUIの埋込み、デスクトップ機能、画面との通信                                                                                                                                                                    |
 
 - `bridge-app-core` はサーバー管理境界を受け取り、GUIライブラリを参照しない。GUIのバックエンドが両者を組み立てる。
 - 埋込み画面（Webview）へ `BridgeServer` や生の `Session` を渡さない。表示用データと限定した操作だけを渡す。
 - 依存方向は Angular UI・GUI main・子画面から contract・SDK へ向ける。プラグインは `bridge-gui-plugin-sdk`・`bridge-gui-contract`・`bridge-app-core/core` の契約に依存し、ホストソース（`apps/bridge-gui-main/src`）・composition・他パッケージの内部ソースを参照しない（自パッケージ内の相対参照は可）。汎用ホスト・SDK・共有契約・core は具象プラグインを参照しない。具象プラグインを production source で import してよいのは composition root（`apps/bridge-gui-main/src/composition/bundled-plugins.ts`＝登録、`bundled-plugin-assets.ts`＝純粋な資産参照）だけである。固有契約（companion の `gui-contract`）も共有契約の共有型・共有手段だけを借りる。contract・SDK から `bridge-app-core`／`bridge-server` への参照は型のみとし、逆依存は持たない。core に具象への逆依存を残さない。companion から `bridge-app-core` への GUI 逆依存は持たない。SDK は具象プラグインを import せず、既定登録の副作用を持たず、実行系実体を持たない。共有契約に具象 URL を残さない。
 - contract に Angular・Electrobun の実体、Bun・Node の実行依存、backend を入れない。contract のビルドを `.hutch` に依存させない。Angular UI から GUI ソースへの相対 import はしない。
-- プラグインの GUI companion は当面 vanilla のままとし、プラグイン UI 基盤として Angular を必須にしない。本体・子画面固有契約・main側アダプター・管理記述子・companion factory・資産宣言・子画面は種別ごとのパッケージ（`packages/bridge-plugin-*`）が所有する。解決済み `views://` パス・子画面 URL の組立ては持たない。
+- プラグインの GUI companion は当面 vanilla のままとし、プラグイン UI 基盤として Angular を必須にしない。本体・子画面固有契約・main側アダプター・管理記述子・companion factory・資産宣言・子画面は種別ごとのパッケージ（`packages/plugins/bridge-plugin-*`）が所有する。解決済み `views://` パス・子画面 URL の組立ては持たない。
 - ホストが所有するのは Webview 生成・transport 結線（`BrowserView.defineRPC`）・個体束縛・失効・同梱許可・管理DTO・実 URL 解決である。種別と記述子の対応付けは静的登録表（`apps/bridge-gui-main/src/main/plugin-companions.ts` の `PluginCompanionRegistry`）で引き、汎用管理層（`src/main/plugin-instance-manager.ts` の `PluginInstanceManager`）・汎用結線（`src/main/instance-rpc.ts` の `createCompanionChannel`）・汎用 binder（`src/main/plugin-instances.ts`）・登録表駆動の対応付け（`src/main/plugin-ui-mounts.ts`）・汎用管理操作（`src/main/backend.ts` の `assignPlugin`／`unassignPlugin`）に種別分岐を持たない。同梱の選択と登録は composition root（`src/composition/bundled-plugins.ts`）だけが行い、backend は汎用の登録口だけを受け取る。資産の `views`／`copy` 表は静的 manifest から純粋関数で導き、config から companion factory を import しない。
 - 子は対象個体を選べない。子画面が持つのは相対 entry の宣言だけであり、ホストが `views://` へ解決する。companion は解決済み `viewPath` だけを保持し、URL 組立ては汎用の共有手段で行う。遷移規則は登録済み companion の解決済み view パス集合から生成し、`ManagementSnapshot` で `getSnapshot`／状態通知の両経路に載せる。管理画面は採用中 snapshot の値だけを使い、旧固定値や全面許可へ fallback しない。URL の mount 識別子は権限証明ではなく、main が発行した初期URL完全一致＋親 Webview 一致で照合する。子が呼べるのは種別ごとの要求ハンドラ表に載せた要求だけとし、catch-all dispatcher は作らない。子画面生成は native・非 sandbox・preload なし・同梱のみ・静的登録とし、任意URL・HTML・preload は受け付けない。
 - 管理画面（mainview）の正本は Angular 実装（`apps/bridge-gui-ui`）であり、vanilla の二重実装・フォールバックは残さない。
@@ -55,7 +55,7 @@ flowchart LR
 
 ## プラグイン
 
-- プラグインは本体機能と任意の GUI companion を持ち、UI は埋込み Webview として表示する。本体（`packages/bridge-app-core`）は UI・RPC 非依存の汎用基盤のままとし、種別ごとの本体・子画面の固有契約・UI・main側アダプター・管理記述子・companion factory・資産宣言・子画面は各パッケージ（`packages/bridge-plugin-text`・`packages/bridge-plugin-diagnostic`）が所有する。生成・結線・束縛・失効・ライフサイクルはホストの汎用管理層（`PluginInstanceManager`。生成元・割当て方針・監視・表示射影・固有操作の宣言に従って駆動し、種別分岐と任意 payload の汎用ディスパッチ表を持たない）が所有し、子へ生の Session・`BridgeServer`・管理 backend は渡さない。
+- プラグインは本体機能と任意の GUI companion を持ち、UI は埋込み Webview として表示する。本体（`packages/bridge-app-core`）は UI・RPC 非依存の汎用基盤のままとし、種別ごとの本体・子画面の固有契約・UI・main側アダプター・管理記述子・companion factory・資産宣言・子画面は各パッケージ（`packages/plugins/bridge-plugin-text`・`packages/plugins/bridge-plugin-diagnostic`）が所有する。生成・結線・束縛・失効・ライフサイクルはホストの汎用管理層（`PluginInstanceManager`。生成元・割当て方針・監視・表示射影・固有操作の宣言に従って駆動し、種別分岐と任意 payload の汎用ディスパッチ表を持たない）が所有し、子へ生の Session・`BridgeServer`・管理 backend は渡さない。
 - 子画面はパッケージ側で事前ビルドし、完成資産だけを GUI が app 内 staging（`apps/bridge-gui-main/src/plugin-view-dist/<種別>/`。生成物のため git 管理外・型検査対象外）経由で取り込む。Electrobun の子画面ランタイム（`electrobun/view`）は npm から取得できないため、各プラグインは自前の `hutch.config.ts` と devkit を持ち（app の `.hutch` を参照しない。Electrobun pin は app と一致させる）、`electrobun/view` を bundle に inline する。GUI の `build.views` は汎用 stub とし、`copy` で staging から `views/plugin-<種別>/` へ載せる。`views://` の解決・遷移許可・実 URL はホストが所有する。
 - 同梱は静的登録であり、動的発見・インストールはしない。登録表への追加に加え、静的資産 manifest（`src/composition/bundled-plugin-assets.ts`。各パッケージの `./assets` 宣言から導く）から導く `electrobun.config.ts` の `build.views`＋`copy` への収載が要る。遷移規則の直書き定数は持たず、登録済み companion の解決済み view パス集合から生成して snapshot で配布する。登録だけでは同梱されない。
 - レシピ的に扱い、複数インスタンスを出せる。
@@ -85,7 +85,7 @@ flowchart LR
 
 ## 診断
 
-- 応答確認相当（echo・ping）は `packages/bridge-plugin-diagnostic` の同梱診断プラグインへ移す。プラグイン基盤本体には診断の解釈を持たせない。
+- 応答確認相当（echo・ping）は `packages/plugins/bridge-plugin-diagnostic` の同梱診断プラグインへ移す。プラグイン基盤本体には診断の解釈を持たせない。
 - CLI は診断インスタンスを生成・割当てすることで診断用途を維持する。
 - 輸送統計から診断 echo・ping の項目を削除する。互換用フィールドは残さない。
 - 輸送の keepalive Ping はサーバー側に残す。診断 ping とは別機能である。
@@ -93,12 +93,12 @@ flowchart LR
 
 ## 固定テキスト表示
 
-- 固定テキスト表示は `packages/bridge-plugin-text` の同梱プラグインが行う。接続口は一つで、輸送上の適合は「接続口と capability」節の組合せのうち一つのみ受け付ける。相関・検証・応答期限はプラグイン側の責務とし、サーバー・輸送・基盤本体に追加しない。
+- 固定テキスト表示は `packages/plugins/bridge-plugin-text` の同梱プラグインが行う。接続口は一つで、輸送上の適合は「接続口と capability」節の組合せのうち一つのみ受け付ける。相関・検証・応答期限はプラグイン側の責務とし、サーバー・輸送・基盤本体に追加しない。
 - ワールドは認可後に専用セッションを開き、PC からワールドへは相関識別子付きのプレーンテキスト表示要求、ワールドから PC へは同じ識別子の反映確認（本文返送なし）を返す。HTML・Markdown・コマンド解釈はしない。直近一件の置換表示とし、履歴・保存・他利用者への同期はしない。
 - 反映確認は「表示用状態に反映した」ことであり、送信 API の成功や描画完了とは区別する。同時実行は一件とし、期限切れ・切断は結果不明として自動再送しない。不正な応答は対象セッションのみ中断し、不正入力は送信前に拒否する。
-- 形状・論理名・上限・応答期限・検証規則は通信契約（[`packages/bridge-plugin-text/src/contract.ts`](../packages/bridge-plugin-text/src/contract.ts)の公開 subpath `./contract`）を正本とし、ここでは複製しない。契約モジュールはブラウザ安全な構成とし、ワールドは通信契約 entry のみを利用する。公開範囲は[`packages/bridge-plugin-text/package.json`](../packages/bridge-plugin-text/package.json)の exports を正本とする。プラグイン本体の振る舞いは[`packages/bridge-plugin-text/src/plugin.ts`](../packages/bridge-plugin-text/src/plugin.ts)、ワールド側の受信・表示は[`apps/diagnostic-world/src/text/`](../apps/diagnostic-world/src/text/)を正本とする。
+- 形状・論理名・上限・応答期限・検証規則は通信契約（[`packages/plugins/bridge-plugin-text/src/contract.ts`](../packages/plugins/bridge-plugin-text/src/contract.ts)の公開 subpath `./contract`）を正本とし、ここでは複製しない。契約モジュールはブラウザ安全な構成とし、ワールドは通信契約 entry のみを利用する。公開範囲は[`packages/plugins/bridge-plugin-text/package.json`](../packages/plugins/bridge-plugin-text/package.json)の exports を正本とする。プラグイン本体の振る舞いは[`packages/plugins/bridge-plugin-text/src/plugin.ts`](../packages/plugins/bridge-plugin-text/src/plugin.ts)、ワールド側の受信・表示は[`apps/diagnostic-world/src/text/`](../apps/diagnostic-world/src/text/)を正本とする。
 - 割当ては固定プラグイン一種類・同時に一インスタンスとし、開始通知での自動割当てはしない。明示操作でのみ行い、論理名と capability が一致する唯一の候補が全接続を通じて一件だけの場合に割り当て、候補ゼロ・複数は理由付きで拒否する（先着順・一件目・Origin 推測をしない）。解除・インスタンス削除は対象セッションを中断する。再接続後は再承認・新規セッション・新規の明示割当てを要求し、同名でも旧操作口・未完了要求・本文を引き継がない。論理名の一致は内容互換性や真正性の証明ではない。
-- 画面は埋込みの子画面（プラグイン UI 埋込み）で行い、管理 Webview 内の暫定 UI は使わない。Webview へ生のサーバー・セッションを渡さない方針を維持し、本文は snapshot・ログ・永続保存に残さない。子画面の表示データ・限定操作の正本はテキストの子画面固有契約（[`packages/bridge-plugin-text/src/gui-contract.ts`](../packages/bridge-plugin-text/src/gui-contract.ts)の公開 subpath `./gui-contract`）であり、main側アダプター・管理記述子は同じパッケージの公開 subpath `./gui`（[`packages/bridge-plugin-text/src/gui.ts`](../packages/bridge-plugin-text/src/gui.ts)）を、資産宣言は `./assets`（[`packages/bridge-plugin-text/src/assets.ts`](../packages/bridge-plugin-text/src/assets.ts)）を、子画面本体は[`packages/bridge-plugin-text/src/view/`](../packages/bridge-plugin-text/src/view/)を正本とする。限定射影・送信委譲の実体は companion の宣言を汎用管理層が駆動する形で出し、backend が種別固有の射影・送信を持たない。割当て管理はプラグイン一覧が担い、固有の統計・送信状態は子画面に限る。管理RPCの正本は `bridge-gui-contract` の `management` subpath（[`packages/bridge-gui-contract/src/management.ts`](../packages/bridge-gui-contract/src/management.ts)）であり、汎用操作 `assignPlugin`／`unassignPlugin` だけを持つ。子画面の個体別契約には使わない。
+- 画面は埋込みの子画面（プラグイン UI 埋込み）で行い、管理 Webview 内の暫定 UI は使わない。Webview へ生のサーバー・セッションを渡さない方針を維持し、本文は snapshot・ログ・永続保存に残さない。子画面の表示データ・限定操作の正本はテキストの子画面固有契約（[`packages/plugins/bridge-plugin-text/src/gui-contract.ts`](../packages/plugins/bridge-plugin-text/src/gui-contract.ts)の公開 subpath `./gui-contract`）であり、main側アダプター・管理記述子は同じパッケージの公開 subpath `./gui`（[`packages/plugins/bridge-plugin-text/src/gui.ts`](../packages/plugins/bridge-plugin-text/src/gui.ts)）を、資産宣言は `./assets`（[`packages/plugins/bridge-plugin-text/src/assets.ts`](../packages/plugins/bridge-plugin-text/src/assets.ts)）を、子画面本体は[`packages/plugins/bridge-plugin-text/src/view/`](../packages/plugins/bridge-plugin-text/src/view/)を正本とする。限定射影・送信委譲の実体は companion の宣言を汎用管理層が駆動する形で出し、backend が種別固有の射影・送信を持たない。割当て管理はプラグイン一覧が担い、固有の統計・送信状態は子画面に限る。管理RPCの正本は `bridge-gui-contract` の `management` subpath（[`packages/bridge-gui-contract/src/management.ts`](../packages/bridge-gui-contract/src/management.ts)）であり、汎用操作 `assignPlugin`／`unassignPlugin` だけを持つ。子画面の個体別契約には使わない。
 - 診断割当てはテキスト表示用セッションを対象外とし、テキスト割当てと排他にする。
 
 ## 管理画面の Angular 移行（設計変更）
@@ -141,7 +141,7 @@ mainview を Angular に本移行する。本節が設計変更の正本であ�
 - GUI 基盤は Electrobun を採用する。実行ランタイムは Bun main、表示は native Webview 1枚とする。Electrobun 既定の Cottontail では Webview→main の RPC が本構成で成立しない観測があり、Bun main で成立することを確認した（観測は[アプリの検証計画](../docs/verification/bridge-app.md)を正本とする）。ベータ段階・単一メンテナというリスクは許容し、埋込み・配布・実行互換に問題が出た場合は Electron へ切り替える。その場合も本節の三層境界は維持する。
 - 管理画面（mainview）に Angular を採用する（mainview 限定。プラグイン UI は含まない）。変更検知は zoneless＋signals とする。
 - 再帰 `build` に Angular production AOT を含める（`tsc --noEmit` だけではテンプレートを検証できない）。成果物は UI パッケージ自身の `dist` に生成し（dev／prod を分離）、`gui:run`・`gui:build` が選んだ側を Hutch 包装用の写しへ載せ、GUI から UI への `workspace:*` ビルド依存を明示する。
-- 子画面は各プラグインが自前の devkit（`packages/bridge-plugin-*/hutch.config.ts`。`pnpm build` が先に `hutch electrobun prepare` を満たすため別途 `gui:prepare` は要らない）を用意し、パッケージ側でブラウザビルドして完成資産（`dist/view`）を作る。GUI は完成資産だけを app 内 staging（`src/plugin-view-dist/<種別>/`）へ実コピーし、`build.views` は汎用 stub、`copy` で `views/plugin-<種別>/` へ載せる。包装前に資産欠落・pin 不一致を拒否する。app の `gui:prepare` は plugin 閉包の build（依存順）を先に行ってから app devkit を用意するため、クリーン状態でも単独で通る。`vp run -r build` も plugin の `build` 経由で `hutch` を `PATH` に要求する（初回はネットワーク取得。見直し条件に記録の許容）。
+- 子画面は各プラグインが自前の devkit（`packages/plugins/bridge-plugin-*/hutch.config.ts`。`pnpm build` が先に `hutch electrobun prepare` を満たすため別途 `gui:prepare` は要らない）を用意し、パッケージ側でブラウザビルドして完成資産（`dist/view`）を作る。GUI は完成資産だけを app 内 staging（`src/plugin-view-dist/<種別>/`）へ実コピーし、`build.views` は汎用 stub、`copy` で `views/plugin-<種別>/` へ載せる。包装前に資産欠落・pin 不一致を拒否する。app の `gui:prepare` は plugin 閉包の build（依存順）を先に行ってから app devkit を用意するため、クリーン状態でも単独で通る。`vp run -r build` も plugin の `build` 経由で `hutch` を `PATH` に要求する（初回はネットワーク取得。見直し条件に記録の許容）。
 - native 包装・起動は引き続き opt-in とする。
 - 非目標は以下とする。サーバー起点のセッション作成、プラグインの動的発見・インストール、非信頼コードの隔離サンドボックス（対象は同梱の信頼済みプラグインのみ）、分配・合流、通信途中のプラグイン付替え、認可や割当ての継承、汎用の接続管理 UI・永続化・複数 Webview 管理（後工程）。
 - 将来方針は以下に保つ。同期コアはローカル SDK とし、runner 境界は別契約とする。型の不透明化は通信可能性・安全性・互換性を保証しない。固有要求表を維持し、任意 `invoke` は導入しない。資産の実 URL と遷移許可はホストが所有する。互換目標は固有型の大改修回避とする。
@@ -152,13 +152,13 @@ mainview を Angular に本移行する。本節が設計変更の正本であ�
 - [ブリッジ接続](bridge-connection.md)：Connection 認可・切断失効、サーバー管理境界としてのセッション公開。
 - [プロトコル](protocol.md)：輸送・配送・方向・終了の契約。
 - コード：公開型・フィールド・操作名・データ形状。
-- テキスト通信契約（`packages/bridge-plugin-text` の公開 subpath `./contract`）：固定テキスト表示の形状・論理名・上限・応答期限・検証規則。
-- 診断プラグイン本体（`packages/bridge-plugin-diagnostic` の公開 entry `.`）：診断の形状・検証規則。
-- 各プラグインの子画面固有契約（`packages/bridge-plugin-*/src/gui-contract.ts` の公開 subpath `./gui-contract`）：子画面の固有RPC契約・限定DTO・相対資産 entry の正本。main側アダプター・管理記述子は同じパッケージの公開 subpath `./gui`（`src/gui.ts`）を、資産宣言は `./assets`（`src/assets.ts`）を、子画面本体は `src/view/` を正本とする。
+- テキスト通信契約（`packages/plugins/bridge-plugin-text` の公開 subpath `./contract`）：固定テキスト表示の形状・論理名・上限・応答期限・検証規則。
+- 診断プラグイン本体（`packages/plugins/bridge-plugin-diagnostic` の公開 entry `.`）：診断の形状・検証規則。
+- 各プラグインの子画面固有契約（`packages/plugins/bridge-plugin-*/src/gui-contract.ts` の公開 subpath `./gui-contract`）：子画面の固有RPC契約・限定DTO・相対資産 entry の正本。main側アダプター・管理記述子は同じパッケージの公開 subpath `./gui`（`src/gui.ts`）を、資産宣言は `./assets`（`src/assets.ts`）を、子画面本体は `src/view/` を正本とする。
 - 契約パッケージ（`packages/bridge-gui-contract` の `management`／`plugin-instance`／`dev-console` subpath）：共有GUI契約の形状・検証規則。`plugin-instance` が持つのは共有手段のみとし、子画面の固有契約は持たない。`dev-console` の許可操作は汎用操作だけとする。
 - 公開 SDK（`packages/bridge-gui-plugin-sdk`）：管理記述子・公開参照口・割当て方針・監視方式・固有操作口・companion 宣言・登録口・資産宣言の形状。
 - 同梱 composition root（`apps/bridge-gui-main/src/composition/bundled-plugins.ts`・`bundled-plugin-assets.ts`）：同梱の選択と登録順、各パッケージの `./assets` 宣言から解決済み view パス・`views`／`copy` 表への対応付け。
-- 各 companion（`packages/bridge-plugin-*/src/gui-contract.ts`）：子画面の固有RPC契約・限定DTO・相対資産 entry の正本。main側アダプターは同じパッケージの `src/gui.ts`（factory で公開参照口を capture する結線アダプター）、管理記述子は同じ公開 subpath `./gui` を正本とする。
+- 各 companion（`packages/plugins/bridge-plugin-*/src/gui-contract.ts`）：子画面の固有RPC契約・限定DTO・相対資産 entry の正本。main側アダプターは同じパッケージの `src/gui.ts`（factory で公開参照口を capture する結線アダプター）、管理記述子は同じ公開 subpath `./gui` を正本とする。
 - [接続の検証計画](../docs/verification/bridge-connection.md)：接続の検証計画。[アプリの検証計画](../docs/verification/bridge-app.md)：アプリ固有の観測。
 
 ## 見直し条件

@@ -97,7 +97,9 @@ test("正規配置の staging 計画は両種別で完成資産3件と pin 一�
   // build 前で完成資産が無ければ落とす（黙って通さない・skip しない）。
   // この検査が無いと build 前の空検査で staging 経路の崩れを見逃す。
   for (const kind of STAGED_KINDS) {
-    if (!existsSync(packagePath(`../../packages/bridge-plugin-${kind}/dist/view/index.js`))) {
+    if (
+      !existsSync(packagePath(`../../packages/plugins/bridge-plugin-${kind}/dist/view/index.js`))
+    ) {
       throw new Error(`完成資産が無い。先に plugin を build すること: ${kind}`);
     }
   }
@@ -110,12 +112,12 @@ test("正規配置の staging 計画は両種別で完成資産3件と pin 一�
   }
   // 単一種別の計画も同梱表と一致する（個別指定の経路の確認である）。
   const textPlan = planStage("text", {
-    pluginDir: packagePath("../../packages/bridge-plugin-text"),
+    pluginDir: packagePath("../../packages/plugins/bridge-plugin-text"),
     appDir: packagePath(""),
   });
   expect(textPlan.stagedDir).toBe(packagePath(STAGED_TEXT_DIR));
   const diagnosticPlan = planStage("diagnostic", {
-    pluginDir: packagePath("../../packages/bridge-plugin-diagnostic"),
+    pluginDir: packagePath("../../packages/plugins/bridge-plugin-diagnostic"),
     appDir: packagePath(""),
   });
   expect(diagnosticPlan.stagedDir).toBe(packagePath(STAGED_DIAGNOSTIC_DIR));

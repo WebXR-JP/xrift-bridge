@@ -114,7 +114,7 @@
 - `latest` 置換: 投入前置換の動作、投入中1件＋未投入最新1件の範囲、値ごとの配送 Promise を作らないことの確認。
 - 制御分離なし: 制御専用 stream を作らないこと（Session 間の優先度・分離を設けないこと）の確認。
 - 試作の置き場と観測要点: 試作は `tools/yamux-spike/`（experimental、製品コードと分離）に置く。多重化（4本同時 echo の対応保持）、WS 分割（7B 刻みでも復元・送出数で発動を確認）・集約（25ms 窓の5連打が順序保持・送出数で発動を確認）、FIN（片方向終了と逆方向継続、双方 FIN 後も mux 維持）、RST（対象のみ中断・他 stream 継続）、GoAway（相手 mux の終了観測）、window backpressure（初期 window ちょうどで詰まり・pause 中 `onDrain` 不解・resume で解ける・全量到着）、認可プリリュード切替（同じ WS 上での mux 開始・混交なし）を観測する。試作時点で未確認のうち、受信 window 自動拡大抑止は製品の単体テスト（`transport-muxer.test.ts`）で確認済みである。inactivity timeout は現行固定版（`@libp2p/utils` 7.4.1・`@chainsafe/libp2p-yamux` 8.0.1）の読解では発火経路がなく（製品は指定せず、基底への受け渡しのみで未使用）、上流更新時に再確認する。ブラウザ実機は未確認のままである。詳細は試作の `README.md` を参照する。
-- 診断の往復: 認可後の `data` 上で診断 payload が往復すること（echo は `{op: "echo", id, value}`→同形の返送、ping は `{op: "ping", id}`→`{op: "pong", id}`。`op`・`id` は payload 内であり、wire に業務 requestId は載せない）。形状の正本は `packages/bridge-plugin-diagnostic/src/index.ts` とする。
+- 診断の往復: 認可後の `data` 上で診断 payload が往復すること（echo は `{op: "echo", id, value}`→同形の返送、ping は `{op: "ping", id}`→`{op: "pong", id}`。`op`・`id` は payload 内であり、wire に業務 requestId は載せない）。形状の正本は `packages/plugins/bridge-plugin-diagnostic/src/index.ts` とする。
 - 製品の未検証分岐: `auth_ok` 送信失敗・mux 初期化失敗・切替中 text 受信の3分岐は製品テスト未実施である。負荷試行は未了である。実ブラウザは[実行条件](#実行条件)に記録の dev（`http://localhost:5173`）での製品経路スモークのみ実施済みであり、実ホスト実行時の確認は未了である。
 
 ## 証拠の残し方

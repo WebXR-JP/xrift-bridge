@@ -246,7 +246,7 @@ MVP第1段（セッション公開＋診断移設）の実施結果を記録す�
 - ビルド: `vp run -r build` 成功。
 - テスト・型検査: `vp test`（ルート）で 291 合格／31 ファイル。`vp run -r test:types` で 4 パッケージ成功。
 - 統合スモーク（3/3 回・各 15 項目 PASS）: ビルド済み `apps/bridge-cli` を実プロセス起動 × `packages/world-client` を Node の `origin` 指定で実行し、実 WebSocket・yamux で往復した。流れは `accept open` → ワールド起点 `pairing_start` → 比較コード受信 → CLI 標準入力で `approve <requestId> <code>` → `auth_ok` → reliable Session 生成 → `{op:"echo"}` の同形返送と `{op:"ping"}` → `{op:"pong"}` → CLI `status` に `diagnosticEcho`・`diagnosticPing` が反映 → 切断で認可済み接続が消える → 再接続で新しい要求 ID・新しい比較コードと再承認が必要（承認前に `sessionProvider` は未解決＝認可を継承しない）。（注記：受付トグル化に伴い現行の対話命令は `accept enable`／`accept disable`）
-- 応答の出所: echo／ping 応答を生成するのは `packages/bridge-plugin-diagnostic/src/index.ts` のみであり、`packages/bridge-server/src` に診断参照は無い（`diagnostic-handler.ts` は削除済み）。`status` の診断項目は `server.getStats()` ではなく CLI の `startDiagnostics()` 由来である。
+- 応答の出所: echo／ping 応答を生成するのは `packages/plugins/bridge-plugin-diagnostic/src/index.ts` のみであり、`packages/bridge-server/src` に診断参照は無い（`diagnostic-handler.ts` は削除済み）。`status` の診断項目は `server.getStats()` ではなく CLI の `startDiagnostics()` 由来である。
 - 契約の実測: `getStats()` のキーから診断項目が消えていること、reliable Session にサーバ側の既定応答が無いこと、認可前・切替中はセッションが公開されないこと、session 終了で一覧・取得から外れ終了通知が一度だけであることを確認した。
 - 制限・未再現（失敗側の記録）: `packages/bridge-server/tests/server.test.ts` の「受付の自動クローズでも開始待ちは失効する」（実タイマー系）が負荷時に間欠失敗するとの報告があったが、41 回の再現試行で未再現であり、本変更の経路（セッション公開・診断・管理購読）と非交差と確認した。解消の主張はしない。（注記：当該テストは受付トグル化に伴い撤去済み）
 - 未計測（第1段の対象外）: `apps/bridge-gui-main`（Electrobun）そのもの、実 GUI→実ワールドの往復、native↔webview の RPC、埋込み UI、パッケージング／配布サイズ・常駐メモリは未計測である。`design/bridge-app.md`「基盤の観測」の該当項目は未計測である。
