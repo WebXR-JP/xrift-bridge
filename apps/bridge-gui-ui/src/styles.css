@@ -136,9 +136,11 @@ body {
  * 子画面タグと代替表示を同一矩形に重ねる（縦積みの余白を作らない）。
  * `electrobun-webview` の高さもここで保つ。ホスト側の外枠は付けない。 */
 #plugin-slot {
+  /* 親の縦長領域を使えるよう、最低高を保ちつつ伸長する。 */
   position: relative;
   display: block;
   min-height: 320px;
+  flex: 1 1 320px;
 }
 
 /* ADR: `#plugin-host` を `@if` に入れず常時置く。表示の差替えは重ね順だけ
