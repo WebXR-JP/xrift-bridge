@@ -14,6 +14,7 @@ import { GuiBackend } from "../src/main/backend.ts";
 import { registerBundledPlugins } from "../src/composition/bundled-plugins.ts";
 import type { PluginCompanion } from "bridge-gui-plugin-sdk/companion";
 import type { DiagnosticInstanceView } from "bridge-plugin-diagnostic/gui-contract";
+import { DIAGNOSTIC_ECHO_SESSION_ID } from "bridge-plugin-diagnostic/contract";
 
 const TEST_ORIGIN = "https://gui-diagnostic-notify-test.invalid";
 
@@ -152,7 +153,7 @@ test("診断の応答で統計が変わると状態通知が届く", async () =>
   const provider = await pairing.sessionProvider;
   providers.push(provider);
   const session = await provider.tryCreateSession({
-    sessionId: "gui-diagnostic-notify",
+    sessionId: DIAGNOSTIC_ECHO_SESSION_ID,
     kind: "reliable",
     direction: "bidirectional",
   });

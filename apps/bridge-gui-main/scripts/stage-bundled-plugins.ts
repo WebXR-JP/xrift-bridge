@@ -36,6 +36,9 @@ export const STAGED_TEXT_DIR = "src/plugin-view-dist/text";
 /** staging の写し先（diagnostic）。`copy` 表の複写元と一致させる。 */
 export const STAGED_DIAGNOSTIC_DIR = "src/plugin-view-dist/diagnostic";
 
+/** staging の写し先（udp）。`copy` 表の複写元と一致させる。 */
+export const STAGED_UDP_DIR = "src/plugin-view-dist/udp";
+
 /**
  * 種別から staging の写し先を求める。種別ごとの分岐を持たない。
  *

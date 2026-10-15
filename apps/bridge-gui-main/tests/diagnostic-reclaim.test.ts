@@ -11,6 +11,7 @@ import { afterEach, expect, test } from "vite-plus/test";
 import { createConnectionRequest, type SessionProvider } from "world-client";
 import { GuiBackend } from "../src/main/backend.ts";
 import { registerBundledPlugins } from "../src/composition/bundled-plugins.ts";
+import { DIAGNOSTIC_ECHO_SESSION_ID } from "bridge-plugin-diagnostic/contract";
 
 const TEST_ORIGIN = "https://gui-diagnostic-reclaim-test.invalid";
 
@@ -71,7 +72,7 @@ test("診断割当てしたセッションが終わると生成分も回収す�
   const provider = await request.sessionProvider;
   providers.push(provider);
   await provider.tryCreateSession({
-    sessionId: "gui-diagnostic-reclaim",
+    sessionId: DIAGNOSTIC_ECHO_SESSION_ID,
     kind: "reliable",
     direction: "bidirectional",
   });

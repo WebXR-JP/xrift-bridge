@@ -13,6 +13,7 @@ import { formatPairingCode } from "bridge-protocol";
 import { createConnectionRequest, type ReliableSession, type SessionProvider } from "world-client";
 import { GuiBackend } from "../src/main/backend.ts";
 import { registerBundledPlugins } from "../src/composition/bundled-plugins.ts";
+import { DIAGNOSTIC_ECHO_SESSION_ID } from "bridge-plugin-diagnostic/contract";
 
 const TEST_ORIGIN = "https://gui-test.invalid";
 
@@ -181,7 +182,7 @@ test("受付から承認・診断往復・切断・再接続まで通る", async
   const provider = await first.sessionProvider;
   providers.push(provider);
   const session = await provider.tryCreateSession({
-    sessionId: "gui-e2e",
+    sessionId: DIAGNOSTIC_ECHO_SESSION_ID,
     kind: "reliable",
     direction: "bidirectional",
   });
@@ -231,7 +232,7 @@ test("受付から承認・診断往復・切断・再接続まで通る", async
   const provider2 = await second.sessionProvider;
   providers.push(provider2);
   const session2 = await provider2.tryCreateSession({
-    sessionId: "gui-e2e",
+    sessionId: DIAGNOSTIC_ECHO_SESSION_ID,
     kind: "reliable",
     direction: "bidirectional",
   });

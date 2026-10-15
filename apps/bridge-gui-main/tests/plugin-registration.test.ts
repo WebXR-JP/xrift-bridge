@@ -84,18 +84,20 @@ test("空構成では種別を持たず未知種別の割当てを拒否する",
   expect(() => backend.assignPlugin({ pluginKind: "text" })).toThrowError(RangeError);
 });
 
-test("同梱登録は text から diagnostic の順で種別表を作る", async () => {
+test("同梱登録は text→diagnostic→udp の順で種別表を作る", async () => {
   const backend = await GuiBackend.create({ port: 0 }, { registerPlugins: registerBundledPlugins });
   backends.push(backend);
   expect(backend.getSnapshot().backend).toBe("ready");
   expect(backend.companionRegistry.list().map((companion) => companion.kind)).toEqual([
     "text",
     "diagnostic",
+    "udp",
   ]);
   // 種別表は composition root の別途列挙ではなく登録内容から生成される。
   expect(backend.getSnapshot().plugins.kinds).toEqual([
     { pluginKind: "text", pluginId: "text", label: "テキスト", maxInstances: 1 },
     { pluginKind: "diagnostic", pluginId: "diagnostic", label: "診断", maxInstances: null },
+    { pluginKind: "udp", pluginId: "udp", label: "UDP", maxInstances: null },
   ]);
 });
 

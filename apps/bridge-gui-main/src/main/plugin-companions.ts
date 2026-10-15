@@ -18,7 +18,7 @@
  * companion は backend を capture した factory（例 `createTextCompanion(access)`）
  * で作り、backend を引数で受け取らない。共有の具象 companion インスタンス・
  * 既定引数・共有 singleton・共有表 helper は持たず、backend ごとに
- * registry を生成・注入する。登録順は text→diagnostic である。
+ * registry を生成・注入する。登録順は text→diagnostic→udp である。
  *
  * WebView 生成・transport・個体束縛・失効・同梱許可・管理 DTO はホストが
  * 持ち続ける。`bridge-app-core` への GUI 逆依存は足さない。

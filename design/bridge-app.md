@@ -24,7 +24,8 @@ flowchart LR
 | `packages/bridge-gui-contract`              | 共有契約（管理RPC・個体別の共有手段と微少ランタイム）。`management`／`plugin-instance`／`dev-console` の subpath を分ける。`plugin-instance` が持つのは共有手段のみであり、子画面固有契約は持たない                                                                                     |
 | `packages/bridge-gui-plugin-sdk`            | プラグイン実装者が参照する公開契約（管理記述子・公開参照口・割当て方針・監視方式・固有操作口・companion 宣言（相対 `viewEntry`）・登録口・資産宣言）。具象 import・副作用・実行実体・ホストパス参照を持たない                                                                           |
 | `packages/plugins/bridge-plugin-text`       | テキストプラグインの所有者（本体・テキスト通信契約・子画面固有契約・管理記述子・companion factory・資産宣言・子画面）。公開 entry は `.`・`./contract`（ブラウザ安全）・`./gui-contract`（実行環境非依存）・`./gui`・`./assets` である                                                  |
-| `packages/plugins/bridge-plugin-diagnostic` | 診断プラグインの所有者（本体・子画面固有契約・管理記述子・companion factory・資産宣言・子画面）。公開 entry は `.`・`./gui-contract`・`./gui`・`./assets` である。テキスト通信契約の論理名を参照するため text へ依存する                                                                |
+| `packages/plugins/bridge-plugin-diagnostic` | 診断プラグインの所有者（本体・診断通信契約・子画面固有契約・管理記述子・companion factory・資産宣言・子画面）。公開 entry は `.`・`./contract`（ブラウザ安全）・`./gui-contract`（実行環境非依存）・`./gui`・`./assets` である                                                          |
+| `packages/plugins/bridge-plugin-udp`        | UDPプラグインの所有者（本体・UDP通信契約・子画面固有契約・管理記述子・companion factory・資産宣言・子画面）。公開 entry は `.`・`./contract`（ブラウザ安全）・`./gui-contract`（実行環境非依存）・`./gui`・`./assets` である                                                            |
 | `apps/bridge-gui-main/src/composition`      | 同梱 composition root。同梱の選択と登録順の宣言（`bundled-plugins.ts`。具象プラグインを production source で import してよいのはここだけ）と静的資産 manifest（`bundled-plugin-assets.ts`。各パッケージの `./assets` 宣言から導き、platform・companion factory を import しない）を持つ |
 | `apps/bridge-gui-ui`                        | 管理画面（mainview）の Angular 実装。契約だけを参照する                                                                                                                                                                                                                                 |
 | `apps/bridge-gui-main`                      | 起動・終了、比較コード表示と承認操作、Angular 画面の包装・表示、プラグインUIの埋込み、デスクトップ機能、画面との通信                                                                                                                                                                    |
@@ -55,9 +56,9 @@ flowchart LR
 
 ## プラグイン
 
-- プラグインは本体機能と任意の GUI companion を持ち、UI は埋込み Webview として表示する。本体（`packages/bridge-app-core`）は UI・RPC 非依存の汎用基盤のままとし、種別ごとの本体・子画面の固有契約・UI・main側アダプター・管理記述子・companion factory・資産宣言・子画面は各パッケージ（`packages/plugins/bridge-plugin-text`・`packages/plugins/bridge-plugin-diagnostic`）が所有する。生成・結線・束縛・失効・ライフサイクルはホストの汎用管理層（`PluginInstanceManager`。生成元・割当て方針・監視・表示射影・固有操作の宣言に従って駆動し、種別分岐と任意 payload の汎用ディスパッチ表を持たない）が所有し、子へ生の Session・`BridgeServer`・管理 backend は渡さない。
+- プラグインは本体機能と任意の GUI companion を持ち、UI は埋込み Webview として表示する。本体（`packages/bridge-app-core`）は UI・RPC 非依存の汎用基盤のままとし、種別ごとの本体・子画面の固有契約・UI・main側アダプター・管理記述子・companion factory・資産宣言・子画面は各パッケージ（`packages/plugins/bridge-plugin-text`・`packages/plugins/bridge-plugin-diagnostic`・`packages/plugins/bridge-plugin-udp`）が所有する。生成・結線・束縛・失効・ライフサイクルはホストの汎用管理層（`PluginInstanceManager`。生成元・割当て方針・監視・表示射影・固有操作の宣言に従って駆動し、種別分岐と任意 payload の汎用ディスパッチ表を持たない）が所有し、子へ生の Session・`BridgeServer`・管理 backend は渡さない。
 - 子画面はパッケージ側で事前ビルドし、完成資産だけを GUI が app 内 staging（`apps/bridge-gui-main/src/plugin-view-dist/<種別>/`。生成物のため git 管理外・型検査対象外）経由で取り込む。Electrobun の子画面ランタイム（`electrobun/view`）は npm から取得できないため、各プラグインは自前の `hutch.config.ts` と devkit を持ち（app の `.hutch` を参照しない。Electrobun pin は app と一致させる）、`electrobun/view` を bundle に inline する。GUI の `build.views` は汎用 stub とし、`copy` で staging から `views/plugin-<種別>/` へ載せる。`views://` の解決・遷移許可・実 URL はホストが所有する。
-- 同梱は静的登録であり、動的発見・インストールはしない。登録表への追加に加え、静的資産 manifest（`src/composition/bundled-plugin-assets.ts`。各パッケージの `./assets` 宣言から導く）から導く `electrobun.config.ts` の `build.views`＋`copy` への収載が要る。遷移規則の直書き定数は持たず、登録済み companion の解決済み view パス集合から生成して snapshot で配布する。登録だけでは同梱されない。
+- 同梱は静的登録であり、動的発見・インストールはしない。同梱の選択と登録順（text→diagnostic→udp）は composition root が宣言する。登録表への追加に加え、静的資産 manifest（`src/composition/bundled-plugin-assets.ts`。各パッケージの `./assets` 宣言から導く）から導く `electrobun.config.ts` の `build.views`＋`copy` への収載が要る。新種別の追加は登録表への追加＋静的 manifest への収載で行う。遷移規則の直書き定数は持たず、登録済み companion の解決済み view パス集合から生成して snapshot で配布する。登録だけでは同梱されない。
 - レシピ的に扱い、複数インスタンスを出せる。
 - 初期対象はリポジトリに同梱する信頼済みプラグインに限る。外部の非信頼プラグイン読込みは対象外とする。
 - セッションで送受信するデータの内容やプロトコルに、基盤は関心を持たない。
@@ -79,13 +80,15 @@ flowchart LR
 - 初期は一対一（一つのセッションに一つの割当て、一つの接続口に一つのセッション）とする。分配・合流は持たない。
 - プラグインには割当て期間だけ有効な操作口を渡す。解除後の送信・購読は禁止する。
 - 解除・インスタンス削除は対象セッションを中断する。切替えは新しいセッションを使い、未決着通信を混在させない。
+- `AssignedSession` は失効時に `onRevoked` を一度だけ通知する。終端通知とは別であり、プラグインはここでローカル資源（例: UDPソケット）を確実に解放する。形状・通知順序の詳細は[`packages/bridge-app-core/src/assigned-session.ts`](../packages/bridge-app-core/src/assigned-session.ts)を正本とする。
 - 再接続・同名セッションへ割当てを自動継承しない。
 - 未割当ての `reliable` セッションにデータが届いた場合は、理由付きでそのセッションを中断する。GUI 操作待ちの無制限保留や黙った破棄はしない。
 - 後から接続するプラグインへの過去値の再配信は保証しない。初期契約は割当て後の受信とする。
 
 ## 診断
 
-- 応答確認相当（echo・ping）は `packages/plugins/bridge-plugin-diagnostic` の同梱診断プラグインへ移す。プラグイン基盤本体には診断の解釈を持たせない。
+- 応答確認相当（echo・ping）は `packages/plugins/bridge-plugin-diagnostic` の同梱診断プラグインへ移す。プラグイン基盤本体には診断の解釈を持たせない。診断の論理名の正本は診断プラグインのブラウザ安全な通信契約（[`packages/plugins/bridge-plugin-diagnostic/src/contract.ts`](../packages/plugins/bridge-plugin-diagnostic/src/contract.ts)の公開 subpath `./contract`）であり、ワールドもそこを参照する（他プラグイン契約への依存は持たない）。
+- 診断割当ては論理名の allowlist（`diag-echo`・`diag-ping`）で選び、テキスト・UDP用セッションは対象外とする。テキスト割当てとは排他にする。
 - CLI は診断インスタンスを生成・割当てすることで診断用途を維持する。
 - 輸送統計から診断 echo・ping の項目を削除する。互換用フィールドは残さない。
 - 輸送の keepalive Ping はサーバー側に残す。診断 ping とは別機能である。
@@ -99,7 +102,15 @@ flowchart LR
 - 形状・論理名・上限・応答期限・検証規則は通信契約（[`packages/plugins/bridge-plugin-text/src/contract.ts`](../packages/plugins/bridge-plugin-text/src/contract.ts)の公開 subpath `./contract`）を正本とし、ここでは複製しない。契約モジュールはブラウザ安全な構成とし、ワールドは通信契約 entry のみを利用する。公開範囲は[`packages/plugins/bridge-plugin-text/package.json`](../packages/plugins/bridge-plugin-text/package.json)の exports を正本とする。プラグイン本体の振る舞いは[`packages/plugins/bridge-plugin-text/src/plugin.ts`](../packages/plugins/bridge-plugin-text/src/plugin.ts)、ワールド側の受信・表示は[`apps/diagnostic-world/src/text/`](../apps/diagnostic-world/src/text/)を正本とする。
 - 割当ては固定プラグイン一種類・同時に一インスタンスとし、開始通知での自動割当てはしない。明示操作でのみ行い、論理名と capability が一致する唯一の候補が全接続を通じて一件だけの場合に割り当て、候補ゼロ・複数は理由付きで拒否する（先着順・一件目・Origin 推測をしない）。解除・インスタンス削除は対象セッションを中断する。再接続後は再承認・新規セッション・新規の明示割当てを要求し、同名でも旧操作口・未完了要求・本文を引き継がない。論理名の一致は内容互換性や真正性の証明ではない。
 - 画面は埋込みの子画面（プラグイン UI 埋込み）で行い、管理 Webview 内の暫定 UI は使わない。Webview へ生のサーバー・セッションを渡さない方針を維持し、本文は snapshot・ログ・永続保存に残さない。子画面の表示データ・限定操作の正本はテキストの子画面固有契約（[`packages/plugins/bridge-plugin-text/src/gui-contract.ts`](../packages/plugins/bridge-plugin-text/src/gui-contract.ts)の公開 subpath `./gui-contract`）であり、main側アダプター・管理記述子は同じパッケージの公開 subpath `./gui`（[`packages/plugins/bridge-plugin-text/src/gui.ts`](../packages/plugins/bridge-plugin-text/src/gui.ts)）を、資産宣言は `./assets`（[`packages/plugins/bridge-plugin-text/src/assets.ts`](../packages/plugins/bridge-plugin-text/src/assets.ts)）を、子画面本体は[`packages/plugins/bridge-plugin-text/src/view/`](../packages/plugins/bridge-plugin-text/src/view/)を正本とする。限定射影・送信委譲の実体は companion の宣言を汎用管理層が駆動する形で出し、backend が種別固有の射影・送信を持たない。割当て管理はプラグイン一覧が担い、固有の統計・送信状態は子画面に限る。管理RPCの正本は `bridge-gui-contract` の `management` subpath（[`packages/bridge-gui-contract/src/management.ts`](../packages/bridge-gui-contract/src/management.ts)）であり、汎用操作 `assignPlugin`／`unassignPlugin` だけを持つ。子画面の個体別契約には使わない。
-- 診断割当てはテキスト表示用セッションを対象外とし、テキスト割当てと排他にする。
+- 診断割当ては「診断」節の allowlist で選び、テキスト・UDP用セッションを対象外とし、テキスト割当てと排他にする。
+
+## UDP転送
+
+- UDP転送は `packages/plugins/bridge-plugin-udp` の同梱プラグインが行う。ローカルでUDPデータグラムを受信し、ワールドへ片方向転送するだけであり、逆方向送信・ACK・再送・分割結合はしない。接続口は一つで、輸送上の適合は「接続口と capability」節の組合せのうち `reliable`・`bidirectional` のみ受け付ける。
+- ワールドは認可後に論理名 `udp` の `reliable`・`bidirectional` セッションを開き、PC からワールドへデータグラム一件ごとに一メッセージで送る。論理名・形状・上限・検証規則は通信契約（[`packages/plugins/bridge-plugin-udp/src/contract.ts`](../packages/plugins/bridge-plugin-udp/src/contract.ts)の公開 subpath `./contract`）を正本とし、ここでは複製しない。契約モジュールはブラウザ安全な構成とし、ワールドは通信契約 entry のみを利用する。公開範囲は[`packages/plugins/bridge-plugin-udp/package.json`](../packages/plugins/bridge-plugin-udp/package.json)の exports を正本とする。プラグイン本体の振る舞いは[`packages/plugins/bridge-plugin-udp/src/plugin.ts`](../packages/plugins/bridge-plugin-udp/src/plugin.ts)を正本とする。
+- bind アドレス・ポートは子画面UIからの実行時操作（開始・停止）で与える。bind 設定を生成時に渡す口・汎用設定機構・永続化・自動開始は持たない。attach では bind せず、稼働中に再設定されたら旧ソケットの close 完了後に新 bind し、失敗時は自動 rollback しない。既定は loopback であり、非 loopback は子画面で警告＋明示確認を要求し、本体でも検証する。上限超過・不正・送信不能は破棄して計数し、セッションは切断しない。送信は同時一件・待機キューなしとする。
+- 割当ては複数個体可（`maxInstances: null`）とし、候補は生存・未割当て・論理名一致・capability 一致とする。解除・インスタンス削除は対象セッションを中断し、失効時は `onRevoked` でソケットを解放する。
+- ワールド側受信・表示の正本は[`apps/diagnostic-world/src/udp/`](../apps/diagnostic-world/src/udp/)（受信手順・React結線・表示文言）と in-world 表示板（[`apps/diagnostic-world/src/components/UdpBoard.tsx`](../apps/diagnostic-world/src/components/UdpBoard.tsx)）とする。データ内容は表示専用であり、証拠JSON・ログ・同期・保存・URL に載せない。子画面の表示データ・限定操作の正本は UDP の子画面固有契約（[`packages/plugins/bridge-plugin-udp/src/gui-contract.ts`](../packages/plugins/bridge-plugin-udp/src/gui-contract.ts)の公開 subpath `./gui-contract`）であり、main側アダプター・管理記述子は同じパッケージの公開 subpath `./gui`（[`packages/plugins/bridge-plugin-udp/src/gui.ts`](../packages/plugins/bridge-plugin-udp/src/gui.ts)）を、資産宣言は `./assets`（[`packages/plugins/bridge-plugin-udp/src/assets.ts`](../packages/plugins/bridge-plugin-udp/src/assets.ts)）を、子画面本体は[`packages/plugins/bridge-plugin-udp/src/view/`](../packages/plugins/bridge-plugin-udp/src/view/)を正本とする。
 
 ## 管理画面の Angular 移行（設計変更）
 
@@ -153,11 +164,12 @@ mainview を Angular に本移行する。本節が設計変更の正本であ�
 - [プロトコル](protocol.md)：輸送・配送・方向・終了の契約。
 - コード：公開型・フィールド・操作名・データ形状。
 - テキスト通信契約（`packages/plugins/bridge-plugin-text` の公開 subpath `./contract`）：固定テキスト表示の形状・論理名・上限・応答期限・検証規則。
-- 診断プラグイン本体（`packages/plugins/bridge-plugin-diagnostic` の公開 entry `.`）：診断の形状・検証規則。
+- 診断通信契約（`packages/plugins/bridge-plugin-diagnostic` の公開 subpath `./contract`）：診断の論理名・形状・検証規則。診断プラグイン本体（同パッケージの公開 entry `.`）は診断の振る舞いを持つ。
+- UDP通信契約（`packages/plugins/bridge-plugin-udp` の公開 subpath `./contract`）：UDP転送の形状・論理名・上限・検証規則。
 - 各プラグインの子画面固有契約（`packages/plugins/bridge-plugin-*/src/gui-contract.ts` の公開 subpath `./gui-contract`）：子画面の固有RPC契約・限定DTO・相対資産 entry の正本。main側アダプター・管理記述子は同じパッケージの公開 subpath `./gui`（`src/gui.ts`）を、資産宣言は `./assets`（`src/assets.ts`）を、子画面本体は `src/view/` を正本とする。
 - 契約パッケージ（`packages/bridge-gui-contract` の `management`／`plugin-instance`／`dev-console` subpath）：共有GUI契約の形状・検証規則。`plugin-instance` が持つのは共有手段のみとし、子画面の固有契約は持たない。`dev-console` の許可操作は汎用操作だけとする。
 - 公開 SDK（`packages/bridge-gui-plugin-sdk`）：管理記述子・公開参照口・割当て方針・監視方式・固有操作口・companion 宣言・登録口・資産宣言の形状。
-- 同梱 composition root（`apps/bridge-gui-main/src/composition/bundled-plugins.ts`・`bundled-plugin-assets.ts`）：同梱の選択と登録順、各パッケージの `./assets` 宣言から解決済み view パス・`views`／`copy` 表への対応付け。
+- 同梱 composition root（`apps/bridge-gui-main/src/composition/bundled-plugins.ts`・`bundled-plugin-assets.ts`）：同梱の選択と登録順（現行は text→diagnostic→udp）、各パッケージの `./assets` 宣言から解決済み view パス・`views`／`copy` 表への対応付け。
 - 各 companion（`packages/plugins/bridge-plugin-*/src/gui-contract.ts`）：子画面の固有RPC契約・限定DTO・相対資産 entry の正本。main側アダプターは同じパッケージの `src/gui.ts`（factory で公開参照口を capture する結線アダプター）、管理記述子は同じ公開 subpath `./gui` を正本とする。
 - [接続の検証計画](../docs/verification/bridge-connection.md)：接続の検証計画。[アプリの検証計画](../docs/verification/bridge-app.md)：アプリ固有の観測。
 
@@ -166,5 +178,6 @@ mainview を Angular に本移行する。本節が設計変更の正本であ�
 - 実行情報：Electrobun で直接実行できるならこの構成で進める。別プロセスが必要なら IPC・監視・終了処理の増加を示して再相談する。埋込み・配布・実行互換に問題があれば Electron へ切り替える。境界は維持する。
 - 再相談：ローカル操作を行うプラグイン、非信頼コードの実行、分配・合流、通信途中の付替え、認可や割当ての継承が必要になった場合。
 - capability の一致を権限判定として扱わない。既存の接続認可はあらゆるローカル操作の包括承認ではない。
+- UDP転送ではローカル操作（UDPソケットの bind・受信）を許容する。範囲は loopback 既定・非 loopback は明示確認・自動開始なし・設定は子画面からの実行時操作のみとし、承認境界（非 loopback 確認）は接続認可とは別に設ける。capability 一致は権限判定ではなく輸送上の適合に留める。
 - 観測能力：TestBed（`@angular/build:unit-test` の Vitest runner）と現 Vite+ override の互換は確認済みであり、再帰 `test` に組込済みである。Hutch のディレクトリコピー（package 内配置）は成立を確認済みである。機能移行の完了判断に視覚自動化を含めず、後者を完了扱いしない。native 画素・実入力の自動化が必要になった場合は再検討する。残る未確認は可視 Webview 条件下のメモリ・起動時間の再測定、配布 dmg からの導線である。
 - ビルドの前提：plugin の `build` が自前 devkit の再用意を内包し、`vp run -r build` が `hutch` を要求することを許容する（初回はネットワーク取得）。クリーン状態の手順は `gui:prepare`（plugin 閉包の build＋app devkit の用意）→ `vp run -r build` とする。各プラグインの子画面事前ビルドと GUI の staging 取込みを再帰 build に含めるための決定であり、動的発見・外部の非信頼プラグイン読込みは対象外のままである。

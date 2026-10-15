@@ -348,4 +348,91 @@ test("操作口の失効後は配送スナップショットから購読者を�
   revoke();
   await expect(session.sendReliable({})).rejects.toThrow(RangeError);
   expect(() => session.onMessage(() => {})).toThrow(RangeError);
+  expect(() => session.onRevoked(() => {})).toThrow(RangeError);
+});
+
+test("割当て解除で失効が一度だけ通知される", () => {
+  // 解除経路では終端購読を先に消すため `onEnd` が届かない場合がある。
+  // 資源の後始末は `onRevoked` で行うことを固定する。
+  const fake = new 偽サーバー();
+  const core = createBridgeAppCore(fake);
+  cores.push(core);
+  const { definition, attached } = 記録定義();
+  const handle = core.createInstance(definition);
+  const started = fake.開始Reliable("diag");
+  core.assign(started.info.localSessionId, handle.instanceId, "主");
+  const 操作口 = 信頼できる操作口(attached, 0);
+
+  let 失効回数 = 0;
+  let 終端回数 = 0;
+  操作口.onRevoked(() => {
+    失効回数 += 1;
+  });
+  操作口.onEnd(() => {
+    終端回数 += 1;
+  });
+
+  core.unassign(started.info.localSessionId);
+  expect(失効回数).toBe(1);
+  void 終端回数;
+  // 失効後の登録は拒否される。
+  expect(() => 操作口.onRevoked(() => {})).toThrow(RangeError);
+});
+
+test("セッション終了で失効が通知される", () => {
+  // 終了による失効でも後始末の通知が届くことを固定する。
+  const fake = new 偽サーバー();
+  const core = createBridgeAppCore(fake);
+  cores.push(core);
+  const { definition, attached } = 記録定義();
+  const handle = core.createInstance(definition);
+  const started = fake.開始Reliable("diag");
+  core.assign(started.info.localSessionId, handle.instanceId, "主");
+  const 操作口 = 信頼できる操作口(attached, 0);
+
+  let 失効回数 = 0;
+  操作口.onRevoked(() => {
+    失効回数 += 1;
+  });
+
+  fake.終了(started.info.localSessionId, { kind: "closed" });
+  expect(失効回数).toBe(1);
+  expect(core.listAssignments()).toEqual([]);
+});
+
+test("二重の失効で失効通知を繰り返さない", () => {
+  // 失効の冪等性を固定する。再通知があると資源の二重解放につながる。
+  const fake = new 偽サーバー();
+  const started = fake.開始Reliable("diag");
+  const { session, revoke } = wrapServerSession(started.session, started.info);
+  if (session.kind !== "reliable") throw new Error("reliable 操作口ではない。");
+
+  let 失効回数 = 0;
+  session.onRevoked(() => {
+    失効回数 += 1;
+  });
+
+  revoke();
+  expect(失効回数).toBe(1);
+  revoke();
+  expect(失効回数).toBe(1);
+});
+
+test("失効通知の例外は他の失効購読者へ波及しない", () => {
+  // 一つの後始末の失敗で他の後始末を止めないことを固定する。
+  const fake = new 偽サーバー();
+  const started = fake.開始Reliable("diag");
+  const { session, revoke } = wrapServerSession(started.session, started.info);
+  if (session.kind !== "reliable") throw new Error("reliable 操作口ではない。");
+
+  const 届いた: string[] = [];
+  session.onRevoked(() => {
+    throw new Error("失効購読者の失敗");
+  });
+  session.onRevoked(() => {
+    届いた.push("二人目");
+  });
+
+  expect(() => revoke()).not.toThrow();
+  expect(届いた).toEqual(["二人目"]);
 });

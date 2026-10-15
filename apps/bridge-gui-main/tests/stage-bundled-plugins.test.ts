@@ -3,7 +3,7 @@
  *
  * 壊れた資産のまま包装へ進ませないための検査である。欠落・余剰・pin 不一致
  * を包装前（`planStage`）に検出すること、pin 抽出が書式違いに耐えることを
- * 確かめる。負の検査は text／diagnostic の両種別で機能することを確かめ、
+ * 確かめる。負の検査は text／diagnostic／udp の三種別で機能することを確かめ、
  * 片方の種別だけが守られる取違えを防ぐ。正規配置の成功系・staged の観測
  * 残存検査は実配置で確かめ、build 前で完成資産が無い場合は落とす
  * （黙って通さない。空検査での成功扱いを見逃さない）。
@@ -23,6 +23,7 @@ import {
   EXPECTED_VIEW_FILES,
   STAGED_DIAGNOSTIC_DIR,
   STAGED_TEXT_DIR,
+  STAGED_UDP_DIR,
   extractElectrobunPin,
   planAllStages,
   planStage,
@@ -35,8 +36,8 @@ function packagePath(relative: string): string {
   return fileURLToPath(new URL(`../${relative}`, import.meta.url));
 }
 
-/** staging 対象の全種別。負の検査を両方で回す材料である。 */
-const STAGED_KINDS = ["text", "diagnostic"] as const;
+/** staging 対象の全種別。負の検査を三種別で回す材料である。 */
+const STAGED_KINDS = ["text", "diagnostic", "udp"] as const;
 
 /** 検証用の仮配置を作る。pin と完成資産の有無を切替える材料である。 */
 function makeFixture(options: {
@@ -79,6 +80,7 @@ test("種別から staging 配置と package 名が決まる", () => {
   // 新種別の追加時に staging script への分岐追加を見逃す。
   expect(stagedDirFor("text")).toBe(STAGED_TEXT_DIR);
   expect(stagedDirFor("diagnostic")).toBe(STAGED_DIAGNOSTIC_DIR);
+  expect(stagedDirFor("udp")).toBe(STAGED_UDP_DIR);
 });
 
 test("同梱表の staging 配置は stage script の規則と一致する", () => {
@@ -93,7 +95,7 @@ test("同梱表の staging 配置は stage script の規則と一致する", () 
   }
 });
 
-test("正規配置の staging 計画は両種別で完成資産3件と pin 一致を持つ", async () => {
+test("正規配置の staging 計画は三種別で完成資産3件と pin 一致を持つ", async () => {
   // build 前で完成資産が無ければ落とす（黙って通さない・skip しない）。
   // この検査が無いと build 前の空検査で staging 経路の崩れを見逃す。
   for (const kind of STAGED_KINDS) {

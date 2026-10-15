@@ -27,12 +27,12 @@ afterEach(async () => {
   }
 });
 
-test("backend ごとの登録表は同梱の二種別を登録順に載せる", async () => {
+test("backend ごとの登録表は同梱の三種別を登録順に載せる", async () => {
   const backend = await GuiBackend.create({ port: 0 }, { registerPlugins: registerBundledPlugins });
   backends.push(backend);
   expect(backend.getSnapshot().backend).toBe("ready");
   const kinds = backend.companionRegistry.list().map((companion) => companion.kind);
-  expect(kinds).toEqual(["text", "diagnostic"]);
+  expect(kinds).toEqual(["text", "diagnostic", "udp"]);
 });
 
 test("backend ごとに登録表を作り共有しない", async () => {
@@ -43,10 +43,12 @@ test("backend ごとに登録表を作り共有しない", async () => {
   expect(first.companionRegistry.list().map((companion) => companion.kind)).toEqual([
     "text",
     "diagnostic",
+    "udp",
   ]);
   expect(second.companionRegistry.list().map((companion) => companion.kind)).toEqual([
     "text",
     "diagnostic",
+    "udp",
   ]);
 });
 
@@ -124,11 +126,12 @@ test("試験用の登録表は backend の表を汚さない", async () => {
     buildRequestHandlers: () => ({}),
   });
   expect(registry.get("stubx")?.pushMessageName).toBe("stubxStateChanged");
-  // backend の表には載らず、同梱の二種別のままである。
+  // backend の表には載らず、同梱の三種別のままである。
   expect(backend.companionRegistry.get("stubx")).toBeUndefined();
   expect(backend.companionRegistry.list().map((companion) => companion.kind)).toEqual([
     "text",
     "diagnostic",
+    "udp",
   ]);
   // 形式外・重複の登録は拒否する。
   expect(() =>

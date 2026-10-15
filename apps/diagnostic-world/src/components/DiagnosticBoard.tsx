@@ -7,9 +7,10 @@
  * の表示→取消・切断の操作だけを持つ。新しい Canvas・Physics・XRiftProvider は
  * 生成しない。DOM 要素の探索・追加・変更もしない（表示用 canvas は文書に
  * 追加しない分離物である）。診断の通信・集計は `DiagnosticSession` を共用し、
- * UI 層に通信を持たない。テキスト受信（`TextReceiver`）はこの盤だけが所有し、
- * 認可済み管理口から専用セッション（論理名 `text`）を開いて直近本文を隣の
- * 表示板（`TextBoard`）に出す。開発 DOM パネル側では生成しない。比較コード・
+ * UI 層に通信を持たない。テキスト受信（`TextReceiver`）とUDP受信（`UdpReceiver`）は
+ * この盤だけが所有し、認可済み管理口から専用セッション（論理名 `text`・`udp`）を開いて
+ * 直近本文・直近データグラムを隣の表示板（`TextBoard`・`UdpBoard`）に出す。
+ * 開発 DOM パネル側では生成しない。比較コード・
  * 診断状態を `useInstanceState` 等で他利用者へ同期しない。
  *
  * @packageDocumentation
@@ -23,7 +24,9 @@ import { DEFAULT_PORT, buildEndpoint, parsePortInput } from "../diagnostic/endpo
 import type { DiagnosticEnv } from "../diagnostic/session.ts";
 import { useDiagnosticSession } from "../diagnostic/useDiagnosticSession.ts";
 import { useTextReceiver } from "../text/useTextReceiver.ts";
+import { useUdpReceiver } from "../udp/useUdpReceiver.ts";
 import { TextBoard } from "./TextBoard.tsx";
+import { UdpBoard } from "./UdpBoard.tsx";
 
 /** 操作盤の入力。 */
 export interface DiagnosticBoardProps {
@@ -199,9 +202,10 @@ export function DiagnosticBoard(props: DiagnosticBoardProps): React.JSX.Element 
     env: props.env,
     build: props.build,
   });
-  // ADR: テキスト受信は3D盤側だけが所有する。認可済み管理口から専用セッションを
-  // 開き、切断・再接続では本文を消す。開発 DOM パネル側では生成しない。
+  // ADR: テキスト受信・UDP受信は3D盤側だけが所有する。認可済み管理口から専用
+  // セッションを開き、切断・再接続では直近を消す。開発 DOM パネル側では生成しない。
   const { snapshot: textSnapshot } = useTextReceiver({ session, snapshot });
+  const { snapshot: udpSnapshot } = useUdpReceiver({ session, snapshot });
 
   const phase = snapshot?.phase ?? null;
   const lines = useMemo<readonly string[]>(
@@ -349,6 +353,7 @@ export function DiagnosticBoard(props: DiagnosticBoardProps): React.JSX.Element 
         </Interactable>
       </group>
       <TextBoard snapshot={textSnapshot} />
+      <UdpBoard snapshot={udpSnapshot} />
     </>
   );
 }

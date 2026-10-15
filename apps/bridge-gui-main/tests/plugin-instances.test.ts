@@ -13,6 +13,7 @@ import { afterEach, expect, test } from "vite-plus/test";
 import { DIAGNOSTIC_PORT_ID } from "bridge-plugin-diagnostic";
 import { TEXT_PORT_ID, type TextSendResult } from "bridge-plugin-text";
 import { TEXT_SESSION_ID } from "bridge-plugin-text/contract";
+import { DIAGNOSTIC_ECHO_SESSION_ID } from "bridge-plugin-diagnostic/contract";
 import { createConnectionRequest, type SessionProvider } from "world-client";
 import type { InstanceBaseView } from "bridge-gui-contract/plugin-instance";
 import { GuiBackend } from "../src/main/backend.ts";
@@ -547,7 +548,7 @@ test("実バックエンドの診断射影が自個体の統計だけを返す",
   const provider = await approveConnection(backend);
   const before = backend.getSnapshot().sessions.length;
   const session = await provider.tryCreateSession({
-    sessionId: "gui-instance-diag",
+    sessionId: DIAGNOSTIC_ECHO_SESSION_ID,
     kind: "reliable",
     direction: "bidirectional",
   });

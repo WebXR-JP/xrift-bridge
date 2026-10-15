@@ -15,6 +15,11 @@ import { afterEach, expect, test } from "vite-plus/test";
 import { TEXT_PORT_ID } from "bridge-plugin-text";
 import type { TextSendResult } from "bridge-plugin-text";
 import { TEXT_SESSION_ID, isTextShowRequest } from "bridge-plugin-text/contract";
+import {
+  DIAGNOSTIC_ECHO_SESSION_ID,
+  DIAGNOSTIC_PING_SESSION_ID,
+} from "bridge-plugin-diagnostic/contract";
+import { UDP_SESSION_ID } from "bridge-plugin-udp/contract";
 import { createConnectionRequest, type ReliableSession, type SessionProvider } from "world-client";
 import { GuiBackend } from "../src/main/backend.ts";
 import { registerBundledPlugins } from "../src/composition/bundled-plugins.ts";
@@ -384,29 +389,51 @@ test("明示解除は割当て表示を消して送信できなくする", async
   ).toEqual({ released: false, issues: [] });
 });
 
-test("診断とテキストは互いを対象外にする", async () => {
+test("テキストはtextのみ・診断はdiag-echoとdiag-pingのみを対象にする", async () => {
   const backend = await startBackend();
   backend.enableAcceptance();
   const provider = await approveConnection(backend);
-  await createSessions(backend, provider, [TEXT_SESSION_ID, "other"]);
+  await createSessions(backend, provider, [
+    TEXT_SESSION_ID,
+    DIAGNOSTIC_ECHO_SESSION_ID,
+    DIAGNOSTIC_PING_SESSION_ID,
+    UDP_SESSION_ID,
+  ]);
   const sessions = backend.getSnapshot().sessions;
   const textSession = sessions.find((info) => info.sessionId === TEXT_SESSION_ID);
-  const otherSession = sessions.find((info) => info.sessionId === "other");
-  if (textSession === undefined || otherSession === undefined) {
+  const echoSession = sessions.find((info) => info.sessionId === DIAGNOSTIC_ECHO_SESSION_ID);
+  const pingSession = sessions.find((info) => info.sessionId === DIAGNOSTIC_PING_SESSION_ID);
+  const udpSession = sessions.find((info) => info.sessionId === UDP_SESSION_ID);
+  if (
+    textSession === undefined ||
+    echoSession === undefined ||
+    pingSession === undefined ||
+    udpSession === undefined
+  ) {
     throw new Error("検証用のセッションが無い。");
   }
 
-  // テキスト表示用のセッションに診断は割り当てない。
+  // テキスト表示用・UDP・診断外の論理名に診断は割り当てない。
+  // 診断の allowlist（diag-echo／diag-ping）のみを通す。
   expect(() =>
     backend.assignPlugin({ pluginKind: "diagnostic", localSessionId: textSession.localSessionId }),
   ).toThrowError(RangeError);
-  // 他用途のセッションへの診断は通る。
-  const diagnostics = backend.assignPlugin({
+  expect(() =>
+    backend.assignPlugin({ pluginKind: "diagnostic", localSessionId: udpSession.localSessionId }),
+  ).toThrowError(RangeError);
+  // 診断の allowlist 内は診断の対象になる。
+  const echoDiagnostics = backend.assignPlugin({
     pluginKind: "diagnostic",
-    localSessionId: otherSession.localSessionId,
+    localSessionId: echoSession.localSessionId,
   });
-  expect(diagnostics.portId).toBe("diagnostic");
-  // 診断済みがあってもテキスト候補の一件判定は崩れない。
+  expect(echoDiagnostics.portId).toBe("diagnostic");
+  const pingDiagnostics = backend.assignPlugin({
+    pluginKind: "diagnostic",
+    localSessionId: pingSession.localSessionId,
+  });
+  expect(pingDiagnostics.portId).toBe("diagnostic");
+  // テキストは text のみを対象にし、診断・UDP の割当てがあっても
+  // テキスト候補の一件判定は崩れない。
   const assignment = backend.assignPlugin({ pluginKind: "text" });
   expect(assignment.localSessionId).toBe(textSession.localSessionId);
   expect(assignment.portId).toBe(TEXT_PORT_ID);

@@ -10,7 +10,7 @@
  */
 import { DIAGNOSTIC_PORT_ID, diagnosticPlugin } from "./index.ts";
 import type { DiagnosticStats } from "./index.ts";
-import { TEXT_SESSION_ID } from "bridge-plugin-text/contract";
+import { isDiagnosticSessionId } from "./contract.ts";
 import type {
   GuiPluginAccess,
   GuiPluginManagementDescriptor,
@@ -37,8 +37,8 @@ export type DiagnosticManagementOperations = Record<string, never>;
 /**
  * 診断の管理記述子。`definition: diagnosticPlugin`、`maxInstances: null`。
  *
- * 候補は生存・未割当て・reliable/bidirectional・`sessionId!==TEXT_SESSION_ID`
- * である。`mode:"session"` は適格候補から指定個体を選び、`mode:"auto"` は
+ * 候補は生存・未割当て・reliable/bidirectional・診断の論理名
+ * （`DIAGNOSTIC_SESSION_IDS` に含まれるもの）である。`mode:"session"` は適格候補から指定個体を選び、`mode:"auto"` は
  * 唯一候補のみ（先頭選択・一括割当てはしない）。監視は周期照合（500ms、
  * 指紋は診断統計二項目のみ）で行う。
  */
@@ -57,7 +57,7 @@ export const diagnosticManagement: GuiPluginManagementDescriptor<
         (candidate) =>
           candidate.alive &&
           candidate.assignment === null &&
-          candidate.sessionId !== TEXT_SESSION_ID &&
+          isDiagnosticSessionId(candidate.sessionId) &&
           candidate.capability.kind === "reliable" &&
           candidate.capability.direction === "bidirectional",
       );

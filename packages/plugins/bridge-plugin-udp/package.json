@@ -1,0 +1,40 @@
+{
+  "name": "bridge-plugin-udp",
+  "version": "0.0.0",
+  "private": true,
+  "description": "UDP受信転送プラグインの本体・通信契約・子画面。完成資産（dist/view）だけを bridge-gui-main が staging 経由で同梱する。",
+  "license": "MIT",
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./dist/index.mjs",
+    "./assets": "./dist/assets.mjs",
+    "./contract": "./dist/contract.mjs",
+    "./gui": "./dist/gui.mjs",
+    "./gui-contract": "./dist/gui-contract.mjs",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "hutch electrobun prepare && tsc --noEmit -p tsconfig.json && vp pack && vp build --config vite.view.config.ts",
+    "dev": "vp pack --watch",
+    "test": "vp test",
+    "test:types": "tsc --noEmit -p tsconfig.json",
+    "check": "vp check",
+    "gui:prepare": "hutch electrobun prepare",
+    "prepublishOnly": "vp run build"
+  },
+  "dependencies": {
+    "bridge-app-core": "workspace:*",
+    "bridge-gui-contract": "workspace:*",
+    "bridge-gui-plugin-sdk": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "catalog:",
+    "bridge-protocol": "workspace:*",
+    "bridge-server": "workspace:*",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  }
+}

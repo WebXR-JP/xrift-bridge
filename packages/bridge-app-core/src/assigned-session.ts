@@ -57,6 +57,17 @@ export interface AssignedReliableSession {
    */
   onRemoteEnd(handler: () => void): Unsubscribe;
   /**
+   * 失効を購読する。一度だけ通知する。
+   *
+   * 解除・削除・終了・基盤終了のいずれで失効しても、終端購読とは別に
+   * 届く。資源の後始末用であり、終端内容は含まない。
+   *
+   * @param handler - 失効時の処理。例外は隔離する。
+   * @returns 購読解除。
+   * @throws `RangeError` — 失効済みの場合。
+   */
+  onRevoked(handler: () => void): Unsubscribe;
+  /**
    * 確実に届けたい値を送る。
    *
    * @param value - 配送する JSON 値（`null` を含む）。
@@ -119,6 +130,17 @@ export interface AssignedLatestReceiverSession {
    */
   onRemoteEnd(handler: () => void): Unsubscribe;
   /**
+   * 失効を購読する。一度だけ通知する。
+   *
+   * 解除・削除・終了・基盤終了のいずれで失効しても、終端購読とは別に
+   * 届く。資源の後始末用であり、終端内容は含まない。
+   *
+   * @param handler - 失効時の処理。例外は隔離する。
+   * @returns 購読解除。
+   * @throws `RangeError` — 失効済みの場合。
+   */
+  onRevoked(handler: () => void): Unsubscribe;
+  /**
    * 送信方向を正常終了する（FIN）。
    *
    * @returns FIN 送出の完了で解ける約束。失効済みなら `RangeError` で拒否する。
@@ -165,6 +187,17 @@ export interface AssignedLatestSenderSession {
    * @throws `RangeError` — 失効済みの場合。
    */
   onRemoteEnd(handler: () => void): Unsubscribe;
+  /**
+   * 失効を購読する。一度だけ通知する。
+   *
+   * 解除・削除・終了・基盤終了のいずれで失効しても、終端購読とは別に
+   * 届く。資源の後始末用であり、終端内容は含まない。
+   *
+   * @param handler - 失効時の処理。例外は隔離する。
+   * @returns 購読解除。
+   * @throws `RangeError` — 失効済みの場合。
+   */
+  onRevoked(handler: () => void): Unsubscribe;
   /**
    * 最新の状態を送る（同期受付）。
    *
@@ -231,6 +264,7 @@ abstract class AssignedSessionBase {
   private readonly messageHandlers = new Set<(payload: unknown) => void>();
   private readonly endHandlers = new Set<(end: SessionEnd) => void>();
   private readonly remoteEndHandlers = new Set<() => void>();
+  private readonly revokedHandlers = new Set<() => void>();
 
   /**
    * @param raw - 委譲先の生 Session。外部へ露出しない。
@@ -302,14 +336,28 @@ abstract class AssignedSessionBase {
    *
    * 購読者集合の破棄を先に行ってから生 Session 側の購読を解除する。
    * 配送中のスナップショット側の確認（`revoked` 標識）と合わせ、
-   * 失効済み購読者へは届けない。
+   * 失効済み購読者へは届けない。失効購読者へは一度だけ同期通知する。
    */
   revoke(): void {
     if (this.revoked) return;
     this.revoked = true;
+    // ADR: 失効購読の通知は終端購読の配送とは別に行う。`revoke()` は終端
+    // 購読を先に消すため、解除経路では `onEnd` が届かない場合がある。
+    // 失効したことだけを一度通知し、資源の後始末（UDP ソケットの close 等）
+    // を確実に行えるようにする。通知後の再入（`onRevoked` 登録）は
+    // `revoked` 標識で拒否し、二重通知はしない。
+    const revokedSnapshot = [...this.revokedHandlers];
     this.messageHandlers.clear();
     this.endHandlers.clear();
     this.remoteEndHandlers.clear();
+    this.revokedHandlers.clear();
+    for (const handler of revokedSnapshot) {
+      try {
+        handler();
+      } catch {
+        // 購読者の例外で配送を止めない。
+      }
+    }
     for (const unsubscribe of this.rawUnsubs.splice(0)) {
       try {
         unsubscribe();
@@ -365,6 +413,21 @@ abstract class AssignedSessionBase {
   }
 
   /**
+   * 失効購読を登録する。
+   *
+   * @param handler - 失効時の処理。
+   * @returns 購読解除。
+   * @throws `RangeError` — 失効済みの場合。
+   */
+  protected addRevokedHandler(handler: () => void): Unsubscribe {
+    if (this.revoked) throw new RangeError(revokedReason("購読の登録はできない"));
+    this.revokedHandlers.add(handler);
+    return () => {
+      this.revokedHandlers.delete(handler);
+    };
+  }
+
+  /**
    * 失効を確認して生 Session の送信終了へ委譲する。
    *
    * @returns FIN 送出の完了で解ける約束。失効済みなら拒否する。
@@ -412,6 +475,11 @@ class ReliableAssignedSession extends AssignedSessionBase implements AssignedRel
   /** {@inheritDoc AssignedReliableSession.onRemoteEnd} */
   onRemoteEnd(handler: () => void): Unsubscribe {
     return this.addRemoteEndHandler(handler);
+  }
+
+  /** {@inheritDoc AssignedReliableSession.onRevoked} */
+  onRevoked(handler: () => void): Unsubscribe {
+    return this.addRevokedHandler(handler);
   }
 
   /** {@inheritDoc AssignedReliableSession.sendReliable} */
@@ -463,6 +531,11 @@ class LatestReceiverAssignedSession
   /** {@inheritDoc AssignedLatestReceiverSession.onRemoteEnd} */
   onRemoteEnd(handler: () => void): Unsubscribe {
     return this.addRemoteEndHandler(handler);
+  }
+
+  /** {@inheritDoc AssignedLatestReceiverSession.onRevoked} */
+  onRevoked(handler: () => void): Unsubscribe {
+    return this.addRevokedHandler(handler);
   }
 
   /** {@inheritDoc AssignedLatestReceiverSession.closeWrite} */

@@ -13,6 +13,10 @@
  * @packageDocumentation
  */
 import {
+  DIAGNOSTIC_ECHO_SESSION_ID,
+  DIAGNOSTIC_PING_SESSION_ID,
+} from "bridge-plugin-diagnostic/contract";
+import {
   WorldClientError,
   createConnectionRequest as defaultCreateConnectionRequest,
   parseBridgeEndpoint,
@@ -24,11 +28,11 @@ import {
 } from "world-client";
 import type { DiagnosticBuildInfo } from "../build-info.ts";
 
-/** echo 往復に使う Session の論理名。 */
-export const ECHO_SESSION_ID = "diag-echo";
+/** echo 往復に使う Session の論理名。診断プラグイン契約の別名である。 */
+export const ECHO_SESSION_ID = DIAGNOSTIC_ECHO_SESSION_ID;
 
-/** ping に使う Session の論理名。 */
-export const PING_SESSION_ID = "diag-ping";
+/** ping に使う Session の論理名。診断プラグイン契約の別名である。 */
+export const PING_SESSION_ID = DIAGNOSTIC_PING_SESSION_ID;
 
 /**
  * echo・ping の応答待ちの上限（ミリ秒）。

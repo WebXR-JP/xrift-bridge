@@ -1,9 +1,9 @@
 /**
  * 同梱プラグインの選択と登録順の宣言（composition root）。
  *
- * backend が具象を知らずに済むよう、同梱の選択と登録順（text→diagnostic）、
+ * backend が具象を知らずに済むよう、同梱の選択と登録順（text→diagnostic→udp）、
  * 管理記述子・companion factory の対応付けをここに宣言する。各プラグインの
- * GUI 登録口（`bridge-plugin-text/gui`・`bridge-plugin-diagnostic/gui`）を import してよいのはここだけであり、
+ * GUI 登録口（`bridge-plugin-text/gui`・`bridge-plugin-diagnostic/gui`・`bridge-plugin-udp/gui`）を import してよいのはここだけであり、
  * `main` 配下は汎用の登録関数だけを受け取る。登録済みインスタンスや
  * registry singleton を持たず、呼ぶたびに新しい companion・公開参照口を作る
  * ため、同じ登録関数を複数 backend で使い回せる。
@@ -19,6 +19,7 @@ import type { PluginCompanion, PluginCompanionDeclaration } from "bridge-gui-plu
 import { BUNDLED_PLUGIN_ASSETS, resolveBundledViewPath } from "./bundled-plugin-assets.ts";
 import { createTextCompanion, textManagement } from "bridge-plugin-text/gui";
 import { createDiagnosticCompanion, diagnosticManagement } from "bridge-plugin-diagnostic/gui";
+import { createUdpCompanion, udpManagement } from "bridge-plugin-udp/gui";
 
 /**
  * 解決前の宣言に解決済み view パスを付与する。相対 entrypoint は manifest と
@@ -42,7 +43,7 @@ export function resolveCompanion(declaration: PluginCompanionDeclaration): Plugi
 }
 
 /**
- * 同梱プラグインを登録する。登録順は text→diagnostic であり、
+ * 同梱プラグインを登録する。登録順は text→diagnostic→udp であり、
  * 管理表示の種別表もこの順に生成される。
  *
  * @param registrar - backend が渡す汎用の登録口。
@@ -55,6 +56,10 @@ export function registerBundledPlugins(registrar: GuiPluginRegistrar): void {
   registrar.registerPlugin({
     management: diagnosticManagement,
     createCompanion: (access) => resolveCompanion(createDiagnosticCompanion(access)),
+  });
+  registrar.registerPlugin({
+    management: udpManagement,
+    createCompanion: (access) => resolveCompanion(createUdpCompanion(access)),
   });
 }
 

@@ -11,6 +11,11 @@ import { expect, test } from "vite-plus/test";
 import { diagnosticPlugin } from "bridge-plugin-diagnostic";
 import { textPlugin } from "bridge-plugin-text";
 import { TEXT_SESSION_ID } from "bridge-plugin-text/contract";
+import {
+  DIAGNOSTIC_ECHO_SESSION_ID,
+  DIAGNOSTIC_PING_SESSION_ID,
+} from "bridge-plugin-diagnostic/contract";
+import { UDP_SESSION_ID } from "bridge-plugin-udp/contract";
 import { PluginInstanceManager } from "../src/main/plugin-instance-manager.ts";
 import type {
   PluginAssignmentCandidate,
@@ -223,8 +228,8 @@ test("診断記述子は生成元と上限なしを持つ", () => {
 
 test("診断選択は指定方式で適格候補から指定個体を選ぶ", () => {
   const candidates = [
-    candidateOf({ localSessionId: "local-1", sessionId: "work-1" }),
-    candidateOf({ localSessionId: "local-2", sessionId: "work-2" }),
+    candidateOf({ localSessionId: "local-1", sessionId: DIAGNOSTIC_ECHO_SESSION_ID }),
+    candidateOf({ localSessionId: "local-2", sessionId: DIAGNOSTIC_PING_SESSION_ID }),
   ];
   expect(
     diagnosticManagement.assignment.select({
@@ -250,11 +255,35 @@ test("診断選択は指定方式で適格候補から指定個体を選ぶ", ()
   ).toThrowError(RangeError);
 });
 
+test("診断選択はallowlist外（text・udp・その他）を候補にしない", () => {
+  // allowlist（diag-echo／diag-ping）のみを対象とし、text・udp・任意名を
+  // 診断の候補にしない。指定・自動のいずれでも通さない。
+  for (const sessionId of [TEXT_SESSION_ID, UDP_SESSION_ID, "work-1"]) {
+    const candidates = [candidateOf({ localSessionId: "local-1", sessionId })];
+    expect(() =>
+      diagnosticManagement.assignment.select({
+        request: { mode: "session", localSessionId: "local-1" },
+        candidates,
+        bindings: [],
+      }),
+    ).toThrowError(RangeError);
+    expect(() =>
+      diagnosticManagement.assignment.select({
+        request: { mode: "auto" },
+        candidates,
+        bindings: [],
+      }),
+    ).toThrowError(RangeError);
+  }
+});
+
 test("診断選択の自動方式は唯一候補のみで先頭選択しない", () => {
   expect(
     diagnosticManagement.assignment.select({
       request: { mode: "auto" },
-      candidates: [candidateOf({ localSessionId: "local-1", sessionId: "work-1" })],
+      candidates: [
+        candidateOf({ localSessionId: "local-1", sessionId: DIAGNOSTIC_ECHO_SESSION_ID }),
+      ],
       bindings: [],
     }),
   ).toEqual({ localSessionId: "local-1", portId: "diagnostic" });
@@ -270,8 +299,8 @@ test("診断選択の自動方式は唯一候補のみで先頭選択しない",
     diagnosticManagement.assignment.select({
       request: { mode: "auto" },
       candidates: [
-        candidateOf({ localSessionId: "local-1", sessionId: "work-1" }),
-        candidateOf({ localSessionId: "local-2", sessionId: "work-2" }),
+        candidateOf({ localSessionId: "local-1", sessionId: DIAGNOSTIC_ECHO_SESSION_ID }),
+        candidateOf({ localSessionId: "local-2", sessionId: DIAGNOSTIC_PING_SESSION_ID }),
       ],
       bindings: [],
     }),
@@ -343,7 +372,7 @@ test("診断の周期監視は偽時計の間隔で駆動する", () => {
         {
           localSessionId: "local-9",
           connectionId: "connection-9",
-          sessionId: "work-9",
+          sessionId: DIAGNOSTIC_ECHO_SESSION_ID,
           capability: { kind: "reliable", direction: "bidirectional" },
           alive: true,
         },

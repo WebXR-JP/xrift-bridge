@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width" />
+    <title>UDP受信の子画面</title>
+    <link rel="stylesheet" href="index.css" />
+  </head>
+  <body>
+    <main class="plugin-udp">
+      <h1>UDP受信</h1>
+      <dl>
+        <div>
+          <dt>割当て先</dt>
+          <dd id="udp-assignment">未取得</dd>
+        </div>
+        <div>
+          <dt>状態</dt>
+          <dd id="udp-status">未取得</dd>
+        </div>
+        <div>
+          <dt>待受け先</dt>
+          <dd id="udp-bound">未取得</dd>
+        </div>
+        <div>
+          <dt>統計</dt>
+          <dd id="udp-stats">未取得</dd>
+        </div>
+        <div>
+          <dt>異常</dt>
+          <dd id="udp-lasterror">未取得</dd>
+        </div>
+        <div>
+          <dt>改訂番号</dt>
+          <dd id="udp-revision">未取得</dd>
+        </div>
+      </dl>
+      <div class="udp-form">
+        <label for="udp-address">待受けアドレス（数値リテラルのみ）</label>
+        <input id="udp-address" type="text" value="127.0.0.1" placeholder="127.0.0.1 または ::1" />
+        <label for="udp-port">待受けポート（1..65535）</label>
+        <input id="udp-port" type="text" value="41234" inputmode="numeric" placeholder="41234" />
+        <label class="check">
+          <input id="udp-allow-non-loopback" type="checkbox" />
+          非 loopback への bind を許す
+        </label>
+        <p id="udp-warn" class="warn" aria-live="polite"></p>
+        <div class="row">
+          <button type="button" id="udp-start">開始する</button>
+          <button type="button" id="udp-stop">停止する</button>
+        </div>
+        <p id="udp-error" class="error" aria-live="polite"></p>
+      </div>
+    </main>
+    <script src="index.js" type="module"></script>
+  </body>
+</html>

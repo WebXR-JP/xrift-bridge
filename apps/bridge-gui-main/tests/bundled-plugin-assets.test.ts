@@ -27,6 +27,8 @@ import { DIAGNOSTIC_PLUGIN_ASSET } from "bridge-plugin-diagnostic/assets";
 import { DIAGNOSTIC_VIEW_ENTRY } from "bridge-plugin-diagnostic/gui-contract";
 import { TEXT_PLUGIN_ASSET } from "bridge-plugin-text/assets";
 import { TEXT_VIEW_ENTRY } from "bridge-plugin-text/gui-contract";
+import { UDP_PLUGIN_ASSET } from "bridge-plugin-udp/assets";
+import { UDP_VIEW_ENTRY } from "bridge-plugin-udp/gui-contract";
 import electrobunConfig from "../electrobun.config.ts";
 
 const backends: GuiBackend[] = [];
@@ -50,10 +52,11 @@ function packagePath(relative: string): string {
 const DECLARED_ENTRIES: Record<string, { view: string }> = {
   text: { view: TEXT_VIEW_ENTRY },
   diagnostic: { view: DIAGNOSTIC_VIEW_ENTRY },
+  udp: { view: UDP_VIEW_ENTRY },
 };
 
 /** 各パッケージの純粋な資産宣言。manifest の導出元である。 */
-const PLUGIN_ASSETS = [TEXT_PLUGIN_ASSET, DIAGNOSTIC_PLUGIN_ASSET] as const;
+const PLUGIN_ASSETS = [TEXT_PLUGIN_ASSET, DIAGNOSTIC_PLUGIN_ASSET, UDP_PLUGIN_ASSET] as const;
 
 test("runtime 登録集合は静的 manifest 集合と一致する", async () => {
   const backend = await GuiBackend.create({ port: 0 }, { registerPlugins: registerBundledPlugins });

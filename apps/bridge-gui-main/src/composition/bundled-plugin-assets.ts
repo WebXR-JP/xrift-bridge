@@ -18,6 +18,7 @@
  */
 import { TEXT_PLUGIN_ASSET } from "bridge-plugin-text/assets";
 import { DIAGNOSTIC_PLUGIN_ASSET } from "bridge-plugin-diagnostic/assets";
+import { UDP_PLUGIN_ASSET } from "bridge-plugin-udp/assets";
 
 /**
  * 同梱プラグイン1件分の資産対応付け。
@@ -74,12 +75,13 @@ function deriveBundledPluginAsset(asset: {
 }
 
 /**
- * 同梱プラグイン資産の静的 manifest。登録順は text→diagnostic であり、
+ * 同梱プラグイン資産の静的 manifest。登録順は text→diagnostic→udp であり、
  * 管理表示の種別表もこの順に生成される。
  */
 export const BUNDLED_PLUGIN_ASSETS: readonly BundledPluginAssetEntry[] = [
   deriveBundledPluginAsset(TEXT_PLUGIN_ASSET),
   deriveBundledPluginAsset(DIAGNOSTIC_PLUGIN_ASSET),
+  deriveBundledPluginAsset(UDP_PLUGIN_ASSET),
 ];
 
 /**

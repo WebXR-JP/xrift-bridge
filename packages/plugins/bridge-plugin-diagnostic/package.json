@@ -11,6 +11,7 @@
   "exports": {
     ".": "./dist/index.mjs",
     "./assets": "./dist/assets.mjs",
+    "./contract": "./dist/contract.mjs",
     "./gui": "./dist/gui.mjs",
     "./gui-contract": "./dist/gui-contract.mjs",
     "./package.json": "./package.json"
@@ -28,7 +29,6 @@
     "bridge-app-core": "workspace:*",
     "bridge-gui-contract": "workspace:*",
     "bridge-gui-plugin-sdk": "workspace:*",
-    "bridge-plugin-text": "workspace:*",
     "bridge-protocol": "workspace:*"
   },
   "devDependencies": {

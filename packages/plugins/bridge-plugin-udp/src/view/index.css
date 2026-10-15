@@ -1,0 +1,54 @@
+.plugin-udp {
+  max-width: 40rem;
+  margin: 0 auto;
+  padding: 1rem;
+  font-family: sans-serif;
+}
+
+.plugin-udp dl > div {
+  display: flex;
+  gap: 1rem;
+  margin: 0.25rem 0;
+}
+
+.plugin-udp dt {
+  min-width: 6rem;
+  font-weight: bold;
+}
+
+.plugin-udp dd {
+  margin: 0;
+}
+
+.plugin-udp .udp-form {
+  margin-top: 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.plugin-udp .udp-form input[type="text"] {
+  width: 100%;
+  font: inherit;
+}
+
+.plugin-udp .check {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+}
+
+.plugin-udp .row {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.plugin-udp .error {
+  color: #a00;
+  min-height: 1.5em;
+}
+
+.plugin-udp .warn {
+  color: #7a4d00;
+  min-height: 1.5em;
+}

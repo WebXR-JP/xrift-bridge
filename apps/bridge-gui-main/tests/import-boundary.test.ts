@@ -148,6 +148,7 @@ function isBridgePluginSpecifier(specifier: string): boolean {
 const PUBLIC_PLUGIN_ENTRIES = new Set([
   "bridge-plugin-text",
   "bridge-plugin-diagnostic",
+  "bridge-plugin-udp",
   "bridge-plugin-text/contract",
   "bridge-plugin-text/gui",
   "bridge-plugin-text/gui-contract",
@@ -157,6 +158,11 @@ const PUBLIC_PLUGIN_ENTRIES = new Set([
   "bridge-plugin-diagnostic/gui-contract",
   "bridge-plugin-diagnostic/assets",
   "bridge-plugin-diagnostic/package.json",
+  "bridge-plugin-udp/contract",
+  "bridge-plugin-udp/gui",
+  "bridge-plugin-udp/gui-contract",
+  "bridge-plugin-udp/assets",
+  "bridge-plugin-udp/package.json",
 ]);
 
 /**
@@ -225,7 +231,11 @@ function importsConcreteAppCoreName(source: string): boolean {
   let matched: RegExpExecArray | null;
   while ((matched = NAMED_PATTERN.exec(source)) !== null) {
     const names = matched[1] ?? matched[3] ?? "";
-    if (/textPlugin|diagnosticPlugin|TEXT_|DIAGNOSTIC_|Text[A-Z]|Diagnostic[A-Z]/.test(names)) {
+    if (
+      /textPlugin|diagnosticPlugin|udpPlugin|TEXT_|DIAGNOSTIC_|UDP_|Text[A-Z]|Diagnostic[A-Z]|Udp[A-Z]/.test(
+        names,
+      )
+    ) {
       return true;
     }
     // 名前付き以外でも bare entry 自体は別検査で落とす。ここでは具象名だけを見る。
@@ -282,10 +292,15 @@ test("GUIのproduction sourceで具象プラグインをimportしてよいのは
   expect(
     registrationSpecifiers.some((specifier) => specifier === "bridge-plugin-diagnostic/gui"),
   ).toBe(true);
+  expect(registrationSpecifiers.some((specifier) => specifier === "bridge-plugin-udp/gui")).toBe(
+    true,
+  );
   // 登録口は `./gui` だけを使い、他 entry への迂回を持たない。
   for (const specifier of registrationSpecifiers.filter((s) => isBridgePluginSpecifier(s))) {
     expect(
-      specifier === "bridge-plugin-text/gui" || specifier === "bridge-plugin-diagnostic/gui",
+      specifier === "bridge-plugin-text/gui" ||
+        specifier === "bridge-plugin-diagnostic/gui" ||
+        specifier === "bridge-plugin-udp/gui",
       `登録口の参照先が ./gui ではない: ${specifier}`,
     ).toBe(true);
   }
@@ -296,9 +311,12 @@ test("GUIのproduction sourceで具象プラグインをimportしてよいのは
   expect(
     assetsSpecifiers.some((specifier) => specifier === "bridge-plugin-diagnostic/assets"),
   ).toBe(true);
+  expect(assetsSpecifiers.some((specifier) => specifier === "bridge-plugin-udp/assets")).toBe(true);
   for (const specifier of assetsSpecifiers.filter((s) => isBridgePluginSpecifier(s))) {
     expect(
-      specifier === "bridge-plugin-text/assets" || specifier === "bridge-plugin-diagnostic/assets",
+      specifier === "bridge-plugin-text/assets" ||
+        specifier === "bridge-plugin-diagnostic/assets" ||
+        specifier === "bridge-plugin-udp/assets",
       `資産参照先が ./assets ではない: ${specifier}`,
     ).toBe(true);
   }
@@ -379,7 +397,7 @@ test("coreに具象公開と逆依存を残さない", () => {
     // 具象名の再 export が無いこと。コメント中の言及は対象外とし、
     // export 文だけを検査する（迂回の見逃し防止である）。
     expect(
-      /export\s+[^;]*\b(?:textPlugin|diagnosticPlugin|TEXT_PLUGIN_ID|DIAGNOSTIC_PLUGIN_ID)\b/.test(
+      /export\s+[^;]*\b(?:textPlugin|diagnosticPlugin|udpPlugin|TEXT_PLUGIN_ID|DIAGNOSTIC_PLUGIN_ID|UDP_PLUGIN_ID)\b/.test(
         source,
       ),
       `core の公開先に具象名の再 export がある: ${absolute}`,
@@ -408,7 +426,7 @@ test("coreに具象公開と逆依存を残さない", () => {
 });
 
 test("プラグインはホストソースとcompositionと他パッケージの内部ソースを参照しない", () => {
-  for (const kind of ["text", "diagnostic"] as const) {
+  for (const kind of ["text", "diagnostic", "udp"] as const) {
     const pluginDir = packagesPath(`plugins/bridge-plugin-${kind}`);
     const sources = listProductionSources(pluginDir, [...SOURCE_EXTENSIONS]);
     expect(sources.length).toBeGreaterThan(0);
@@ -529,10 +547,15 @@ test("共有契約にプラグイン固有のURL直書きを残さない", () =>
   }
 });
 
-test("ワールドはtextの通信契約entryのみを利用する", () => {
+test("ワールドは通信契約entryのみを利用する", () => {
   // 再帰列挙で将来の追加を見逃さない。root・GUI entry・Electrobun・
-  // サーバー実装の引込みを禁じ、通信契約 entry のみを許す。bare 参照と
-  // 相対参照の解決先の両方を見る。相対書換えによる迂回を見逃さないためである。
+  // サーバー実装の引込みを禁じ、通信契約 entry（text・udp・diagnostic）のみを許す。
+  // bare 参照と相対参照の解決先の両方を見る。相対書換えによる迂回を見逃さないためである。
+  const allowedContracts = new Set([
+    "bridge-plugin-text/contract",
+    "bridge-plugin-udp/contract",
+    "bridge-plugin-diagnostic/contract",
+  ]);
   const worldSources = listProductionSources(appsPath("diagnostic-world/src"), [
     ...SOURCE_EXTENSIONS,
   ]);
@@ -544,9 +567,9 @@ test("ワールドはtextの通信契約entryのみを利用する", () => {
         resolvesToBridgePluginPackage(absolute, specifier)
       ) {
         expect(
-          specifier,
+          allowedContracts.has(specifier),
           `ワールドの具象参照は通信契約 entry のみである: ${absolute} <- ${specifier}`,
-        ).toBe("bridge-plugin-text/contract");
+        ).toBe(true);
       }
       expect(
         specifier === "electrobun" || specifier.startsWith("electrobun/"),
@@ -559,10 +582,18 @@ test("ワールドはtextの通信契約entryのみを利用する", () => {
     }
   }
   // 許容パターンの存在自体を固定する（検査の空洞化防止である）。
-  const usesContract = worldSources.some((absolute) =>
-    extractSpecifiers(readSource(absolute)).includes("bridge-plugin-text/contract"),
-  );
-  expect(usesContract).toBe(true);
+  // text・udp・diagnostic の各契約 entry を実際に使うことを確かめ、
+  // 未使用の許容を残さない。`.../gui`・`.../assets`・本体 entry の参照は
+  // 上の具象検査で落とす（許容集合に含めない）。
+  const usedContracts = new Set<string>();
+  for (const absolute of worldSources) {
+    for (const specifier of extractSpecifiers(readSource(absolute))) {
+      if (allowedContracts.has(specifier)) {
+        usedContracts.add(specifier);
+      }
+    }
+  }
+  expect([...usedContracts].sort()).toEqual([...allowedContracts].sort());
 });
 
 test("SDK生成宣言にホストソースパスを残さない", () => {
@@ -622,6 +653,7 @@ test("production sourceにrequireによる迂回を残さない", () => {
     ...listProductionSources(packagesPath("plugins/bridge-plugin-diagnostic/src"), [
       ...SOURCE_EXTENSIONS,
     ]),
+    ...listProductionSources(packagesPath("plugins/bridge-plugin-udp/src"), [...SOURCE_EXTENSIONS]),
     ...listProductionSources(appsPath("diagnostic-world/src"), [...SOURCE_EXTENSIONS]),
   ];
   expect(targets.length).toBeGreaterThan(0);
