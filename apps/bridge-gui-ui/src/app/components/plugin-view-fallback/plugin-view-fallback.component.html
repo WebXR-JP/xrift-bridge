@@ -1,4 +1,4 @@
-<!-- 子画面スロットの代替表示。ready のときは状態文を出さず子画面のみにする。 -->
+<!-- 子画面スロットの代替表示。応答済みのときは状態文を出さず子画面のみにする。 -->
 @switch (state().kind) {
   @case ("loading") {
     <p class="m-0 text-[12px] text-[var(--muted-foreground)]">
@@ -65,5 +65,5 @@
       このプラグインは操作できません。アプリ終了時に回収を試みます。
     </p>
   }
-  @case ("ready") {}
+  @case ("answered") {}
 }

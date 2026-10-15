@@ -143,8 +143,8 @@ body {
   flex: 1 1 320px;
 }
 
-/* ADR: `#plugin-host` を `@if` に入れず常時置く。表示の差替えは重ね順だけ
- * で行い、タグの再生成・移動・`src` 再設定をしない。 */
+/* ADR: `#plugin-host` を `@if` に入れず常時置く。表示期間が替われば内部の
+ * 子タグは破棄して作り直し、表示の差替えは行わない。 */
 #plugin-host {
   position: absolute;
   inset: 0;
@@ -152,10 +152,9 @@ body {
 }
 
 #plugin-host electrobun-webview {
-  /* ADR: 全タグをホストと同一矩形に重ねる。複数個体のタグは通常フローでは
-   * 縦に積まれ、2つ目以降の矩形が1つ目の高さぶん下にずれる（native 子ビュー
-   * もその矩形に置かれる）。非選択タグの非表示は `toggleHidden` に任せ、
-   * ここでは重ね順だけで切り替える（`hidden` 属性・`display:none` は使わない）。 */
+  /* ADR: タグをホストと同一矩形に重ねる。表示期間ごとに作り直すため、
+   * 通常は1つのタグだけが置かれる。`hidden` 属性・`display:none` による
+   * 隠し置きはしない。 */
   position: absolute;
   inset: 0;
   width: 100%;

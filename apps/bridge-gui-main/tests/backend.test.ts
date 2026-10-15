@@ -12,7 +12,10 @@ import { afterEach, expect, test } from "vite-plus/test";
 import { formatPairingCode } from "bridge-protocol";
 import { createConnectionRequest, type ReliableSession, type SessionProvider } from "world-client";
 import { GuiBackend } from "../src/main/backend.ts";
-import { registerBundledPlugins } from "../src/composition/bundled-plugins.ts";
+import {
+  registerBundledPlugins,
+  resolveBundledPluginViewPath,
+} from "../src/composition/bundled-plugins.ts";
 import { DIAGNOSTIC_ECHO_SESSION_ID } from "bridge-plugin-diagnostic/contract";
 
 const TEST_ORIGIN = "https://gui-test.invalid";
@@ -43,7 +46,10 @@ afterEach(async () => {
 async function startBackend(): Promise<GuiBackend> {
   const backend = await GuiBackend.create(
     { port: 0, allowedOrigins: [TEST_ORIGIN] },
-    { registerPlugins: registerBundledPlugins },
+    {
+      registerPlugins: registerBundledPlugins,
+      resolvePluginViewPath: resolveBundledPluginViewPath,
+    },
   );
   backends.push(backend);
   expect(backend.getSnapshot().backend).toBe("ready");
@@ -320,7 +326,10 @@ test("終了後は待ち受けポートが解放される", async () => {
       port: Number(port),
       allowedOrigins: [TEST_ORIGIN],
     },
-    { registerPlugins: registerBundledPlugins },
+    {
+      registerPlugins: registerBundledPlugins,
+      resolvePluginViewPath: resolveBundledPluginViewPath,
+    },
   );
   backends.push(reopened);
   expect(reopened.getSnapshot().backend).toBe("ready");

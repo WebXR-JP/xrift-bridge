@@ -4,6 +4,7 @@ import type {
   OwnedPluginInstanceSummary,
 } from "bridge-gui-contract/management";
 import type { PairingViewResult } from "bridge-gui-contract/management";
+import type { SetPluginViewResult } from "bridge-gui-contract/plugin-instance";
 import { ManagementService } from "./management.service.ts";
 import type { ManagementRpcClient, StateChangedHandler } from "./rpc.ts";
 import { makeSnapshot } from "../snapshot-fixture.ts";
@@ -42,7 +43,19 @@ function prepareRpcStub() {
     })),
     unassignPlugin: vi.fn(async () => ({ released: true, issues: [] as Array<{ stage: string }> })),
     quit: vi.fn(async () => ({ ok: true as const })),
-    notifyViewReady: vi.fn(),
+    // 既定では一発で採用する。基準世代に続く世代で採用済みを返す。
+    setPluginView: vi.fn(
+      async (request: {
+        instanceId: string | null;
+        baseViewGeneration: number;
+      }): Promise<SetPluginViewResult> => ({
+        adopted: true,
+        current: {
+          instanceId: request.instanceId,
+          viewGeneration: request.baseViewGeneration + 1,
+        },
+      }),
+    ),
     retryPluginMount: vi.fn(async (_instanceId: string) => ({ ok: true as const })),
   };
   return { client, pushHandler: (): StateChangedHandler | null => pushHandler };
@@ -81,13 +94,25 @@ function makePluginMount(mountId: string, overrides?: Record<string, unknown>) {
     kind: "text",
     initialUrl: `views://plugin-host/blank.html#mount=${mountId}`,
     phase: "bound" as const,
-    ready: false,
-    revision: 1,
+    viewGeneration: 1,
+    pluginResponded: false,
     instanceId: "i1",
     localSessionId: "s1",
     portId: "text",
     ...overrides,
   };
+}
+
+/** 表示要求付きの試験 snapshot を作る。配置・失敗表示と世代を合わせる。 */
+function makeViewSnapshot(
+  instanceId: string | null,
+  viewGeneration: number,
+  overrides?: Parameters<typeof makeSnapshot>[0],
+): ManagementSnapshot {
+  return makeSnapshot({
+    ...overrides,
+    pluginView: { instanceId, viewGeneration },
+  });
 }
 
 describe("表示状態の採用", () => {
@@ -298,13 +323,6 @@ describe("限定操作の処理", () => {
         .map((entry) => entry.message)
         .join("\n"),
     ).toContain("終了");
-  });
-
-  it("準備完了の通知に文書題を載せる", () => {
-    const { service, stub } = prepareService();
-    document.title = "題の写し";
-    service.notifyReady();
-    expect(stub.client.notifyViewReady).toHaveBeenCalledWith("題の写し");
   });
 });
 
@@ -633,6 +651,8 @@ describe("秘密の非記録", () => {
 // 子画面タグの照合。happy-dom では `electrobun-webview` は未知要素として
 // 扱われるため、属性・同一ノード保持・個数で確かめる（描画は保証しない）。
 // 本文は扱わない（mountId の要約だけを記録する）。
+// タグの有無がそのまま表示であり、隠し置きはしない。配置・失敗表示は
+// 表示要求の世代だけを正とする。
 
 /** 照合試験用の配置先。文書に付け、試験後に外す。 */
 function preparePluginHost() {
@@ -646,24 +666,54 @@ function preparePluginHost() {
   };
 }
 
+/** 所有あり・表示要求なしの snapshot を採用し、表示対象を確立する。 */
+async function prepareVisibleTarget(
+  stub: ReturnType<typeof prepareRpcStub>,
+  service: ManagementService,
+  instanceId: string,
+): Promise<void> {
+  stub.client.getSnapshot.mockResolvedValueOnce(
+    makeViewSnapshot(null, 0, {
+      revision: 3,
+      plugins: { kinds: [], instances: [instanceOf(instanceId)], assignments: [] },
+    }),
+  );
+  await service.fetchInitial();
+  await service.setPluginViewState(true, instanceId);
+}
+
+/** 表示要求の応答（同世代の配置）を採用する。 */
+async function adoptViewMounts(
+  stub: ReturnType<typeof prepareRpcStub>,
+  service: ManagementService,
+  revision: number,
+  instanceId: string,
+  viewGeneration: number,
+  mounts: readonly ReturnType<typeof makePluginMount>[],
+): Promise<void> {
+  stub.client.getSnapshot.mockResolvedValueOnce(
+    makeViewSnapshot(instanceId, viewGeneration, {
+      revision,
+      plugins: { kinds: [], instances: [instanceOf(instanceId)], assignments: [] },
+      pluginMounts: [...mounts],
+    }),
+  );
+  await service.fetchInitial();
+}
+
 describe("子画面タグの照合", () => {
-  it("配置一覧に従ってタグを置き消えたものを外す", async () => {
+  it("表示対象と同世代の配置だけタグを置き消えたものを外す", async () => {
     const hosts = preparePluginHost();
     try {
       const { service, stub } = prepareService();
       service.registerPluginHost(hosts.plugin);
-      stub.client.getSnapshot.mockResolvedValueOnce(
-        makeSnapshot({
-          revision: 3,
-          pluginMounts: [makePluginMount("plugin-text-1"), makePluginMount("plugin-text-2")],
-        }),
-      );
-      await service.fetchInitial();
+      await prepareVisibleTarget(stub, service, "i1");
+      await adoptViewMounts(stub, service, 4, "i1", 1, [
+        makePluginMount("plugin-text-1"),
+        makePluginMount("plugin-text-2"),
+      ]);
       expect(hosts.plugin.querySelectorAll("electrobun-webview").length).toBe(2);
-      stub.client.getSnapshot.mockResolvedValueOnce(
-        makeSnapshot({ revision: 4, pluginMounts: [makePluginMount("plugin-text-2")] }),
-      );
-      await service.fetchInitial();
+      await adoptViewMounts(stub, service, 5, "i1", 1, [makePluginMount("plugin-text-2")]);
       const tags = hosts.plugin.querySelectorAll("electrobun-webview");
       expect(tags.length).toBe(1);
       expect(tags[0]?.id).toBe("plugin-plugin-text-2");
@@ -678,31 +728,38 @@ describe("子画面タグの照合", () => {
     }
   });
 
+  it("古い世代の配置ではタグを置かない", async () => {
+    const hosts = preparePluginHost();
+    try {
+      const { service, stub } = prepareService();
+      service.registerPluginHost(hosts.plugin);
+      await prepareVisibleTarget(stub, service, "i1");
+      // 表示要求の世代は 1 のまま、古い世代 0 の配置だけが届く。
+      await adoptViewMounts(stub, service, 4, "i1", 1, [
+        { ...makePluginMount("plugin-text-1"), viewGeneration: 0 },
+      ]);
+      expect(hosts.plugin.querySelectorAll("electrobun-webview").length).toBe(0);
+    } finally {
+      hosts.dispose();
+    }
+  });
+
   it("更新でタグを作り直さず src を変えない", async () => {
     const hosts = preparePluginHost();
     try {
       const { service, stub } = prepareService();
       service.registerPluginHost(hosts.plugin);
-      stub.client.getSnapshot.mockResolvedValueOnce(
-        makeSnapshot({ revision: 3, pluginMounts: [makePluginMount("plugin-text-1")] }),
-      );
-      await service.fetchInitial();
+      await prepareVisibleTarget(stub, service, "i1");
+      await adoptViewMounts(stub, service, 4, "i1", 1, [makePluginMount("plugin-text-1")]);
       const before = hosts.plugin.querySelector("electrobun-webview");
       // 所有一覧の URL 表記が変わっても既存は触らない。
-      stub.client.getSnapshot.mockResolvedValueOnce(
-        makeSnapshot({
-          revision: 4,
-          pluginMounts: [
-            {
-              ...makePluginMount("plugin-text-1"),
-              initialUrl: "views://plugin-host/blank.html#mount=plugin-text-1x",
-              ready: true,
-              revision: 2,
-            },
-          ],
-        }),
-      );
-      await service.fetchInitial();
+      await adoptViewMounts(stub, service, 5, "i1", 1, [
+        {
+          ...makePluginMount("plugin-text-1"),
+          initialUrl: "views://plugin-host/blank.html#mount=plugin-text-1x",
+          pluginResponded: true,
+        },
+      ]);
       const after = hosts.plugin.querySelector("electrobun-webview");
       expect(after).toBe(before);
       expect(after?.getAttribute("src")).toBe("views://plugin-host/blank.html#mount=plugin-text-1");
@@ -717,10 +774,8 @@ describe("子画面タグの照合", () => {
     try {
       const { service, stub } = prepareService();
       service.registerPluginHost(hosts.plugin);
-      stub.client.getSnapshot.mockResolvedValueOnce(
-        makeSnapshot({ revision: 3, pluginMounts: [makePluginMount("plugin-text-1")] }),
-      );
-      await service.fetchInitial();
+      await prepareVisibleTarget(stub, service, "i1");
+      await adoptViewMounts(stub, service, 4, "i1", 1, [makePluginMount("plugin-text-1")]);
       const tag = hosts.plugin.querySelector("electrobun-webview");
       expect(tag?.getAttribute("src")).toBe("views://plugin-host/blank.html#mount=plugin-text-1");
       expect(tag?.getAttribute("renderer")).toBe("native");
@@ -737,52 +792,95 @@ describe("子画面タグの照合", () => {
     try {
       const { service, stub } = prepareService();
       service.registerPluginHost(hosts.plugin);
-      stub.client.getSnapshot.mockResolvedValueOnce(
-        makeSnapshot({ revision: 3, pluginMounts: [makePluginMount("plugin-text-1")] }),
-      );
-      await service.fetchInitial();
+      await prepareVisibleTarget(stub, service, "i1");
+      await adoptViewMounts(stub, service, 4, "i1", 1, [makePluginMount("plugin-text-1")]);
       const before = hosts.plugin.querySelector("electrobun-webview");
       expect(hosts.plugin.querySelectorAll("electrobun-webview").length).toBe(1);
       // 改訂が進んでも同一ノードを保つ。
-      stub.client.getSnapshot.mockResolvedValueOnce(
-        makeSnapshot({ revision: 4, pluginMounts: [makePluginMount("plugin-text-1")] }),
-      );
-      await service.fetchInitial();
+      await adoptViewMounts(stub, service, 5, "i1", 1, [makePluginMount("plugin-text-1")]);
       expect(hosts.plugin.querySelector("electrobun-webview")).toBe(before);
       // 配置が消えたら外す。
-      stub.client.getSnapshot.mockResolvedValueOnce(makeSnapshot({ revision: 5 }));
-      await service.fetchInitial();
+      await adoptViewMounts(stub, service, 6, "i1", 1, []);
       expect(hosts.plugin.querySelectorAll("electrobun-webview").length).toBe(0);
     } finally {
       hosts.dispose();
     }
   });
 
-  it("ready 前後で host とタグ参照が保たれる", async () => {
+  it("応答の前後で host とタグ参照が保たれる", async () => {
     const hosts = preparePluginHost();
     try {
       const { service, stub } = prepareService();
       service.registerPluginHost(hosts.plugin);
       const hostBefore = hosts.plugin;
-      stub.client.getSnapshot.mockResolvedValueOnce(
-        makeSnapshot({ revision: 3, pluginMounts: [makePluginMount("plugin-text-1")] }),
-      );
-      await service.fetchInitial();
+      await prepareVisibleTarget(stub, service, "i1");
+      await adoptViewMounts(stub, service, 4, "i1", 1, [makePluginMount("plugin-text-1")]);
       const tagBefore = hosts.plugin.querySelector("electrobun-webview");
       expect(tagBefore).not.toBe(null);
-      // ready になっても host・タグ参照は保たれる（作り直さない）。
-      stub.client.getSnapshot.mockResolvedValueOnce(
-        makeSnapshot({
-          revision: 4,
-          pluginMounts: [{ ...makePluginMount("plugin-text-1"), ready: true, revision: 2 }],
-        }),
-      );
-      await service.fetchInitial();
+      // 応答が届いても host・タグ参照は保たれる（作り直さない）。
+      await adoptViewMounts(stub, service, 5, "i1", 1, [
+        { ...makePluginMount("plugin-text-1"), pluginResponded: true },
+      ]);
       expect(hosts.plugin).toBe(hostBefore);
       expect(hosts.plugin.querySelector("electrobun-webview")).toBe(tagBefore);
       expect(tagBefore?.getAttribute("src")).toBe(
         "views://plugin-host/blank.html#mount=plugin-text-1",
       );
+    } finally {
+      hosts.dispose();
+    }
+  });
+
+  it("個体を切り替えると旧タグを直ちに外し新しい世代を送る", async () => {
+    const hosts = preparePluginHost();
+    try {
+      const { service, stub } = prepareService();
+      service.registerPluginHost(hosts.plugin);
+      await prepareVisibleTarget(stub, service, "i1");
+      await adoptViewMounts(stub, service, 4, "i1", 1, [makePluginMount("plugin-text-1")]);
+      expect(hosts.plugin.querySelectorAll("electrobun-webview").length).toBe(1);
+      // 選択個体の所有に i2 を足して切り替える。応答待ちせず旧タグを外す。
+      stub.client.getSnapshot.mockResolvedValueOnce(
+        makeViewSnapshot("i1", 1, {
+          revision: 5,
+          plugins: {
+            kinds: [],
+            instances: [instanceOf("i1"), instanceOf("i2", { localSessionId: "s2" })],
+            assignments: [],
+          },
+          pluginMounts: [makePluginMount("plugin-text-1")],
+        }),
+      );
+      await service.fetchInitial();
+      await service.setPluginViewState(true, "i2");
+      expect(hosts.plugin.querySelectorAll("electrobun-webview").length).toBe(0);
+      expect(stub.client.setPluginView).toHaveBeenLastCalledWith({
+        instanceId: "i2",
+        baseViewGeneration: 1,
+      });
+    } finally {
+      hosts.dispose();
+    }
+  });
+
+  it("別画面へ離れると無しを新しい世代で送りタグを外す", async () => {
+    const hosts = preparePluginHost();
+    try {
+      const { service, stub } = prepareService();
+      service.registerPluginHost(hosts.plugin);
+      await prepareVisibleTarget(stub, service, "i1");
+      await adoptViewMounts(stub, service, 4, "i1", 1, [makePluginMount("plugin-text-1")]);
+      expect(hosts.plugin.querySelectorAll("electrobun-webview").length).toBe(1);
+      await service.setPluginViewState(false, "i1");
+      expect(hosts.plugin.querySelectorAll("electrobun-webview").length).toBe(0);
+      // 基準世代で送るため、無しでも採用中 snapshot の世代を使う。
+      expect(stub.client.setPluginView).toHaveBeenLastCalledWith({
+        instanceId: null,
+        baseViewGeneration: 1,
+      });
+      // 応答前の古い世代の配置では復活させない。
+      await adoptViewMounts(stub, service, 5, "i1", 1, [makePluginMount("plugin-text-1")]);
+      expect(hosts.plugin.querySelectorAll("electrobun-webview").length).toBe(0);
     } finally {
       hosts.dispose();
     }
@@ -885,10 +983,10 @@ describe("スロット状態の導出", () => {
     expect(service.pluginViewStateFor("i-clean")).toEqual({ kind: "cleanupFailed" });
   });
 
-  it("activeで配置なし・未readyは準備中でありreadyで見せる", async () => {
+  it("activeで配置なし・初期応答待ちは準備中であり応答で子画面だけになる", async () => {
     const { service, stub } = prepareService();
     stub.client.getSnapshot.mockResolvedValueOnce(
-      makeSnapshot({
+      makeViewSnapshot("i1", 1, {
         revision: 3,
         plugins: { kinds: [], instances: [instanceOf("i1")], assignments: [] },
       }),
@@ -896,23 +994,52 @@ describe("スロット状態の導出", () => {
     await service.fetchInitial();
     expect(service.pluginViewStateFor("i1")).toEqual({ kind: "preparing" });
     stub.client.getSnapshot.mockResolvedValueOnce(
-      makeSnapshot({
+      makeViewSnapshot("i1", 1, {
         revision: 4,
         plugins: { kinds: [], instances: [instanceOf("i1")], assignments: [] },
-        pluginMounts: [{ ...makePluginMount("plugin-text-1"), ready: true, revision: 2 }],
+        pluginMounts: [{ ...makePluginMount("plugin-text-1"), pluginResponded: true }],
       }),
     );
     await service.fetchInitial();
-    expect(service.pluginViewStateFor("i1")).toEqual({ kind: "ready" });
+    expect(service.pluginViewStateFor("i1")).toEqual({ kind: "answered" });
+  });
+
+  it("古い世代の配置・失敗表示では子を復活させない", async () => {
+    const { service, stub } = prepareService();
+    stub.client.getSnapshot.mockResolvedValueOnce(
+      makeViewSnapshot("i1", 2, {
+        revision: 3,
+        plugins: { kinds: [], instances: [instanceOf("i1")], assignments: [] },
+        pluginMounts: [{ ...makePluginMount("plugin-text-1"), viewGeneration: 1 }],
+        pluginMountFailures: [
+          {
+            kind: "text",
+            reason: "古い世代の失敗",
+            instanceId: "i1",
+            localSessionId: null,
+            viewGeneration: 1,
+          },
+        ],
+      }),
+    );
+    await service.fetchInitial();
+    // 同世代の配置・失敗が無いため準備中であり、古い失敗は出さない。
+    expect(service.pluginViewStateFor("i1")).toEqual({ kind: "preparing" });
   });
 
   it("activeで選択個体の失敗は再試行付きの失敗になる", async () => {
     const { service, stub } = prepareService();
-    const failed: ManagementSnapshot = makeSnapshot({
+    const failed: ManagementSnapshot = makeViewSnapshot("i1", 1, {
       revision: 3,
       plugins: { kinds: [], instances: [instanceOf("i1")], assignments: [] },
       pluginMountFailures: [
-        { kind: "text", reason: "生成待ちが失効した", instanceId: "i1", localSessionId: null },
+        {
+          kind: "text",
+          reason: "生成待ちが失効した",
+          instanceId: "i1",
+          localSessionId: null,
+          viewGeneration: 1,
+        },
       ],
     });
     stub.client.getSnapshot.mockResolvedValueOnce(failed);
@@ -944,11 +1071,17 @@ describe("スロット状態の導出", () => {
   it("再試行要求中は失敗表示を残し要求自体の失敗は注記を足す", async () => {
     const { service, stub } = prepareService();
     stub.client.getSnapshot.mockResolvedValueOnce(
-      makeSnapshot({
+      makeViewSnapshot("i1", 1, {
         revision: 3,
         plugins: { kinds: [], instances: [instanceOf("i1")], assignments: [] },
         pluginMountFailures: [
-          { kind: "text", reason: "生成待ちが失効した", instanceId: "i1", localSessionId: null },
+          {
+            kind: "text",
+            reason: "生成待ちが失効した",
+            instanceId: "i1",
+            localSessionId: null,
+            viewGeneration: 1,
+          },
         ],
       }),
     );
@@ -1002,7 +1135,7 @@ describe("個体限定の再試行", () => {
   it("他個体の再試行状態に波及しない", async () => {
     const { service, stub } = prepareService();
     stub.client.getSnapshot.mockResolvedValueOnce(
-      makeSnapshot({
+      makeViewSnapshot("i1", 1, {
         revision: 3,
         plugins: {
           kinds: [],
@@ -1010,8 +1143,20 @@ describe("個体限定の再試行", () => {
           assignments: [],
         },
         pluginMountFailures: [
-          { kind: "text", reason: "失敗1", instanceId: "i1", localSessionId: null },
-          { kind: "text", reason: "失敗2", instanceId: "i2", localSessionId: null },
+          {
+            kind: "text",
+            reason: "失敗1",
+            instanceId: "i1",
+            localSessionId: null,
+            viewGeneration: 1,
+          },
+          {
+            kind: "text",
+            reason: "失敗2",
+            instanceId: "i2",
+            localSessionId: null,
+            viewGeneration: 1,
+          },
         ],
       }),
     );
@@ -1044,11 +1189,17 @@ describe("個体限定の再試行", () => {
     const { service, stub } = prepareService();
     const owned = { kinds: [], instances: [instanceOf("i1")], assignments: [] };
     stub.client.getSnapshot.mockResolvedValueOnce(
-      makeSnapshot({
+      makeViewSnapshot("i1", 1, {
         revision: 3,
         plugins: owned,
         pluginMountFailures: [
-          { kind: "text", reason: "古い失敗", instanceId: "i1", localSessionId: null },
+          {
+            kind: "text",
+            reason: "古い失敗",
+            instanceId: "i1",
+            localSessionId: null,
+            viewGeneration: 1,
+          },
         ],
       }),
     );
@@ -1058,17 +1209,23 @@ describe("個体限定の再試行", () => {
     expect(service.retryRequestFailed()).toContain("i1");
     // 採用中 snapshot から失敗が消えたら注記も消える。
     stub.client.getSnapshot.mockResolvedValueOnce(
-      makeSnapshot({ revision: 4, plugins: owned, pluginMountFailures: [] }),
+      makeViewSnapshot("i1", 1, { revision: 4, plugins: owned, pluginMountFailures: [] }),
     );
     await service.fetchInitial();
     expect(service.retryRequestFailed()).not.toContain("i1");
     // 別原因で再失敗しても古い注記は載らない。
     stub.client.getSnapshot.mockResolvedValueOnce(
-      makeSnapshot({
+      makeViewSnapshot("i1", 1, {
         revision: 5,
         plugins: owned,
         pluginMountFailures: [
-          { kind: "text", reason: "新しい失敗", instanceId: "i1", localSessionId: null },
+          {
+            kind: "text",
+            reason: "新しい失敗",
+            instanceId: "i1",
+            localSessionId: null,
+            viewGeneration: 1,
+          },
         ],
       }),
     );
@@ -1083,327 +1240,272 @@ describe("個体限定の再試行", () => {
   });
 });
 
-// 子画面の表示制御。native 表示は `toggleHidden` でのみ切り替え、
-// HTML の `hidden` 属性・CSS・矩形 0x0 では保証しないことを前提にする。
-// happy-dom では未知要素のため fake（`toggleHidden` と `webviewId`）で
-// desired の算出・適用・再試行・RPC 不送出・非再生成を確かめる。
-// native の見え方自体は自動検証できない。
+// 表示要求の送出。表示意図の変化で採用中 snapshot の基準世代とともに
+// `setPluginView` を送り、採用済み一致・同一基準の送出済みでは再送しない。
+// 世代の採番は main が行い、Angular は行わない。切替で送信・UDP 開始・
+// 割当て操作は送らない。native の見え方自体は自動検証できない
+// （RPC・タグの有無の水準までである）。
 
-/** 実プラグイン配置の試験値（個体を指定できる）。 */
-function makePluginMountWithInstance(mountId: string, instanceId: string) {
-  return {
-    ...makePluginMount(mountId),
-    instanceId,
-  };
-}
-
-/** 配置済みタグへ fake の表示口を付ける。初期化済みとして扱う。 */
-function attachVisibilityFake(tag: Element | null | undefined) {
-  if (tag === null || tag === undefined) {
-    throw new Error("表示対象のタグが無い");
-  }
-  const fake = tag as unknown as { toggleHidden: ReturnType<typeof vi.fn>; webviewId: number };
-  fake.toggleHidden = vi.fn();
-  fake.webviewId = 7;
-  return fake;
-}
-
-/** 全 stub 呼び出し回数の写し。表示切替が業務 RPC を送らないことの照合用である。 */
-function rpcCallCounts(stub: ReturnType<typeof prepareRpcStub>["client"]) {
-  return [
-    stub.getSnapshot.mock.calls.length,
-    stub.enableAcceptance.mock.calls.length,
-    stub.disableAcceptance.mock.calls.length,
-    stub.getPairingView.mock.calls.length,
-    stub.approvePairing.mock.calls.length,
-    stub.rejectPairing.mock.calls.length,
-    stub.disconnectConnection.mock.calls.length,
-    stub.assignPlugin.mock.calls.length,
-    stub.unassignPlugin.mock.calls.length,
-    stub.quit.mock.calls.length,
-    stub.retryPluginMount.mock.calls.length,
-  ];
-}
-
-/** 所有付き snapshot を採用する。 */
-async function adoptOwned(
+/** 所有ありの snapshot を採用する。表示要求は含めない。 */
+async function adoptInstances(
   stub: ReturnType<typeof prepareRpcStub>,
+  service: ManagementService,
   revision: number,
   instances: readonly OwnedPluginInstanceSummary[],
-  mounts: readonly ReturnType<typeof makePluginMount>[] = [],
-) {
+): Promise<void> {
   stub.client.getSnapshot.mockResolvedValueOnce(
-    makeSnapshot({
+    makeViewSnapshot(null, 0, {
       revision,
       plugins: { kinds: [], instances: [...instances], assignments: [] },
-      pluginMounts: [...mounts],
     }),
   );
+  await service.fetchInitial();
 }
 
-describe("子画面の表示制御", () => {
-  it("可視条件は操作選択かつ選択個体かつactiveかつ当該マウントreadyである", async () => {
-    const hosts = preparePluginHost();
-    try {
-      const { service, stub } = prepareService();
-      service.registerPluginHost(hosts.plugin);
-      await adoptOwned(
-        stub,
-        3,
-        [instanceOf("i1")],
-        [makePluginMountWithInstance("plugin-text-1", "i1")],
-      );
-      await service.fetchInitial();
-      const tag = attachVisibilityFake(hosts.plugin.querySelector("electrobun-webview"));
-      // 未 ready では操作選択・個体一致でも隠す（生成は継続する）。
-      service.setPluginViewState(true, "i1");
-      expect(tag.toggleHidden).toHaveBeenCalledWith(true);
-      // ready で初めて見せる。
-      await adoptOwned(
-        stub,
-        4,
-        [instanceOf("i1")],
-        [{ ...makePluginMountWithInstance("plugin-text-1", "i1"), ready: true, revision: 2 }],
-      );
-      await service.fetchInitial();
-      expect(tag.toggleHidden).toHaveBeenLastCalledWith(false);
-    } finally {
-      hosts.dispose();
-    }
+describe("表示要求の送出", () => {
+  it("操作選択とactive選択で基準世代付きの表示要求を送る", async () => {
+    const { service, stub } = prepareService();
+    await adoptInstances(stub, service, 3, [instanceOf("i1")]);
+    // 操作画面の選択前は送らない（表示対象が定まらない）。
+    expect(stub.client.setPluginView).not.toHaveBeenCalled();
+    await service.setPluginViewState(true, "i1");
+    expect(stub.client.setPluginView).toHaveBeenCalledTimes(1);
+    expect(stub.client.setPluginView).toHaveBeenCalledWith({
+      instanceId: "i1",
+      baseViewGeneration: 0,
+    });
   });
 
-  it("表示対象だけを見せ他を隠す", async () => {
-    const hosts = preparePluginHost();
-    try {
-      const { service, stub } = prepareService();
-      service.registerPluginHost(hosts.plugin);
-      await adoptOwned(
-        stub,
-        3,
-        [instanceOf("i1"), instanceOf("i2", { localSessionId: "s2" })],
-        [
-          { ...makePluginMountWithInstance("plugin-text-1", "i1"), ready: true },
-          { ...makePluginMountWithInstance("plugin-text-2", "i2"), ready: true },
-        ],
-      );
-      await service.fetchInitial();
-      const first = attachVisibilityFake(hosts.plugin.querySelector("#plugin-plugin-text-1"));
-      const second = attachVisibilityFake(hosts.plugin.querySelector("#plugin-plugin-text-2"));
-      service.setPluginViewState(true, "i1");
-      expect(first.toggleHidden).toHaveBeenCalledWith(false);
-      expect(second.toggleHidden).toHaveBeenCalledWith(true);
-    } finally {
-      hosts.dispose();
-    }
+  it("同一表示期間のsnapshot更新では再送しない", async () => {
+    const { service, stub } = prepareService();
+    await adoptInstances(stub, service, 3, [instanceOf("i1")]);
+    await service.setPluginViewState(true, "i1");
+    expect(stub.client.setPluginView).toHaveBeenCalledTimes(1);
+    // 改訂進行・再描画では対象が変わらないため送らない。
+    await adoptInstances(stub, service, 4, [instanceOf("i1")]);
+    await service.setPluginViewState(true, "i1");
+    expect(stub.client.setPluginView).toHaveBeenCalledTimes(1);
   });
 
-  it("operations 未選択・対象無し・非activeでは全て隠す", async () => {
-    const hosts = preparePluginHost();
-    try {
-      const { service, stub } = prepareService();
-      service.registerPluginHost(hosts.plugin);
-      await adoptOwned(
-        stub,
-        3,
-        [instanceOf("i1")],
-        [{ ...makePluginMountWithInstance("plugin-text-1", "i1"), ready: true }],
-      );
-      await service.fetchInitial();
-      const tag = attachVisibilityFake(hosts.plugin.querySelector("electrobun-webview"));
-      service.setPluginViewState(false, "i1");
-      expect(tag.toggleHidden).toHaveBeenCalledWith(true);
-      service.setPluginViewState(true, null);
-      expect(tag.toggleHidden).toHaveBeenLastCalledWith(true);
-      // 所有段階が active でなければ ready 配置があっても隠す。
-      await adoptOwned(
-        stub,
-        4,
-        [instanceOf("i1", { phase: "cleanupFailed" })],
-        [{ ...makePluginMountWithInstance("plugin-text-1", "i1"), ready: true, revision: 2 }],
-      );
-      await service.fetchInitial();
-      service.setPluginViewState(true, "i1");
-      expect(tag.toggleHidden).toHaveBeenLastCalledWith(true);
-    } finally {
-      hosts.dispose();
-    }
+  it("個体タブ切替で新しい表示意図を送る", async () => {
+    const { service, stub } = prepareService();
+    await adoptInstances(stub, service, 3, [
+      instanceOf("i1"),
+      instanceOf("i2", { localSessionId: "s2" }),
+    ]);
+    await service.setPluginViewState(true, "i1");
+    await service.setPluginViewState(true, "i2");
+    expect(stub.client.setPluginView).toHaveBeenCalledTimes(2);
+    expect(stub.client.setPluginView).toHaveBeenLastCalledWith({
+      instanceId: "i2",
+      baseViewGeneration: 0,
+    });
   });
 
-  it("切替でタグを作り直さず src を変えず業務RPCを送らない", async () => {
-    const hosts = preparePluginHost();
-    try {
-      const { service, stub } = prepareService();
-      service.registerPluginHost(hosts.plugin);
-      await adoptOwned(
-        stub,
-        3,
-        [instanceOf("i1")],
-        [{ ...makePluginMountWithInstance("plugin-text-1", "i1"), ready: true }],
-      );
-      await service.fetchInitial();
-      const before = hosts.plugin.querySelector("electrobun-webview");
-      attachVisibilityFake(before);
-      const baseline = rpcCallCounts(stub.client);
-      service.setPluginViewState(true, "i1");
-      service.setPluginViewState(false, null);
-      service.setPluginViewState(true, "i1");
-      const after = hosts.plugin.querySelector("electrobun-webview");
-      expect(after).toBe(before);
-      expect(after?.getAttribute("src")).toBe("views://plugin-host/blank.html#mount=plugin-text-1");
-      expect(hosts.plugin.querySelectorAll("electrobun-webview").length).toBe(1);
-      expect(rpcCallCounts(stub.client)).toEqual(baseline);
-    } finally {
-      hosts.dispose();
-    }
+  it("所有段階がactiveでない間は対象にしない", async () => {
+    const { service, stub } = prepareService();
+    await adoptInstances(stub, service, 3, [instanceOf("i1", { phase: "initializing" })]);
+    await service.setPluginViewState(true, "i1");
+    // 無しのまま変わらないため送らない（失効させる旧世代が無い）。
+    expect(stub.client.setPluginView).not.toHaveBeenCalled();
+    // 所有段階が active になれば対象にして送る（採用時の合わせで進む）。
+    await adoptInstances(stub, service, 4, [instanceOf("i1")]);
+    expect(stub.client.setPluginView).toHaveBeenLastCalledWith({
+      instanceId: "i1",
+      baseViewGeneration: 0,
+    });
   });
 
-  it("toggleHidden未定義でも有限再試行し上限で諦める", async () => {
-    const hosts = preparePluginHost();
-    const frames: FrameRequestCallback[] = [];
-    const original = (globalThis as { requestAnimationFrame?: unknown })["requestAnimationFrame"];
-    (globalThis as unknown as Record<string, unknown>)["requestAnimationFrame"] = (
-      callback: FrameRequestCallback,
-    ): number => {
-      frames.push(callback);
-      return frames.length;
-    };
-    try {
-      const { service, stub } = prepareService();
-      service.registerPluginHost(hosts.plugin);
-      await adoptOwned(
-        stub,
-        3,
-        [instanceOf("i1")],
-        [makePluginMountWithInstance("plugin-text-1", "i1")],
-      );
-      await service.fetchInitial();
-      // happy-dom の未知要素のまま（`toggleHidden` が無い）で呼ぶ。
-      expect(() => service.setPluginViewState(true, "i1")).not.toThrow();
-      expect(hosts.plugin.querySelectorAll("electrobun-webview").length).toBe(1);
-      // 未定義経路も有限再試行を予約する。
-      expect(frames.length).toBeGreaterThan(0);
-      // 上限まで枠を進めても確実に終わる（無制限ループにしない）。
-      for (let step = 0; step < 200; step += 1) {
-        if (frames.length === 0) {
-          break;
-        }
-        frames.splice(0).forEach((callback) => {
-          callback(0);
-        });
-      }
-      expect(frames.length).toBe(0);
-      expect(
-        service
-          .eventLog()
-          .map((entry) => entry.message)
-          .join("\n"),
-      ).toContain("諦めた");
-      expect(hosts.plugin.querySelectorAll("electrobun-webview").length).toBe(1);
-    } finally {
-      if (original === undefined) {
-        delete (globalThis as unknown as Record<string, unknown>)["requestAnimationFrame"];
-      } else {
-        (globalThis as unknown as Record<string, unknown>)["requestAnimationFrame"] = original;
-      }
-      hosts.dispose();
-    }
+  it("snapshot未取得の間は送らない", async () => {
+    const { service, stub } = prepareService();
+    await service.setPluginViewState(true, "i1");
+    expect(stub.client.setPluginView).not.toHaveBeenCalled();
   });
 
-  it("後からtoggleHiddenが生えた要素にdesiredを適用する", async () => {
-    const hosts = preparePluginHost();
-    const frames: FrameRequestCallback[] = [];
-    const original = (globalThis as { requestAnimationFrame?: unknown })["requestAnimationFrame"];
-    (globalThis as unknown as Record<string, unknown>)["requestAnimationFrame"] = (
-      callback: FrameRequestCallback,
-    ): number => {
-      frames.push(callback);
-      return frames.length;
-    };
-    try {
-      const { service, stub } = prepareService();
-      service.registerPluginHost(hosts.plugin);
-      await adoptOwned(
-        stub,
-        3,
-        [instanceOf("i1")],
-        [{ ...makePluginMountWithInstance("plugin-text-1", "i1"), ready: true }],
-      );
-      await service.fetchInitial();
-      const tag = hosts.plugin.querySelector("electrobun-webview") as unknown as {
-        toggleHidden?: ReturnType<typeof vi.fn>;
-        webviewId?: number | null;
-      };
-      // custom element の upgrade 前であり、`toggleHidden` は未定義である。
-      expect(tag.toggleHidden).toBe(undefined);
-      const before = hosts.plugin.querySelector("electrobun-webview");
-      service.setPluginViewState(true, "i1");
-      expect(frames.length).toBeGreaterThan(0);
-      // upgrade 後に初期化が済むと、保持した desired（対象一致のため見せる）を適用する。
-      tag.toggleHidden = vi.fn();
-      tag.webviewId = 9;
-      frames.splice(0).forEach((callback) => {
-        callback(0);
-      });
-      expect(tag.toggleHidden).toHaveBeenCalledWith(false);
-      expect(hosts.plugin.querySelector("electrobun-webview")).toBe(before);
-      expect(before?.getAttribute("src")).toBe(
-        "views://plugin-host/blank.html#mount=plugin-text-1",
-      );
-    } finally {
-      if (original === undefined) {
-        delete (globalThis as unknown as Record<string, unknown>)["requestAnimationFrame"];
-      } else {
-        (globalThis as unknown as Record<string, unknown>)["requestAnimationFrame"] = original;
-      }
-      hosts.dispose();
-    }
+  it("送出の失敗は記録に残し次回送り直す", async () => {
+    const { service, stub } = prepareService();
+    await adoptInstances(stub, service, 3, [instanceOf("i1")]);
+    stub.client.setPluginView.mockRejectedValueOnce(new Error("受付不可"));
+    await service.setPluginViewState(true, "i1");
+    expect(
+      service
+        .eventLog()
+        .map((entry) => entry.message)
+        .join("\n"),
+    ).toContain("表示要求に失敗");
+    // 送出済みとして扱わないため、次回の切替で送り直す（永久抑止しない）。
+    // 基準世代は採用中 snapshot から取り直すため、採番は進まない。
+    await service.setPluginViewState(true, "i1");
+    expect(stub.client.setPluginView).toHaveBeenCalledTimes(2);
+    expect(stub.client.setPluginView).toHaveBeenLastCalledWith({
+      instanceId: "i1",
+      baseViewGeneration: 0,
+    });
   });
 
-  it("未初期化ではrAFで再試行し初期化後に適用する", async () => {
-    const hosts = preparePluginHost();
-    const frames: FrameRequestCallback[] = [];
-    const original = (globalThis as { requestAnimationFrame?: unknown })["requestAnimationFrame"];
-    (globalThis as unknown as Record<string, unknown>)["requestAnimationFrame"] = (
-      callback: FrameRequestCallback,
-    ): number => {
-      frames.push(callback);
-      return frames.length;
-    };
-    try {
-      const { service, stub } = prepareService();
-      service.registerPluginHost(hosts.plugin);
-      await adoptOwned(
-        stub,
-        3,
-        [instanceOf("i1")],
-        [{ ...makePluginMountWithInstance("plugin-text-1", "i1"), ready: true }],
-      );
-      await service.fetchInitial();
-      const tag = hosts.plugin.querySelector("electrobun-webview") as unknown as {
-        toggleHidden: ReturnType<typeof vi.fn>;
-        webviewId: number | null;
-      };
-      tag.toggleHidden = vi.fn();
-      tag.webviewId = null;
-      const before = hosts.plugin.querySelector("electrobun-webview");
-      service.setPluginViewState(true, "i1");
-      // 未初期化のため何も送らず、再試行を予約する。
-      expect(tag.toggleHidden).not.toHaveBeenCalled();
-      expect(frames.length).toBeGreaterThan(0);
-      // 初期化後に枠を進めると適用する。タグは作り直さない。
-      tag.webviewId = 11;
-      frames.splice(0).forEach((callback) => {
-        callback(0);
-      });
-      expect(tag.toggleHidden).toHaveBeenCalledWith(false);
-      expect(hosts.plugin.querySelector("electrobun-webview")).toBe(before);
-    } finally {
-      if (original === undefined) {
-        delete (globalThis as unknown as Record<string, unknown>)["requestAnimationFrame"];
-      } else {
-        (globalThis as unknown as Record<string, unknown>)["requestAnimationFrame"] = original;
-      }
-      hosts.dispose();
-    }
+  it("再試行では表示要求を送り直さない（世代を維持する）", async () => {
+    const { service, stub } = prepareService();
+    await adoptInstances(stub, service, 3, [instanceOf("i1")]);
+    await service.setPluginViewState(true, "i1");
+    const sent = stub.client.setPluginView.mock.calls.length;
+    await service.retryPluginMount("i1");
+    expect(stub.client.retryPluginMount).toHaveBeenCalledWith("i1");
+    expect(stub.client.setPluginView.mock.calls.length).toBe(sent);
+  });
+
+  it("表示切替で送信・割当て操作を送らない", async () => {
+    const { service, stub } = prepareService();
+    await adoptInstances(stub, service, 3, [instanceOf("i1")]);
+    await service.setPluginViewState(true, "i1");
+    await service.setPluginViewState(false, "i1");
+    await service.setPluginViewState(true, "i1");
+    expect(stub.client.assignPlugin).not.toHaveBeenCalled();
+    expect(stub.client.unassignPlugin).not.toHaveBeenCalled();
+    expect(stub.client.getPairingView).toHaveBeenCalledTimes(0);
+  });
+});
+
+// 基準世代と採用・stale の扱い。Angular は採番せず、採用中 snapshot の世代を
+// 基準に送り、応答の `current` を正とする。mainview リロード後の高い世代から
+// 始めても一発で採用され、stale では巻き戻さず一度だけ送り直す。
+describe("表示要求の基準世代と採用・stale", () => {
+  it("高い世代のsnapshotから始めても最初の表示切替が一発で採用される", async () => {
+    const { service, stub } = prepareService();
+    // mainview リロード後の回復を模し、世代 5 の採用済みから始める。
+    stub.client.getSnapshot.mockResolvedValueOnce(
+      makeViewSnapshot(null, 5, {
+        revision: 3,
+        plugins: { kinds: [], instances: [instanceOf("i1")], assignments: [] },
+      }),
+    );
+    await service.fetchInitial();
+    await service.setPluginViewState(true, "i1");
+    // 観測した基準世代 5 のまま送り、採用される（世代 0 に戻さない）。
+    expect(stub.client.setPluginView).toHaveBeenCalledTimes(1);
+    expect(stub.client.setPluginView).toHaveBeenCalledWith({
+      instanceId: "i1",
+      baseViewGeneration: 5,
+    });
+  });
+
+  it("staleでは現在の採用世代を基準に最新の表示意図で一度だけ送り直す", async () => {
+    const { service, stub } = prepareService();
+    await adoptInstances(stub, service, 3, [instanceOf("i1")]);
+    stub.client.setPluginView
+      .mockResolvedValueOnce({ adopted: false, current: { instanceId: null, viewGeneration: 4 } })
+      .mockResolvedValueOnce({ adopted: true, current: { instanceId: "i1", viewGeneration: 5 } });
+    await service.setPluginViewState(true, "i1");
+    expect(stub.client.setPluginView).toHaveBeenCalledTimes(2);
+    expect(stub.client.setPluginView.mock.calls[0]?.[0]).toEqual({
+      instanceId: "i1",
+      baseViewGeneration: 0,
+    });
+    // 送り直しは応答の `current` 世代を基準にする。
+    expect(stub.client.setPluginView.mock.calls[1]?.[0]).toEqual({
+      instanceId: "i1",
+      baseViewGeneration: 4,
+    });
+  });
+
+  it("staleでも最新の表示意図が採用済みなら再送しない", async () => {
+    const { service, stub } = prepareService();
+    await adoptInstances(stub, service, 3, [instanceOf("i1")]);
+    stub.client.setPluginView.mockResolvedValueOnce({
+      adopted: false,
+      current: { instanceId: "i1", viewGeneration: 4 },
+    });
+    await service.setPluginViewState(true, "i1");
+    expect(stub.client.setPluginView).toHaveBeenCalledTimes(1);
+    expect(
+      service
+        .eventLog()
+        .map((entry) => entry.message)
+        .join("\n"),
+    ).toContain("採用されなかった");
+  });
+
+  it("送り直しもstaleなら追送しない（無制限ループにしない）", async () => {
+    const { service, stub } = prepareService();
+    await adoptInstances(stub, service, 3, [instanceOf("i1")]);
+    stub.client.setPluginView
+      .mockResolvedValueOnce({ adopted: false, current: { instanceId: null, viewGeneration: 4 } })
+      .mockResolvedValueOnce({ adopted: false, current: { instanceId: null, viewGeneration: 6 } });
+    await service.setPluginViewState(true, "i1");
+    // 初送＋一度の送り直しで止まる。
+    expect(stub.client.setPluginView).toHaveBeenCalledTimes(2);
+    expect(
+      service
+        .eventLog()
+        .map((entry) => entry.message)
+        .join("\n"),
+    ).toContain("送り直しも古い");
+  });
+
+  it("表示終了と再表示は対象が同じでも新要求として送る", async () => {
+    const { service, stub } = prepareService();
+    const owned = { kinds: [], instances: [instanceOf("i1")], assignments: [] };
+    stub.client.getSnapshot.mockResolvedValueOnce(
+      makeViewSnapshot(null, 0, { revision: 3, plugins: owned }),
+    );
+    await service.fetchInitial();
+    await service.setPluginViewState(true, "i1");
+    // 採用 `{i1, 1}` を反映する。採用済み一致のため再送は起きない。
+    stub.client.getSnapshot.mockResolvedValueOnce(
+      makeViewSnapshot("i1", 1, { revision: 4, plugins: owned }),
+    );
+    await service.fetchInitial();
+    expect(stub.client.setPluginView).toHaveBeenCalledTimes(1);
+    // 表示終了は無しを現基準で送る（表示期間の終了）。
+    await service.setPluginViewState(false, "i1");
+    expect(stub.client.setPluginView).toHaveBeenLastCalledWith({
+      instanceId: null,
+      baseViewGeneration: 1,
+    });
+    // 終了の採用 `{無し, 2}` を反映する。
+    stub.client.getSnapshot.mockResolvedValueOnce(
+      makeViewSnapshot(null, 2, { revision: 5, plugins: owned }),
+    );
+    await service.fetchInitial();
+    expect(stub.client.setPluginView).toHaveBeenCalledTimes(2);
+    // 離脱後の同一個体への再表示は新要求として送る（省略しない）。
+    await service.setPluginViewState(true, "i1");
+    expect(stub.client.setPluginView).toHaveBeenCalledTimes(3);
+    expect(stub.client.setPluginView).toHaveBeenLastCalledWith({
+      instanceId: "i1",
+      baseViewGeneration: 2,
+    });
+  });
+
+  it("送出中の切替は多重送出せず完了後に最新の表示意図を送る", async () => {
+    const { service, stub } = prepareService();
+    await adoptInstances(stub, service, 3, [
+      instanceOf("i1"),
+      instanceOf("i2", { localSessionId: "s2" }),
+    ]);
+    let release!: (value: {
+      adopted: true;
+      current: { instanceId: string; viewGeneration: number };
+    }) => void;
+    const gate = new Promise<{
+      adopted: true;
+      current: { instanceId: string; viewGeneration: number };
+    }>((resolve) => {
+      release = resolve;
+    });
+    stub.client.setPluginView.mockReturnValueOnce(gate);
+    const first = service.setPluginViewState(true, "i1");
+    const second = service.setPluginViewState(true, "i2");
+    // 送出中の重なりでは重ねて送らない。
+    expect(stub.client.setPluginView).toHaveBeenCalledTimes(1);
+    release({ adopted: true, current: { instanceId: "i1", viewGeneration: 1 } });
+    await Promise.all([first, second]);
+    // 完了後の追随（直列）を待つ。追送は最新の表示意図だけである。
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(stub.client.setPluginView).toHaveBeenCalledTimes(2);
+    expect(stub.client.setPluginView).toHaveBeenLastCalledWith({
+      instanceId: "i2",
+      baseViewGeneration: 0,
+    });
   });
 });

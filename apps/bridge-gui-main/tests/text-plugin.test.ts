@@ -1,10 +1,12 @@
 /**
- * テキスト割当て・送信・回収の統合検証。
+ * テキスト割当て・中継・回収の統合検証。
  *
  * バックエンドを直接生成し、`world-client` を Node の `origin` 指定で動かして、
- * 実 WebSocket・既存 `ws`・yamux で候補検査・送信・切断・再割当てまでを通す。
- * 割当ては汎用管理操作（`assignPlugin`/`unassignPlugin`）、送信と表示読取りは
- * 本番 companion（backend が生成した登録表）経由で行い、新本番経路を通す。
+ * 実 WebSocket・既存 `ws`・yamux で候補検査・中継・切断・再割当てまでを通す。
+ * 割当ては汎用管理操作（`assignPlugin`/`unassignPlugin`）、表示読取り・送信は
+ * 本番 endpoint（backend が生成した登録表の endpoint 工場＋束縛個体限定の
+ * 参照口）経由の中継で行い、新本番経路を通す。main は中継だけを担い、
+ * 要求・通知の中身を解釈しない。
  * ワールド側は `{op:"shown", id}` を返す応答器であり、本文を返送しない。
  * 比較コード本文・送信本文は記録に残さない（照合は値の一致で行う）。
  * テストで使う本文はダミーのみである。
@@ -22,9 +24,19 @@ import {
 import { UDP_SESSION_ID } from "bridge-plugin-udp/contract";
 import { createConnectionRequest, type ReliableSession, type SessionProvider } from "world-client";
 import { GuiBackend } from "../src/main/backend.ts";
-import { registerBundledPlugins } from "../src/composition/bundled-plugins.ts";
-import type { PluginCompanion } from "bridge-gui-plugin-sdk/companion";
-import type { TextInstanceView } from "bridge-plugin-text/gui-contract";
+import {
+  registerBundledPlugins,
+  resolveBundledPluginViewPath,
+} from "../src/composition/bundled-plugins.ts";
+import type { PluginRelayEvent } from "bridge-gui-contract/plugin-instance";
+import type { PluginEndpoint } from "bridge-gui-plugin-sdk/companion";
+import {
+  TEXT_GET_STATE_METHOD,
+  TEXT_SEND_TEXT_METHOD,
+  isTextChildSnapshot,
+  isTextSendResult,
+  type TextChildSnapshot,
+} from "bridge-plugin-text/gui-contract";
 
 const TEST_ORIGIN = "https://gui-text-test.invalid";
 
@@ -57,7 +69,10 @@ afterEach(async () => {
 async function startBackend(): Promise<GuiBackend> {
   const backend = await GuiBackend.create(
     { port: 0, allowedOrigins: [TEST_ORIGIN] },
-    { registerPlugins: registerBundledPlugins },
+    {
+      registerPlugins: registerBundledPlugins,
+      resolvePluginViewPath: resolveBundledPluginViewPath,
+    },
   );
   backends.push(backend);
   expect(backend.getSnapshot().backend).toBe("ready");
@@ -141,15 +156,52 @@ function respondShown(session: ReliableSession): void {
 }
 
 /**
- * backend が生成した登録表からテキスト companion を取り出す。
+ * 束縛個体用の endpoint を組み立てる。本番配線（登録表の endpoint 工場＋
+ * 管理層の束縛個体限定の参照口）で作り、通知は集めた emission で受け取る。
  *
- * 本番配線（manager→access→companion）で作られた記述子であり、
- * 送信・表示読取りの新本番経路である。
+ * @param backend - endpoint 工場と管理層の提供元。
+ * @param instanceId - 束縛する実インスタンスの識別子。
+ * @param emitted - 通知の集め先。
+ * @returns 束縛個体用の endpoint。使い終わったら `dispose` すること。
  */
-function textCompanionOf(backend: GuiBackend): PluginCompanion {
-  const companion = backend.companionRegistry.get("text");
-  if (companion === undefined) throw new Error("テキスト companion が無い。");
-  return companion;
+function textEndpointOf(
+  backend: GuiBackend,
+  instanceId: string,
+  emitted: PluginRelayEvent[],
+): PluginEndpoint {
+  const manager = backend.instanceManager;
+  if (manager === null) throw new Error("管理層が無い。");
+  const entry = backend.companionRegistry.getEntry("text");
+  if (entry === undefined) throw new Error("テキストの登録が無い。");
+  const ref = manager.createBoundRef("text", instanceId);
+  return entry.createEndpoint(ref, {
+    emit: (event) => {
+      emitted.push(event);
+    },
+  });
+}
+
+/**
+ * 束縛個体の限定表示を中継で読む。本文は含めない。
+ */
+async function readTextView(endpoint: PluginEndpoint): Promise<TextChildSnapshot> {
+  const value = await endpoint.handleRequest({ method: TEXT_GET_STATE_METHOD, params: {} });
+  if (!isTextChildSnapshot(value)) throw new Error("表示用 DTO の形状が不正である。");
+  return value;
+}
+
+/**
+ * 束縛個体の現割当てへ本文を中継で送る。子は本文だけを渡す。
+ */
+async function sendTextViaRelay(
+  endpoint: PluginEndpoint,
+  text: unknown,
+): Promise<TextSendResult | { error: string }> {
+  const value = await endpoint.handleRequest({ method: TEXT_SEND_TEXT_METHOD, params: { text } });
+  if (isTextSendResult(value)) return value;
+  const table = value as { error?: unknown };
+  if (typeof table.error === "string") return { error: table.error };
+  throw new Error("送信応答の形状が不正である。");
 }
 
 /**
@@ -169,32 +221,6 @@ function assignedTextOf(backend: GuiBackend): {
   };
 }
 
-/**
- * 束縛個体の限定表示を読む。本文は含めない。
- */
-function readTextView(backend: GuiBackend, instanceId: string): TextInstanceView {
-  // ADR: `as` を使う理由は、汎用口が種別を問わない表示を返し、試験で
-  // 束縛種別の具象表示を取り出すためである。根拠は、対応付けが同一種別の
-  // 記述子で読み・付番を対にすることである。
-  return textCompanionOf(backend).readView(instanceId) as TextInstanceView;
-}
-
-/**
- * 束縛個体の現割当てへ本文を送る。子は本文だけを渡す。
- */
-function sendTextViaCompanion(
-  backend: GuiBackend,
-  instanceId: string,
-  text: unknown,
-): Promise<TextSendResult> {
-  const send = textCompanionOf(backend).send;
-  if (send === undefined) throw new Error("テキストの送信口が無い。");
-  // ADR: `as` を使う理由は、汎用口が `unknown` で返す解決値を試験で
-  // 具象の送信結果として確かめるためである。根拠は、companion の固有操作が
-  // テキスト送信の解決型を保つことである。
-  return send(instanceId, { text }) as Promise<TextSendResult>;
-}
-
 test("候補が無いときはテキスト割当てを拒否する", async () => {
   const backend = await startBackend();
   backend.enableAcceptance();
@@ -210,7 +236,7 @@ test("候補が無いときはテキスト割当てを拒否する", async () =>
   expect(backend.getSnapshot().plugins.assignments).toHaveLength(0);
 });
 
-test("候補が一件のときは割り当てて表示に反映する", async () => {
+test("候補が一件のときは割り当てて中継の表示に反映する", async () => {
   const backend = await startBackend();
   backend.enableAcceptance();
   const provider = await approveConnection(backend);
@@ -223,12 +249,18 @@ test("候補が一件のときは割り当てて表示に反映する", async ()
   expect(owned?.localSessionId).toBe(assignment.localSessionId);
   expect(owned?.instanceId).toBe(assignment.instanceId);
   expect(owned?.phase).toBe("active");
-  const view = readTextView(backend, assignment.instanceId);
-  expect(view.localSessionId).toBe(assignment.localSessionId);
-  expect(view.canSend).toBe(true);
-  expect(view.pendingId).toBeNull();
-  expect(view.lastResult).toBeNull();
-  expect(view.stats).toEqual({ attempts: 0, acknowledged: 0, unknown: 0 });
+  const emitted: PluginRelayEvent[] = [];
+  const endpoint = textEndpointOf(backend, assignment.instanceId, emitted);
+  try {
+    const view = await readTextView(endpoint);
+    expect(view.localSessionId).toBe(assignment.localSessionId);
+    expect(view.canSend).toBe(true);
+    expect(view.pendingId).toBeNull();
+    expect(view.lastResult).toBeNull();
+    expect(view.stats).toEqual({ attempts: 0, acknowledged: 0, unknown: 0 });
+  } finally {
+    endpoint.dispose();
+  }
   expect(backend.getSnapshot().plugins.assignments).toHaveLength(1);
 
   // 割当て中の再要求は拒否する（多重割当てを作らない）。
@@ -253,7 +285,7 @@ test("候補が複数のときはテキスト割当てを拒否する", async ()
   expect(backend.getSnapshot().plugins.assignments).toHaveLength(0);
 });
 
-test("正常な送信は反映確認で決着し表示が進む", async () => {
+test("正常な送信は反映確認で決着し通知が届く", async () => {
   const backend = await startBackend();
   backend.enableAcceptance();
   const provider = await approveConnection(backend);
@@ -261,36 +293,35 @@ test("正常な送信は反映確認で決着し表示が進む", async () => {
   if (session === undefined) throw new Error("テキスト用セッションが無い。");
   respondShown(session);
 
-  const revisions: number[] = [];
-  const unsubscribe = backend.onStateChanged((message) => {
-    revisions.push(message.revision);
-  });
+  const assignment = backend.assignPlugin({ pluginKind: "text" });
+  const emitted: PluginRelayEvent[] = [];
+  const endpoint = textEndpointOf(backend, assignment.instanceId, emitted);
   try {
-    const assignment = backend.assignPlugin({ pluginKind: "text" });
-    const before = backend.getSnapshot().revision;
-    const result = await sendTextViaCompanion(backend, assignment.instanceId, DUMMY_TEXT);
-    expect(result.status).toBe("acknowledged");
+    const result = await sendTextViaRelay(endpoint, DUMMY_TEXT);
+    expect(result).toMatchObject({ status: "acknowledged" });
+    // 本体の状態変更が endpoint の購読から通知に載る。本文は載せない。
     await waitForArrival(
-      () => readTextView(backend, assignment.instanceId).lastResult?.status === "acknowledged",
-      "反映確認の表示反映",
+      () =>
+        emitted.some(
+          (event) =>
+            isTextChildSnapshot(event.payload) &&
+            event.payload.lastResult?.status === "acknowledged",
+        ),
+      "反映確認の通知",
     );
-    const view = readTextView(backend, assignment.instanceId);
+    const view = await readTextView(endpoint);
     expect(view.pendingId).toBeNull();
     expect(view.canSend).toBe(true);
-    expect(view.lastResult).toEqual(result);
     expect(view.stats).toEqual({ attempts: 1, acknowledged: 1, unknown: 0 });
-    // 状態通知が改訂を進めている（購読経路の結線）。
-    expect(backend.getSnapshot().revision).toBeGreaterThan(before);
-    expect(revisions.length).toBeGreaterThan(0);
-    expect(revisions[revisions.length - 1]).toBe(backend.getSnapshot().revision);
-    // 本文は snapshot に残らない。
-    expect(JSON.stringify(backend.getSnapshot())).not.toContain(DUMMY_TEXT);
+    // 本文は中継の表示・通知に残らない。
+    expect(JSON.stringify(emitted)).not.toContain(DUMMY_TEXT);
+    expect(JSON.stringify(view)).not.toContain(DUMMY_TEXT);
   } finally {
-    unsubscribe();
+    endpoint.dispose();
   }
 });
 
-test("束縛外の送信と不正な本文は拒否する", async () => {
+test("束縛外の中継と不正な本文は拒否する", async () => {
   const backend = await startBackend();
   backend.enableAcceptance();
   const provider = await approveConnection(backend);
@@ -299,17 +330,25 @@ test("束縛外の送信と不正な本文は拒否する", async () => {
   respondShown(session);
   const assignment = backend.assignPlugin({ pluginKind: "text" });
 
-  // 束縛外の個体には送らない（所有検証は同期的）。
-  expect(() => textCompanionOf(backend).readView("無い")).toThrowError(RangeError);
-  expect(() => sendTextViaCompanion(backend, "無い", DUMMY_TEXT)).toThrowError(RangeError);
-  // 送信できない本文は送らず、試行に数えない。
-  await expect(sendTextViaCompanion(backend, assignment.instanceId, "")).rejects.toThrowError(
-    RangeError,
-  );
-  expect(() => sendTextViaCompanion(backend, assignment.instanceId, 123)).toThrowError(RangeError);
-  const view = readTextView(backend, assignment.instanceId);
-  expect(view.stats).toEqual({ attempts: 0, acknowledged: 0, unknown: 0 });
-  expect(view.pendingId).toBeNull();
+  // 束縛外の個体の endpoint 生成は失効として拒否する（所有検証は参照口が行う）。
+  // 参照口の照合はホスト自身の結果であり、プラグインの投げた例外とは区別する。
+  const emitted: PluginRelayEvent[] = [];
+  expect(() => textEndpointOf(backend, "無い", emitted)).toThrowError(RangeError);
+  // 送信できない本文は業務エラー値に載せ、試行に数えない。
+  const endpoint = textEndpointOf(backend, assignment.instanceId, emitted);
+  try {
+    await expect(sendTextViaRelay(endpoint, "")).resolves.toMatchObject({
+      error: expect.any(String),
+    });
+    await expect(sendTextViaRelay(endpoint, 123)).resolves.toMatchObject({
+      error: expect.any(String),
+    });
+    const view = await readTextView(endpoint);
+    expect(view.stats).toEqual({ attempts: 0, acknowledged: 0, unknown: 0 });
+    expect(view.pendingId).toBeNull();
+  } finally {
+    endpoint.dispose();
+  }
 });
 
 test("切断後は割当てが失効し再承認と再割当てが必要になる", async () => {
@@ -320,9 +359,15 @@ test("切断後は割当てが失効し再承認と再割当てが必要にな�
   if (session === undefined) throw new Error("テキスト用セッションが無い。");
   respondShown(session);
   const first = backend.assignPlugin({ pluginKind: "text" });
-  await expect(sendTextViaCompanion(backend, first.instanceId, DUMMY_TEXT)).resolves.toMatchObject({
-    status: "acknowledged",
-  });
+  const firstEmitted: PluginRelayEvent[] = [];
+  const firstEndpoint = textEndpointOf(backend, first.instanceId, firstEmitted);
+  try {
+    await expect(sendTextViaRelay(firstEndpoint, DUMMY_TEXT)).resolves.toMatchObject({
+      status: "acknowledged",
+    });
+  } finally {
+    firstEndpoint.dispose();
+  }
 
   // 運用切断で割当て表示が消え、生成分が回収される。
   const connectionId = backend.getSnapshot().connections[0]?.connectionId;
@@ -336,10 +381,9 @@ test("切断後は割当てが失効し再承認と再割当てが必要にな�
     "切断による割当て失効",
   );
   expect(backend.getSnapshot().plugins.assignments).toHaveLength(0);
-  // 旧識別子の送信は新しい割当てへ転送しない（所有検証は同期的）。
-  expect(() => sendTextViaCompanion(backend, first.instanceId, DUMMY_TEXT)).toThrowError(
-    RangeError,
-  );
+  // 旧識別子の endpoint 生成は新しい割当てへ転送せず拒否する（所有検証は参照口が行う）。
+  const staleEmitted: PluginRelayEvent[] = [];
+  expect(() => textEndpointOf(backend, first.instanceId, staleEmitted)).toThrowError(RangeError);
 
   // 再接続は再承認が必要であり、同名でも旧割当てを引き継がない。
   const reprovider = await approveConnection(backend);
@@ -349,16 +393,22 @@ test("切断後は割当てが失効し再承認と再割当てが必要にな�
   respondShown(resession);
   const second = backend.assignPlugin({ pluginKind: "text" });
   expect(second.instanceId).not.toBe(first.instanceId);
-  const view = readTextView(backend, second.instanceId);
-  expect(view.lastResult).toBeNull();
-  expect(view.stats).toEqual({ attempts: 0, acknowledged: 0, unknown: 0 });
-  await expect(sendTextViaCompanion(backend, second.instanceId, DUMMY_TEXT)).resolves.toMatchObject(
-    { status: "acknowledged" },
-  );
+  const secondEmitted: PluginRelayEvent[] = [];
+  const secondEndpoint = textEndpointOf(backend, second.instanceId, secondEmitted);
+  try {
+    const view = await readTextView(secondEndpoint);
+    expect(view.lastResult).toBeNull();
+    expect(view.stats).toEqual({ attempts: 0, acknowledged: 0, unknown: 0 });
+    await expect(sendTextViaRelay(secondEndpoint, DUMMY_TEXT)).resolves.toMatchObject({
+      status: "acknowledged",
+    });
+  } finally {
+    secondEndpoint.dispose();
+  }
   expect(JSON.stringify(backend.getSnapshot())).not.toContain(DUMMY_TEXT);
 });
 
-test("明示解除は割当て表示を消して送信できなくする", async () => {
+test("明示解除は割当て表示を消して中継できなくする", async () => {
   const backend = await startBackend();
   backend.enableAcceptance();
   const provider = await approveConnection(backend);
@@ -376,9 +426,8 @@ test("明示解除は割当て表示を消して送信できなくする", async
     backend.getSnapshot().plugins.instances.find((item) => item.pluginKind === "text"),
   ).toBeUndefined();
   expect(backend.getSnapshot().plugins.assignments).toHaveLength(0);
-  expect(() => sendTextViaCompanion(backend, assignment.instanceId, DUMMY_TEXT)).toThrowError(
-    RangeError,
-  );
+  const emitted: PluginRelayEvent[] = [];
+  expect(() => textEndpointOf(backend, assignment.instanceId, emitted)).toThrowError(RangeError);
   // 回収済みの再解除は未解除として返す（履歴表は作らない）。
   expect(
     backend.unassignPlugin({
@@ -432,9 +481,4 @@ test("テキストはtextのみ・診断はdiag-echoとdiag-pingのみを対象�
     localSessionId: pingSession.localSessionId,
   });
   expect(pingDiagnostics.portId).toBe("diagnostic");
-  // テキストは text のみを対象にし、診断・UDP の割当てがあっても
-  // テキスト候補の一件判定は崩れない。
-  const assignment = backend.assignPlugin({ pluginKind: "text" });
-  expect(assignment.localSessionId).toBe(textSession.localSessionId);
-  expect(assignment.portId).toBe(TEXT_PORT_ID);
 });

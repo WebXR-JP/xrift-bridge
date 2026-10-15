@@ -14,7 +14,7 @@ import { createBridgeServer, type BridgeServer } from "bridge-server";
 import { createBridgeAppCore, type BridgeAppCore } from "bridge-app-core/core";
 import { DIAGNOSTIC_PORT_ID, diagnosticPlugin } from "../src/index.ts";
 import type { PluginInstanceHandle } from "bridge-app-core/core";
-import type { DiagnosticStats } from "../src/index.ts";
+import type { DiagnosticOperations, DiagnosticStats } from "../src/index.ts";
 
 const TEST_ORIGIN = "http://localhost:5173";
 
@@ -91,7 +91,9 @@ async function connectApproved(server: BridgeServer): Promise<SessionProvider> {
  *
  * 割当ては開始通知で同期に行い、未割当て中断より先に確定させる。
  */
-function attachDiagnostic(server: BridgeServer): PluginInstanceHandle<DiagnosticStats> {
+function attachDiagnostic(
+  server: BridgeServer,
+): PluginInstanceHandle<DiagnosticStats, DiagnosticOperations> {
   const core = createBridgeAppCore(server);
   cores.push(core);
   const handle = core.createInstance(diagnosticPlugin);
@@ -192,7 +194,7 @@ test("実セッション経由で診断プラグインがechoとpingに応答す
     () => 診断.getState().diagnosticEcho === 1 && 診断.getState().diagnosticPing === 1,
     "診断プラグインの応答統計",
   );
-  expect(診断.getState()).toEqual({ diagnosticEcho: 1, diagnosticPing: 1 });
+  expect(診断.getState()).toEqual({ diagnosticEcho: 1, diagnosticPing: 1, revision: 2 });
 });
 
 test("セッション終了で割当てが外れ次のセッションを割当て直せる", async () => {
@@ -209,7 +211,7 @@ test("セッション終了で割当てが外れ次のセッションを割当�
     direction: "bidirectional",
   });
   await waitForArrival(() => core.listAssignments().length === 1, "初回の割当て");
-  expect(診断.getState()).toEqual({ diagnosticEcho: 0, diagnosticPing: 0 });
+  expect(診断.getState()).toEqual({ diagnosticEcho: 0, diagnosticPing: 0, revision: 0 });
 
   // クライアント側の中断で Session が終わり、割当てと操作口が失効する。
   first.abort(new Error("試験中断"));

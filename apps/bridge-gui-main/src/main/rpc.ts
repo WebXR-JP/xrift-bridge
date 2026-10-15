@@ -8,8 +8,6 @@ import type { GuiBackend } from "./backend.ts";
 
 /** Webview 側からの通知に対する main 側の振る舞い。 */
 export interface ManagementRpcHooks {
-  /** `viewReady` を受信したときに到達を記録する。 */
-  readonly onViewReady: (title: string) => void;
   /** `getSnapshot` 要求を受信したことを記録する。 */
   readonly onSnapshotRequested: () => void;
   /**
@@ -30,9 +28,9 @@ export interface ManagementRpcHooks {
  */
 export interface PluginUiOperations {
   /**
-   * 現割当てへの対応付けの追随。配置・回収・期限切れの整理を行う。
+   * 表示要求への対応付けの追随。配置・回収・期限切れの整理を行う。
    *
-   * 表示状態の取得前に呼び、読み取り時点の現割当てを反映する。
+   * 表示状態の取得前に呼び、読み取り時点の表示要求を反映する。
    */
   readonly syncPluginUi: () => void;
   /** 配置中の対応付け一覧の取得。 */
@@ -40,7 +38,7 @@ export interface PluginUiOperations {
   /** 失敗表示の一覧の取得。 */
   readonly listPluginUiFailures: () => readonly PluginUiMountFailure[];
   /**
-   * 失敗表示の消去と現割当てへの再配置（個体限定）。
+   * 失敗表示の消去と現表示要求への再配置（個体限定）。
    *
    * @param instanceId - 再試行する実インスタンスの識別子。
    * @returns 受付応答。後続の状態は `stateChanged` で受け取る。
@@ -72,7 +70,7 @@ export function createManagementRpc(
         // 段2の観測点。到達の事実だけを残し、応答内容は残さない。
         getSnapshot: () => {
           hooks.onSnapshotRequested();
-          // 読み取り時点の現割当てへ対応付けを追随させ、配置の現在値を載せる。
+          // 読み取り時点の表示要求へ対応付けを追随させ、配置の現在値を載せる。
           pluginUi.syncPluginUi();
           const snapshot = backend.getSnapshot();
           return {
@@ -92,15 +90,13 @@ export function createManagementRpc(
         unassignPlugin: ({ instanceId, localSessionId, portId }) =>
           backend.unassignPlugin({ instanceId, localSessionId, portId }),
         retryPluginMount: ({ instanceId }) => pluginUi.retryPluginUiMount(instanceId),
+        setPluginView: (params) => backend.setPluginView(params),
         quit: () => {
           hooks.onQuitRequested();
           return { ok: true as const };
         },
       },
       messages: {
-        viewReady: ({ title }) => {
-          hooks.onViewReady(title);
-        },
         // 段2の観測点。画面→main の通知名だけを残し、payload は残さない。
         "*": (name) => {
           console.log(`[bridge-gui] 画面通知を受信した: ${String(name)}`);

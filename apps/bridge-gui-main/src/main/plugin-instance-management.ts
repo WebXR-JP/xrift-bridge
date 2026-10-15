@@ -1,40 +1,36 @@
 /**
  * 汎用プラグイン・インスタンス管理層のホスト内部型。
  *
- * プラグイン実装者が参照する公開契約（記述子・候補 DTO・公開参照口・
- * 監視方式）は `bridge-gui-plugin-sdk/management` が正本であり、ここでは
+ * プラグイン実装者が参照する公開契約（記述子・候補 DTO・束縛個体限定の
+ * 参照口）は `bridge-gui-plugin-sdk/management` が正本であり、ここでは
  * 再 export する。ここには管理層の実装依存口（依存注入・問題報告・解放結果・
- * セッション最小口・時計）だけを置く。具体の送受信・表示内容は companion が
- * 宣言する記述子が駆動し、この層に種別分岐と汎用の任意 payload ディスパッチ表は
- * 持たない。
+ * セッション最小口）だけを置く。表示内容の射影・監視方式・固有操作の汎用表は
+ * 持たない。状態の解釈と通知は endpoint 工場が組み立てる GUI アダプターの
+ * 責務であり、この層に種別分岐と汎用の任意 payload ディスパッチ表は持たない。
  *
  * 本番配線は backend が行う（server→core→manager の順に生成し、記述子を
  * 登録して companion を backend ごとの登録表へ載せる）。この層から
- * backend・binder・coordinator への依存は作らない。
+ * backend・coordinator への依存は作らない。
  *
  * @packageDocumentation
  */
 import type { BridgeAppCore } from "bridge-app-core/core";
-import type {
-  PluginBindingInfo,
-  PluginSessionMetadata,
-  Stop,
-} from "bridge-gui-plugin-sdk/management";
+import type { PluginBindingInfo, PluginSessionMetadata } from "bridge-gui-plugin-sdk/management";
+
+/** 購読解除口。 */
+export type Stop = () => void;
 
 export type {
-  GuiPluginAccess,
+  BoundPluginRef,
   GuiPluginManagementDescriptor,
-  GuiPluginObservation,
   OwnedPluginInstanceInfo,
   PluginAssignmentCandidate,
   PluginAssignmentPolicy,
   PluginAssignmentRequest,
   PluginAssignmentTarget,
   PluginBindingInfo,
-  PluginOperationAccess,
   PluginOwnershipPhase,
   PluginSessionMetadata,
-  Stop,
 } from "bridge-gui-plugin-sdk/management";
 
 /**
@@ -52,13 +48,7 @@ export interface PluginReleaseResult {
  */
 export interface PluginManagerIssue {
   /** 失敗した段階。 */
-  readonly stage:
-    | "event-unsubscribe"
-    | "observation-stop"
-    | "unassign"
-    | "remove-instance"
-    | "poll"
-    | "notification";
+  readonly stage: "event-unsubscribe" | "unassign" | "remove-instance" | "notification";
   /** 対象の束縛情報。特定できない場合は `null`。 */
   readonly binding: PluginBindingInfo | null;
   /** 失敗の原因。 */
@@ -85,21 +75,7 @@ export interface PluginManagerSessions {
 }
 
 /**
- * 管理層が使う周期時計。実時間待ちの試験は偽時計で差し替える。
- */
-export interface PluginManagerClock {
-  /**
-   * 周期処理を始める。
-   *
-   * @param intervalMs - 実行間隔（ミリ秒）。
-   * @param tick - 周期ごとの処理。例外を投げないこと。
-   * @returns 停止口。
-   */
-  every(intervalMs: number, tick: () => void): Stop;
-}
-
-/**
- * 管理層の依存注入口。偽 core・偽セッション・偽時計で検証できる。
+ * 管理層の依存注入口。偽 core・偽セッションで検証できる。
  */
 export interface PluginInstanceManagerDependencies {
   /** 個体生成・割当ての最小口。終了口は含めず、閉じない。 */
@@ -109,8 +85,6 @@ export interface PluginInstanceManagerDependencies {
   >;
   /** 生存セッションの最小口。 */
   readonly sessions: PluginManagerSessions;
-  /** 周期時計。 */
-  readonly clock: PluginManagerClock;
   /** 外部状態の変化通知。購読者の例外は隔離して問題報告に回す。 */
   readonly onChanged: () => void;
   /** 問題報告の受け口。受け口の例外は管理層を壊さない。 */

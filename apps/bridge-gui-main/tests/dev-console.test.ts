@@ -46,6 +46,7 @@ function makeSnapshot(revision: number): ManagementSnapshot {
     pluginMounts: [],
     pluginMountFailures: [],
     pluginNavigationRules: [],
+    pluginView: { instanceId: null, viewGeneration: 0 },
   };
 }
 
@@ -76,6 +77,10 @@ function prepareContext(observer?: DevConsoleObserver): {
       portId: "diagnostic",
     }),
     unassignPlugin: () => ({ released: true, issues: [] }),
+    setPluginView: () => ({
+      adopted: true as const,
+      current: { instanceId: null, viewGeneration: 0 },
+    }),
   };
   const pluginUi = {
     syncPluginUi: () => {},
@@ -315,6 +320,53 @@ test("操作全体の期限超過は定型の失敗応答になり秘密を載�
   expect((json as { ok: boolean }).ok).toBe(false);
   expect((json as { error: string }).error).toBe(DEV_OP_TIMEOUT_ERROR);
   expect(text).not.toContain(SECRET);
+});
+
+test("setPluginView は基準世代を送り採用と現在値を要約する", async () => {
+  const seen: unknown[] = [];
+  const backend = {
+    getSnapshot: () => makeSnapshot(9),
+    setPluginView: (params: unknown) => {
+      seen.push(params);
+      return { adopted: true, current: { instanceId: "i1", viewGeneration: 3 } };
+    },
+  };
+  const context = {
+    backend,
+    pluginUi: {
+      syncPluginUi: () => {},
+      listPluginUiMounts: () => [],
+      listPluginUiFailures: () => [],
+      retryPluginUiMount: () => ({ ok: true as const }),
+    },
+    observer: { observeDom: async (revision: number) => makeDom(revision) },
+    token: "実行ごとの乱数tokenの代役",
+    // ADR: `as` は実行時の検証にならないため、使う操作（表示状態の取得・
+    // 表示要求）の項目だけを満たす代役であることを残す。
+  } as unknown as DevRequestContext;
+  const upstream: DevUpstream = { port: 3210, requestIP: () => ({ address: "127.0.0.1" }) };
+  const response = await handleDevConsoleRequest(
+    makeRequest("/dev/op", {
+      body: JSON.stringify({
+        op: "setPluginView",
+        params: { instanceId: "i1", baseViewGeneration: 2 },
+      }),
+    }),
+    upstream,
+    context,
+  );
+  const { status, json } = await readBody(response);
+  expect(status).toBe(200);
+  const body = json as { business: unknown };
+  // RPC 成功と採用を混同せず、採用と現在の採用済み対象・世代を残す。
+  expect(body["business"]).toEqual({
+    kind: "pluginView",
+    adopted: true,
+    instanceId: "i1",
+    viewGeneration: 3,
+  });
+  // 旧名の `viewGeneration` ではなく基準世代を送る。
+  expect(seen).toEqual([{ instanceId: "i1", baseViewGeneration: 2 }]);
 });
 
 test("旧管理操作名は許可外として拒否する", async () => {

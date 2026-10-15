@@ -12,6 +12,11 @@
  * 公開する。管理 DTO の種別表（`pluginKinds`）は登録内容から生成し、
  * backend に種別分岐を持たない。
  *
+ * 表示要求 `pluginView`（main が所有・採番する採用済み対象と世代）を所有し、
+ * `setPluginView` 受付時に基準世代の一致だけを採用して snapshot の世代を正とする。
+ * 割当て・解除と子の生成は連動させない。子の生成・破棄は対応付けが表示要求に
+ * 追随して行う。
+ *
  * @packageDocumentation
  */
 import { formatPairingCode } from "bridge-protocol";
@@ -38,18 +43,33 @@ import type {
   StateChangedMessage,
   UnassignPluginResult,
 } from "bridge-gui-contract/management";
-import { buildPluginNavigationRules } from "bridge-gui-contract/plugin-instance";
+import {
+  buildPluginNavigationRules,
+  isPluginViewRequest,
+  type AdoptedPluginView,
+  type SetPluginViewResult,
+} from "bridge-gui-contract/plugin-instance";
 import { PluginInstanceManager } from "./plugin-instance-manager.ts";
-import type { OwnedPluginInstanceInfo, Stop } from "bridge-gui-plugin-sdk/management";
+import type { OwnedPluginInstanceInfo } from "bridge-gui-plugin-sdk/management";
+import type { Stop } from "./plugin-instance-management.ts";
 import type {
   GuiPluginRegisterFunction,
   GuiPluginRegistrar,
+  GuiPluginRegistration,
 } from "bridge-gui-plugin-sdk/registration";
 import type { PluginManagerSessions } from "./plugin-instance-management.ts";
 import { PluginCompanionRegistry } from "./plugin-companions.ts";
 
 /** 既定の待ち受けポート。 */
 export const DEFAULT_BRIDGE_PORT = 3100;
+
+/**
+ * 解決前の companion 宣言を解決済み view パスへ解決する口。
+ *
+ * composition が静的 manifest 由来の resolver を束ねて渡す。SDK の型を
+ * 変えずに済む形であり、解決は静的 manifest との照合だけである。
+ */
+export type PluginViewPathResolver = (kind: string, viewEntry: string) => string;
 
 /** `GuiBackend.create` の依存注入口。 */
 export interface GuiBackendDependencies {
@@ -61,6 +81,12 @@ export interface GuiBackendDependencies {
    * 持たない。空構成の検証は明示的に空登録関数を渡す。
    */
   readonly registerPlugins?: GuiPluginRegisterFunction;
+  /**
+   * companion 宣言の解決口。composition が静的 manifest から導く。
+   *
+   * 省略時は companion 宣言のある登録を受け付けず失敗状態にする。
+   */
+  readonly resolvePluginViewPath?: PluginViewPathResolver;
 }
 
 /** `GuiBackend.create` の設定。 */
@@ -143,6 +169,7 @@ export class GuiBackend {
   private manager: PluginInstanceManager | null = null;
   private readonly registry = new PluginCompanionRegistry();
   private pluginKinds: PluginKindSummary[] = [];
+  private pluginView: AdoptedPluginView = { instanceId: null, viewGeneration: 0 };
   private managementUnsubscribe: Unsubscribe | null = null;
   private readonly listeners = new Set<(message: StateChangedMessage) => void>();
   /**
@@ -173,7 +200,7 @@ export class GuiBackend {
    * 部分登録を公開せず、生成済みの資源を回収して失敗状態にする。
    *
    * @param options - 待ち受けポート・許可 Origin の設定。
-   * @param deps - プラグイン登録関数の注入口。省略時は空構成である。
+   * @param deps - プラグイン登録関数・view パス解決口の注入口。省略時は空構成である。
    * @returns 生成したバックエンド。起動失敗時は `startupError` を持つ。
    */
   static async create(
@@ -186,12 +213,13 @@ export class GuiBackend {
     // が担い、backend は受け取った登録関数だけを使う。backend 側に既定登録を
     // 置くと具象への依存が戻るため、空構成の検証は明示的に空登録関数を渡す。
     const registerPlugins: GuiPluginRegisterFunction = deps?.registerPlugins ?? ((): void => {});
+    const resolveViewPath = deps?.resolvePluginViewPath;
     try {
       const server = await createBridgeServer({
         port: options.port ?? DEFAULT_BRIDGE_PORT,
         allowedOrigins: [...allowedOrigins],
       });
-      await backend.attach(server, registerPlugins);
+      await backend.attach(server, registerPlugins, resolveViewPath);
     } catch (error) {
       backend.markFailed(error);
     }
@@ -212,6 +240,14 @@ export class GuiBackend {
   }
 
   /**
+   * backend ごとの個体管理層。coordinator への注入用である。
+   * 起動失敗時は `null` を返す。
+   */
+  get instanceManager(): PluginInstanceManager | null {
+    return this.manager;
+  }
+
+  /**
    * 起動した server と基盤・管理層を結び付け、注入された登録関数で
    * プラグインを登録する。
    *
@@ -225,12 +261,17 @@ export class GuiBackend {
    * 登録途中の例外では部分登録を公開せず、生成済みの manager・core・server
    * を回収して失敗状態にする。
    *
+   * companion 宣言の解決は注入された resolver で行い、解決済みだけを登録表に
+   * 載せる。SDK の型を変更せずに済む形である。
+   *
    * @param server - 起動したブリッジ。
    * @param registerPlugins - プラグインの登録関数。
+   * @param resolveViewPath - companion 宣言の解決口。省略時は解決を拒否する。
    */
   private async attach(
     server: BridgeServer,
     registerPlugins: GuiPluginRegisterFunction,
+    resolveViewPath?: PluginViewPathResolver,
   ): Promise<void> {
     const core = createBridgeAppCore(server);
     const sessions: PluginManagerSessions = {
@@ -263,24 +304,6 @@ export class GuiBackend {
     const manager = new PluginInstanceManager({
       core,
       sessions,
-      clock: {
-        every: (intervalMs: number, tick: () => void): Stop => {
-          const timer = setInterval(tick, intervalMs);
-          // ADR: `as` で `unref` の有無を主張する理由は、実行系（Node・Bun）で
-          // タイマー型が異なるためである。待機の維持には使わず、単独滞留での
-          // 固着を避けるために外せる場合だけ外す。根拠は Node の `Timeout.unref`
-          // と Bun の互換タイマーであり、無い環境では何もしない。
-          const held = timer as unknown as { unref?: () => void };
-          try {
-            held.unref?.();
-          } catch {
-            // 解除の失敗は監視を止めない。
-          }
-          return () => {
-            clearInterval(timer);
-          };
-        },
-      },
       onChanged: () => {
         this.requestNotify();
       },
@@ -291,17 +314,33 @@ export class GuiBackend {
     const stagedRegistry = new PluginCompanionRegistry();
     const stagedKinds: PluginKindSummary[] = [];
     const registrar: GuiPluginRegistrar = {
-      registerPlugin(registration) {
-        const access = manager.register(registration.management);
-        const companion = registration.createCompanion(access);
-        if (companion.kind !== registration.management.kind) {
+      registerPlugin<S, O>(registration: GuiPluginRegistration<S, O>): void {
+        if (registration.management.kind !== registration.companion.kind) {
           throw new Error("companion の種別が管理記述子と一致しない。");
         }
-        stagedRegistry.register(companion);
+        manager.register(registration.management);
+        if (resolveViewPath === undefined) {
+          throw new Error("view パスの解決口が無い。");
+        }
+        const viewPath = resolveViewPath(
+          registration.companion.kind,
+          registration.companion.viewEntry,
+        );
+        if (typeof viewPath !== "string" || viewPath.length === 0) {
+          throw new Error("view パスの解決に失敗した。");
+        }
+        // ADR: 型消去は閉包内に限定する。参照口・emission の到達は工場の
+        // 呼出し時に保ち、ホストは状態の型・内容を解釈しない。
+        stagedRegistry.register({ ...registration.companion, viewPath }, (ref, emission) =>
+          registration.createEndpoint(
+            ref as Parameters<typeof registration.createEndpoint>[0],
+            emission,
+          ),
+        );
         stagedKinds.push({
           pluginKind: registration.management.kind,
           pluginId: registration.management.definition.pluginId,
-          label: companion.label,
+          label: registration.companion.label,
           maxInstances: registration.management.assignment.maxInstances,
         });
       },
@@ -333,8 +372,8 @@ export class GuiBackend {
     this.server = server;
     this.core = core;
     this.manager = manager;
-    for (const companion of stagedRegistry.list()) {
-      this.registry.register(companion);
+    for (const entry of stagedRegistry.list()) {
+      this.registry.register(entry.companion, entry.createEndpoint);
     }
     this.pluginKinds = stagedKinds;
     this.managementUnsubscribe = server.onManagementEvent((event) => {
@@ -469,6 +508,16 @@ export class GuiBackend {
   }
 
   /**
+   * 現在の採用済み表示対象と世代を返す。表示対象と世代の SSoT は main であり、
+   * 管理画面は snapshot の `pluginView` の世代だけを正とする。
+   *
+   * @returns 現在の採用済み表示対象と世代。
+   */
+  getPluginView(): AdoptedPluginView {
+    return { ...this.pluginView };
+  }
+
+  /**
    * 状態通知を受け取る。
    *
    * Webview は更新ハンドラ登録後に `getSnapshot()` し、
@@ -597,7 +646,7 @@ export class GuiBackend {
    * `localSessionId` を省略した場合は方針に従い候補から選ぶ。指定した
    * 場合はその生存セッションへ割り当て、方針の選択結果が指定と一致しな
    * ければ拒否する。割当ての確定後は通知予約を行い、後続の状態は
-   * `stateChanged` で受け取る。
+   * `stateChanged` で受け取る。子の生成とは連動させない。
    *
    * @param params - 種別トークンと割当て先の生存セッションの識別子（省略可）。
    * @returns 確定した束縛の表示状態。
@@ -630,7 +679,8 @@ export class GuiBackend {
    * 所有があるのに三識別子が不一致の場合は拒否し、新束縛へ転送しない。
    * 回収済み・未知の識別子は `{released:false, issues:[]}` とする。
    * `cleanupFailed` は自動再試行しない。解除の成否は戻り値で示し、
-   * 後続の状態は `stateChanged` で受け取る。
+   * 後続の状態は `stateChanged` で受け取る。子の破棄は対応付けの追随に任せ、
+   * ここでは直接触らない。
    *
    * @param params - 描画した所有記録の三識別子。
    * @returns 解放結果。問題の原因・状態は載せない。
@@ -661,6 +711,66 @@ export class GuiBackend {
   }
 
   /**
+   * 実プラグイン子画面の表示要求。表示意図と観測した基準世代を受け、
+   * main が所有・採番する世代と照合する。
+   *
+   * 基準世代が現在値と一致するときだけ対象を採用して自身で世代を一つ進め、
+   * 不一致は stale として状態を変更しない。対象が同じ要求は既に満たされて
+   * おり、世代を進めない。世代は単調に進め、ゼロへリセットしない。応答は
+   * 採用／非採用（stale・既充足）を区別し、現在の採用済み対象・世代を返す
+   * （RPC 成功と採用を混同しない）。管理画面は snapshot の `pluginView` の
+   * 世代だけを正とする。管理画面遷移では無し・新しい世代を送るのではなく
+   * {@link GuiBackend.endPluginViewForNavigation} で旧世代を失効させる。
+   *
+   * @param params - 表示要求。対象個体または無し＋観測した基準世代。
+   * @returns 採用／非採用（stale・既充足）と現在の採用済み対象・世代。
+   * @throws `RangeError` — 外形が不正な場合。
+   * @throws `Error` — 終了中・起動失敗の場合。
+   */
+  setPluginView(params: { instanceId: unknown; baseViewGeneration: unknown }): SetPluginViewResult {
+    this.operable();
+    if (!isPluginViewRequest(params)) {
+      throw new RangeError("表示要求の外形が不正である。");
+    }
+    // 基準世代が現在値と一致しない要求は stale とし、状態を変更しない。
+    if (params.baseViewGeneration !== this.pluginView.viewGeneration) {
+      return { adopted: false, current: { ...this.pluginView } };
+    }
+    // 対象が同じ要求は既に満たされており、世代を進めない。
+    if (params.instanceId === this.pluginView.instanceId) {
+      return { adopted: false, current: { ...this.pluginView } };
+    }
+    // 新しい表示期間として対象を採用し、世代を一つ進める。
+    this.pluginView = {
+      instanceId: params.instanceId,
+      viewGeneration: this.pluginView.viewGeneration + 1,
+    };
+    console.log(
+      `[bridge-gui] 表示要求を採用した: instanceId=${params.instanceId ?? "なし"} generation=${this.pluginView.viewGeneration}`,
+    );
+    this.requestNotify();
+    return { adopted: true, current: { ...this.pluginView } };
+  }
+
+  /**
+   * 管理画面の文書遷移・リロードに伴い表示期間を終了する。
+   *
+   * 旧要求を失効させるため、対象の有無にかかわらず無し・新しい世代へ進める。
+   * 呼び出し側はこの後に子の回収を行うこと。起動失敗時でも遷移掃除として
+   * 作用する。
+   *
+   * @returns 終了後の採用済み表示対象と世代。
+   */
+  endPluginViewForNavigation(): AdoptedPluginView {
+    this.pluginView = { instanceId: null, viewGeneration: this.pluginView.viewGeneration + 1 };
+    console.log(
+      `[bridge-gui] 管理画面の遷移で表示期間を終了した: generation=${this.pluginView.viewGeneration}`,
+    );
+    this.requestNotify();
+    return { ...this.pluginView };
+  }
+
+  /**
    * 外部状態（子画面配置など）の変化を状態通知に載せる。
    *
    * main 側の配置管理が backend の改訂番号を共有時計として使うための口で
@@ -675,7 +785,7 @@ export class GuiBackend {
    * 管理通知を処理する。種別固有の回収は持たず、`manager.reconcile()` で
    * 現割当ての無音取消しを回収し、その後の通知予約は既存経路にまとめる。
    *
-   * 読み取り（`getSnapshot`・companion 読取）に回収の副作用は入れない。
+   * 読み取り（`getSnapshot`）に回収の副作用は入れない。
    *
    * @param _event - サーバーの管理通知。種別を問わず照合するため中身は読まない。
    */
@@ -759,7 +869,7 @@ export class GuiBackend {
     // ため backend 生存期間中は不変であり、`getSnapshot` と `stateChanged`
     // の両方に同じ確定経路で載る。登録が無ければ基底（全面拒否＋空ページ）になる。
     const pluginNavigationRules = buildPluginNavigationRules(
-      this.registry.list().map((companion) => companion.viewPath),
+      this.registry.list().map((entry) => entry.companion.viewPath),
     );
     return {
       revision: this.revision,
@@ -798,6 +908,7 @@ export class GuiBackend {
       pluginMounts: [],
       pluginMountFailures: [],
       pluginNavigationRules,
+      pluginView: this.pluginView,
     };
   }
 }

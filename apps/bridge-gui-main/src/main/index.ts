@@ -2,7 +2,10 @@ import Electrobun, { BrowserView, BrowserWindow, type ElectrobunEvent } from "el
 import { PRODUCTION_ORIGIN } from "bridge-server";
 import { parsePluginMountId } from "bridge-gui-contract/plugin-instance";
 import { GuiBackend } from "./backend.ts";
-import { registerBundledPlugins } from "../composition/bundled-plugins.ts";
+import {
+  registerBundledPlugins,
+  resolveBundledPluginViewPath,
+} from "../composition/bundled-plugins.ts";
 import {
   DEV_CONSOLE_OPT_IN_ENV,
   shouldStartDevConsole,
@@ -52,9 +55,10 @@ const backendOptions =
 
 // GUI バックエンドの生成は非同期であるため、到達前から共有する。
 // 同梱プラグインの選択と登録順は composition root が宣言し、
-// backend は受け取った登録関数だけを使う。
+// backend は受け取った登録関数と view パス解決口だけを使う。
 const backendPromise: Promise<GuiBackend> = GuiBackend.create(backendOptions, {
   registerPlugins: registerBundledPlugins,
+  resolvePluginViewPath: resolveBundledPluginViewPath,
 });
 // 終了手順の共有。二度目以降は同じ終了を待つ（冪等）。
 let shutdownTask: Promise<void> | null = null;
@@ -171,9 +175,6 @@ void backendPromise.then((ready) => {
         snapshotRequestCount += 1;
         console.log(`[bridge-gui] 表示状態の要求を受信した: count=${snapshotRequestCount}`);
       },
-      onViewReady: (title) => {
-        console.log(`[bridge-gui] 管理画面の準備ができた: ${title}`);
-      },
       onQuitRequested: () => {
         if (shutdownFinished) {
           Electrobun.Utils.quit();
@@ -253,23 +254,27 @@ void backendPromise.then((ready) => {
     return "詳細不明";
   }
 
-  // 実プラグイン子画面の対応付け。backend の現割当てへの追随と
-  // 個体別チャネルの結線を担う。
-  // companion 登録表は backend が生成したものを注入する（共有 singleton は使わない）。
+  // 実プラグイン子画面の対応付け。表示要求への追随と個体別チャネルの結線を担う。
+  // companion 登録表・個体管理層は backend が生成したものを注入する
+  // （共有 singleton は使わない）。表示要求は backend の `pluginView` を正とする。
   const registry = ready.companionRegistry;
-  pluginUi = new PluginUiCoordinator(
-    mainWindow.webview.id,
-    ready,
-    createPluginUiChannelFactory(registry),
-    Date.now,
-    registry,
-  );
+  const manager = ready.instanceManager;
+  if (manager !== null) {
+    pluginUi = new PluginUiCoordinator(
+      mainWindow.webview.id,
+      ready,
+      createPluginUiChannelFactory(),
+      Date.now,
+      registry,
+      manager,
+      () => ready.getPluginView(),
+    );
+  }
   // バックエンドの状態変化への追随を先に登録し、Webview への通知を後に
-  // 登録する。対応付けの整理と子画面への送信を先に行い、配置の現在値を
-  // 載せて送る。購読者の例外はバックエンド側で隔離する。
+  // 登録する。対応付けの整理を先に行い、配置の現在値を載せて送る。
+  // 購読者の例外はバックエンド側で隔離する。
   ready.onStateChanged(() => {
     pluginUi?.syncNow();
-    pluginUi?.pushBound();
   });
   // バックエンドの状態変化を Webview へ送る唯一の通知である。
   ready.onStateChanged(({ revision, snapshot }) => {
@@ -314,8 +319,10 @@ void backendPromise.then((ready) => {
 
   mainWindow.webview.on("did-navigate", (event: unknown) => {
     console.log(`[bridge-gui] Webview が遷移した: ${describeNavigation(event)}`);
-    // 実プラグイン子画面も対応付けの削除と表示の破棄を行い残さない。
-    // 現割当てへの再配置は次回の状態通知・取得で作り直す。
+    // 表示期間を先に終了させて旧要求を失効させ、その後で子を回収する。
+    // 順序を逆にすると旧世代の配置が残り、新子と混線する。
+    // 現表示要求への再配置は次回の状態通知・取得で作り直す。
+    ready.endPluginViewForNavigation();
     pluginUi?.resetAll("管理画面の遷移");
   });
 

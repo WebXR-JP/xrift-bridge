@@ -14,10 +14,19 @@
  * 応答相関は診断 payload 内の明示 `id` で行う（到着順 FIFO にはしない。
  * タイムアウト後の遅延応答が次の要求へ誤対応するのを防ぐため）。
  *
+ * プラグイン状態の SSoT は本体であり、改訂番号の所有者も本体である。
+ * 応答の確定ごとに改訂番号を1進め、読み取りでは進めない。GUI アダプターは
+ * 番号を引き継ぐだけで、子は新しい状態のみ採用する。
+ *
  * @packageDocumentation
  */
 import { isJsonValue } from "bridge-protocol";
-import type { AssignedSession, PluginDefinition, PluginInstance } from "bridge-app-core/core";
+import type {
+  AssignedSession,
+  PluginDefinition,
+  PluginInstance,
+  Unsubscribe,
+} from "bridge-app-core/core";
 
 /** 診断プラグインの接続口識別子。 */
 export const DIAGNOSTIC_PORT_ID = "diagnostic";
@@ -29,12 +38,32 @@ export const DIAGNOSTIC_PLUGIN_ID = "diagnostic";
  * 診断の応答統計。
  *
  * 応答を送信試行した件数を数える（送出成否の確定ではない）。
+ * 改訂番号は応答の確定ごとに1進む単調増加値であり、読み取りでは進めない。
  */
 export interface DiagnosticStats {
   /** echo 応答の送信試行件数。 */
   readonly diagnosticEcho: number;
   /** ping 応答の送信試行件数。 */
   readonly diagnosticPing: number;
+  /** 単調増加の改訂番号。初期値は 0 であり、応答の確定ごとに1進める。 */
+  readonly revision: number;
+}
+
+/**
+ * 診断プラグイン固有の操作口。
+ *
+ * 送信操作は持たず、状態購読だけを提供する。endpoint 工場はこの口で
+ * 本体変更の購読を組み立て、表示用 DTO を emission port へ送る。
+ */
+export interface DiagnosticOperations {
+  /**
+   * 状態変化を購読する。
+   *
+   * @param handler - 最新の状態を受け取る処理。例外は隔離する。
+   * @returns 購読解除。
+   * @throws `RangeError` — 破棄済みの場合。
+   */
+  onStateChanged(handler: (state: DiagnosticStats) => void): Unsubscribe;
 }
 
 /**
@@ -84,9 +113,11 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /** 診断インスタンス（単一の reliable 接続口を受ける）。 */
-class DiagnosticInstance implements PluginInstance<DiagnosticStats> {
+class DiagnosticInstance implements PluginInstance<DiagnosticStats, DiagnosticOperations> {
   private echoCount = 0;
   private pingCount = 0;
+  private revision = 0;
+  private readonly stateListeners = new Set<(state: DiagnosticStats) => void>();
   private detach: (() => void) | null = null;
   private disposed = false;
 
@@ -105,14 +136,56 @@ class DiagnosticInstance implements PluginInstance<DiagnosticStats> {
 
   /** {@inheritDoc PluginInstance.getState} */
   getState(): DiagnosticStats {
-    return { diagnosticEcho: this.echoCount, diagnosticPing: this.pingCount };
+    return {
+      diagnosticEcho: this.echoCount,
+      diagnosticPing: this.pingCount,
+      revision: this.revision,
+    };
+  }
+
+  /** {@inheritDoc PluginInstance.getOperations} */
+  getOperations(): DiagnosticOperations {
+    return {
+      onStateChanged: (handler) => this.addStateListener(handler),
+    };
   }
 
   /** {@inheritDoc PluginInstance.dispose} */
   dispose(): void {
+    if (this.disposed) return;
     this.disposed = true;
     this.detach?.();
     this.detach = null;
+    this.stateListeners.clear();
+  }
+
+  /**
+   * 状態購読を登録する。
+   *
+   * @param handler - 最新の状態を受け取る処理。
+   * @returns 購読解除。
+   * @throws `RangeError` — 破棄済みの場合。
+   */
+  private addStateListener(handler: (state: DiagnosticStats) => void): Unsubscribe {
+    if (this.disposed) throw new RangeError("破棄済みのインスタンスである。");
+    this.stateListeners.add(handler);
+    return () => {
+      this.stateListeners.delete(handler);
+    };
+  }
+
+  /** 状態購読者へ最新の状態を届ける。購読者の例外は隔離する。 */
+  private notifyStateChanged(): void {
+    const snapshot = this.getState();
+    // ADR: 通知中の購読解除に備えて写しへ届ける。`Array.from` は反復子の
+    // 振る舞いを変えず、既存の配送スナップショット方針に合わせる。
+    for (const listener of Array.from(this.stateListeners)) {
+      try {
+        listener(snapshot);
+      } catch {
+        // 購読者の例外で通知を止めない。
+      }
+    }
   }
 
   /**
@@ -128,6 +201,7 @@ class DiagnosticInstance implements PluginInstance<DiagnosticStats> {
     const result = toDiagnosticResponse(payload);
     if (!result.ok) {
       // ADR: 不正形状は当該 Session のみ中断し、Connection・他 Session は維持する。
+      // 不正形状は状態変更ではないため、改訂番号は進めず購読者へ通知しない。
       try {
         session.abort(new Error("診断 payload の形状が不正である。"));
       } catch {
@@ -141,8 +215,11 @@ class DiagnosticInstance implements PluginInstance<DiagnosticStats> {
     } else {
       this.echoCount += 1;
     }
-    // ADR: 応答の送出失敗は Session 終端として扱い、ここで待機を作らない。
+    // ADR: 改訂番号は応答の確定ごとに1進め、読み取り（`getState`）では進めない。
     // 計数は送信試行の時点で確定する（従来の意味）。
+    this.revision += 1;
+    this.notifyStateChanged();
+    // ADR: 応答の送出失敗は Session 終端として扱い、ここで待機を作らない。
     void session.sendReliable(response).catch(() => {
       // 送出失敗は Session が既に終端している場合が多く、何もしない。
     });
@@ -153,9 +230,9 @@ class DiagnosticInstance implements PluginInstance<DiagnosticStats> {
  * 同梱の診断プラグイン定義。
  *
  * 単一の接続口（reliable 双方向）を持ち、インスタンスごとに独立した
- * 応答統計を持つ。
+ * 応答統計と改訂番号を持つ。固有操作は状態購読だけであり、送信操作は持たない。
  */
-export const diagnosticPlugin: PluginDefinition<DiagnosticStats> = {
+export const diagnosticPlugin: PluginDefinition<DiagnosticStats, DiagnosticOperations> = {
   pluginId: DIAGNOSTIC_PLUGIN_ID,
   ports: [
     {
@@ -163,7 +240,7 @@ export const diagnosticPlugin: PluginDefinition<DiagnosticStats> = {
       accepts: [{ kind: "reliable", direction: "bidirectional" }],
     },
   ],
-  create(): PluginInstance<DiagnosticStats> {
+  create(): PluginInstance<DiagnosticStats, DiagnosticOperations> {
     return new DiagnosticInstance();
   },
 };

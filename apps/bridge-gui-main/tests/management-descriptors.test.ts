@@ -1,28 +1,45 @@
 /**
- * 管理記述子（text/diagnostic）の単体検証。
+ * 管理記述子・companion 宣言・endpoint 工場の単体検証。
  *
- * 生成元・上限・候補選択・監視方式・表示射影・固有操作の宣言だけを確かめ、
- * 本番配線（backend）には触らない。旧射影関数（`projectTextInstanceView` 等）の
- * 試験はここへ移す。厳密な周期値は偽時計で検証し、実時間待ちはしない。
+ * 生成元・上限・候補選択の宣言だけを確かめ、本番配線（backend）には触らない。
+ * 状態の解釈・表示用 DTO の組立ては endpoint 工場が担い、汎用管理層・共有契約は
+ * 関与しない。不透明中継の応答は値に載せ、投げた例外は中継失敗に落とす。
+ * 反射的呼出しはしない。
  *
  * @packageDocumentation
  */
 import { expect, test } from "vite-plus/test";
 import { diagnosticPlugin } from "bridge-plugin-diagnostic";
 import { textPlugin } from "bridge-plugin-text";
+import { udpPlugin } from "bridge-plugin-udp";
 import { TEXT_SESSION_ID } from "bridge-plugin-text/contract";
 import {
   DIAGNOSTIC_ECHO_SESSION_ID,
   DIAGNOSTIC_PING_SESSION_ID,
 } from "bridge-plugin-diagnostic/contract";
 import { UDP_SESSION_ID } from "bridge-plugin-udp/contract";
+import { textGuiRegistration } from "bridge-plugin-text/gui";
+import type { TextPluginOperations, TextPluginState } from "bridge-plugin-text";
+import { diagnosticGuiRegistration } from "bridge-plugin-diagnostic/gui";
+import { udpGuiRegistration } from "bridge-plugin-udp/gui";
+import {
+  TEXT_GET_STATE_METHOD,
+  TEXT_MOUNT_KIND,
+  TEXT_VIEW_ENTRY,
+} from "bridge-plugin-text/gui-contract";
+import {
+  DIAGNOSTIC_MOUNT_KIND,
+  DIAGNOSTIC_VIEW_ENTRY,
+} from "bridge-plugin-diagnostic/gui-contract";
+import { UDP_MOUNT_KIND, UDP_VIEW_ENTRY } from "bridge-plugin-udp/gui-contract";
+import type { PluginAssignmentCandidate } from "bridge-gui-plugin-sdk/management";
+import type { PluginEmissionPort } from "bridge-gui-plugin-sdk/companion";
 import { PluginInstanceManager } from "../src/main/plugin-instance-manager.ts";
-import type {
-  PluginAssignmentCandidate,
-  PluginOperationAccess,
-} from "bridge-gui-plugin-sdk/management";
-import { textManagement } from "bridge-plugin-text/gui";
-import { DEFAULT_DIAGNOSTIC_POLL_MS, diagnosticManagement } from "bridge-plugin-diagnostic/gui";
+import { setupFixture, makeSession } from "./plugin-instance-manager-fakes.ts";
+
+const textManagement = textGuiRegistration.management;
+const diagnosticManagement = diagnosticGuiRegistration.management;
+const udpManagement = udpGuiRegistration.management;
 
 /** 割当て候補の雛形。検証対象は記述子の選択のみである。 */
 function candidateOf(overrides?: Partial<PluginAssignmentCandidate>): PluginAssignmentCandidate {
@@ -34,6 +51,15 @@ function candidateOf(overrides?: Partial<PluginAssignmentCandidate>): PluginAssi
     alive: true,
     assignment: null,
     ...overrides,
+  };
+}
+
+/** 捨てる emission port。通知の到達は中継テストで確かめる。 */
+function nullEmission(collected?: unknown[]): PluginEmissionPort {
+  return {
+    emit: (event) => {
+      collected?.push(event);
+    },
   };
 }
 
@@ -106,124 +132,68 @@ test("テキスト選択は生存・未割当て・論理名・適合だけを�
   }
 });
 
-test("テキスト監視は購読し操作口不足は型誤りで示す", () => {
-  if (textManagement.observation.mode !== "subscribe") {
-    throw new Error("テキスト監視は購読であること。");
-  }
-  let notified = 0;
-  const stop = textManagement.observation.start(
-    {
-      instanceId: "i1",
-      pluginId: "text",
-      getState: () => ({
-        canSend: true,
-        pendingId: null,
-        lastResult: null,
-        stats: { attempts: 0, acknowledged: 0, unknown: 0 },
-      }),
-      getOperations: () => ({
-        sendText: () => Promise.reject(new Error("未使用")),
-        onStateChanged: (handler: () => void) => {
-          handler();
-          return () => {
-            notified += 1;
-          };
-        },
-      }),
-    } as never,
-    () => {},
+test("テキスト companion 宣言は種別・表示名・相対 entry だけを持つ", () => {
+  expect(textGuiRegistration.companion.kind).toBe(TEXT_MOUNT_KIND);
+  expect(textGuiRegistration.companion.viewEntry).toBe(TEXT_VIEW_ENTRY);
+  expect(textGuiRegistration.companion.label.length).toBeGreaterThan(0);
+  // 解決済み view パス・子画面 URL の組立ては持たない。
+  const surface = textGuiRegistration.companion as unknown as Record<string, unknown>;
+  expect(surface["viewPath"]).toBeUndefined();
+});
+
+test("テキスト endpoint は初期取得要求に表示用 DTO で応答する", async () => {
+  const fixture = setupFixture([makeSession("local-1", "conn-a", TEXT_SESSION_ID)]);
+  const manager = new PluginInstanceManager(fixture.dependencies);
+  manager.register(textManagement);
+  const binding = manager.assign("text");
+  const ref = manager.createBoundRef<TextPluginState, TextPluginOperations>(
+    textManagement.kind,
+    binding.instanceId,
   );
-  expect(notified).toBe(0);
-  stop();
-  expect(notified).toBe(1);
-  expect(() =>
-    textManagement.observation.mode === "subscribe"
-      ? textManagement.observation.start(
-          {
-            instanceId: "i2",
-            pluginId: "text",
-            getState: () => ({
-              canSend: false,
-              pendingId: null,
-              lastResult: null,
-              stats: { attempts: 0, acknowledged: 0, unknown: 0 },
-            }),
-          } as never,
-          () => {},
-        )
-      : null,
-  ).toThrowError(TypeError);
+  const endpoint = textGuiRegistration.createEndpoint(ref, nullEmission());
+  try {
+    const value = (await endpoint.handleRequest({
+      method: TEXT_GET_STATE_METHOD,
+      params: {},
+    })) as Record<string, unknown>;
+    // 表示用 DTO は束縛情報と送信状態を写すだけであり、本文は載せない。
+    expect(value["instanceId"]).toBe(binding.instanceId);
+    expect(value["localSessionId"]).toBe("local-1");
+    expect(JSON.stringify(value)).not.toContain("ダミー本文");
+  } finally {
+    endpoint.dispose();
+  }
 });
 
-test("テキスト射影は識別と送信状態だけを明示列挙する", () => {
-  const view = textManagement.projectView({
-    binding: {
-      kind: "text",
-      pluginId: "text",
-      instanceId: "instance-1",
-      localSessionId: "local-1",
-      portId: "text",
-    },
-    state: {
-      canSend: true,
-      pendingId: "text-1",
-      lastResult: null,
-      stats: { attempts: 2, acknowledged: 1, unknown: 1 },
-    },
-  });
-  expect(Object.keys(view).sort()).toEqual([
-    "canSend",
-    "instanceId",
-    "lastResult",
-    "localSessionId",
-    "pendingId",
-    "pluginId",
-    "portId",
-    "stats",
-  ]);
-  expect(view.stats).toEqual({ attempts: 2, acknowledged: 1, unknown: 1 });
-});
-
-test("テキスト固有操作は限定口経由で現割当てへ委譲する", async () => {
-  const sent: Array<{ text: string; localSessionId: string }> = [];
-  const access: PluginOperationAccess<{
-    sendText(text: string, localSessionId: string): Promise<{ status: "acknowledged"; id: string }>;
-  }> = {
-    withOperations: (instanceId, use) =>
-      use(
-        {
-          sendText: (text: string, localSessionId: string) => {
-            sent.push({ text, localSessionId });
-            return Promise.resolve({ status: "acknowledged", id: "text-1" });
-          },
-        },
-        {
-          kind: "text",
-          pluginId: "text",
-          instanceId,
-          localSessionId: "local-1",
-          portId: "text",
-        },
-      ),
-  };
-  // ADR: `as` を使う理由は、記述子の操作型と試験の偽口の到達が同じ
-  // テキスト操作口であることを主張するためである。根拠は、偽口が委譲先の
-  // `sendText` と同じ引数順を持つことである。
-  const operations = textManagement.buildOperations(access as never);
-  await expect(operations.sendText("instance-1", "ダミー本文")).resolves.toEqual({
-    status: "acknowledged",
-    id: "text-1",
-  });
-  expect(sent).toEqual([{ text: "ダミー本文", localSessionId: "local-1" }]);
-  // 本文の文字列検査だけを行い、詳細検証はプラグインに任せる。
-  expect(() => operations.sendText("instance-1", 123)).toThrowError(RangeError);
-  expect(sent).toHaveLength(1);
+test("テキスト endpoint は未知要求を値に載せ反射呼出ししない", async () => {
+  const fixture = setupFixture([makeSession("local-1", "conn-a", TEXT_SESSION_ID)]);
+  const manager = new PluginInstanceManager(fixture.dependencies);
+  manager.register(textManagement);
+  const binding = manager.assign("text");
+  const ref = manager.createBoundRef<TextPluginState, TextPluginOperations>(
+    textManagement.kind,
+    binding.instanceId,
+  );
+  const endpoint = textGuiRegistration.createEndpoint(ref, nullEmission());
+  try {
+    const value = (await endpoint.handleRequest({
+      method: "無い要求",
+      params: {},
+    })) as Record<string, unknown>;
+    expect(value["error"]).toContain("未知の要求である");
+    const surface = endpoint as unknown as Record<string, unknown>;
+    expect(surface["operations"]).toBeUndefined();
+  } finally {
+    endpoint.dispose();
+  }
 });
 
 test("診断記述子は生成元と上限なしを持つ", () => {
   expect(diagnosticManagement.kind).toBe("diagnostic");
   expect(diagnosticManagement.definition).toBe(diagnosticPlugin);
   expect(diagnosticManagement.assignment.maxInstances).toBeNull();
+  expect(diagnosticGuiRegistration.companion.kind).toBe(DIAGNOSTIC_MOUNT_KIND);
+  expect(diagnosticGuiRegistration.companion.viewEntry).toBe(DIAGNOSTIC_VIEW_ENTRY);
 });
 
 test("診断選択は指定方式で適格候補から指定個体を選ぶ", () => {
@@ -307,105 +277,20 @@ test("診断選択の自動方式は唯一候補のみで先頭選択しない",
   ).toThrowError(RangeError);
 });
 
-test("診断監視は既定周期で統計二項目だけを指紋にする", () => {
-  expect(DEFAULT_DIAGNOSTIC_POLL_MS).toBe(500);
-  if (diagnosticManagement.observation.mode !== "poll") {
-    throw new Error("診断監視は周期照合であること。");
-  }
-  expect(diagnosticManagement.observation.intervalMs).toBe(DEFAULT_DIAGNOSTIC_POLL_MS);
-  const fingerprint = diagnosticManagement.observation.fingerprint;
-  expect(fingerprint({ diagnosticEcho: 1, diagnosticPing: 2 })).toBe(
-    fingerprint({ diagnosticEcho: 1, diagnosticPing: 2 }),
-  );
-  expect(fingerprint({ diagnosticEcho: 1, diagnosticPing: 2 })).not.toBe(
-    fingerprint({ diagnosticEcho: 2, diagnosticPing: 2 }),
-  );
-  expect(fingerprint({ diagnosticEcho: 1, diagnosticPing: 2 })).not.toBe(
-    fingerprint({ diagnosticEcho: 1, diagnosticPing: 3 }),
-  );
+test("UDP記述子は生成元と companion 宣言を持つ", () => {
+  expect(udpManagement.definition).toBe(udpPlugin);
+  expect(udpGuiRegistration.companion.kind).toBe(UDP_MOUNT_KIND);
+  expect(udpGuiRegistration.companion.viewEntry).toBe(UDP_VIEW_ENTRY);
 });
 
-test("診断射影は識別と統計だけを載せる", () => {
-  const view = diagnosticManagement.projectView({
-    binding: {
-      kind: "diagnostic",
-      pluginId: "diagnostic",
-      instanceId: "instance-9",
-      localSessionId: "local-9",
-      portId: "diagnostic",
-    },
-    state: { diagnosticEcho: 3, diagnosticPing: 5 },
-  });
-  expect(Object.keys(view).sort()).toEqual([
-    "instanceId",
-    "localSessionId",
-    "pluginId",
-    "portId",
-    "stats",
-  ]);
-  expect(view.stats).toEqual({ diagnosticEcho: 3, diagnosticPing: 5 });
-  expect(diagnosticManagement.buildOperations).toBeDefined();
-});
-
-test("診断の周期監視は偽時計の間隔で駆動する", () => {
-  let stats = { diagnosticEcho: 0, diagnosticPing: 0 };
-  const assignments: Array<{ localSessionId: string; instanceId: string; portId: string }> = [];
-  const intervals: number[] = [];
-  const ticks: Array<() => void> = [];
-  let changed = 0;
-  const manager = new PluginInstanceManager({
-    core: {
-      createInstance: () => ({
-        instanceId: "diagnostic-1",
-        pluginId: "diagnostic",
-        getState: () => stats,
-      }),
-      assign: (localSessionId: string, instanceId: string, portId: string) => {
-        assignments.push({ localSessionId, instanceId, portId });
-      },
-      unassign: () => {},
-      removeInstance: () => {},
-      listAssignments: () => [...assignments],
-    } as never,
-    sessions: {
-      list: () => [
-        {
-          localSessionId: "local-9",
-          connectionId: "connection-9",
-          sessionId: DIAGNOSTIC_ECHO_SESSION_ID,
-          capability: { kind: "reliable", direction: "bidirectional" },
-          alive: true,
-        },
-      ],
-      onEnded: () => () => {},
-    },
-    clock: {
-      every: (intervalMs: number, tick: () => void) => {
-        intervals.push(intervalMs);
-        ticks.push(tick);
-        return () => {};
-      },
-    },
-    onChanged: () => {
-      changed += 1;
-    },
-    onIssue: () => {},
-  });
-  try {
-    manager.register(diagnosticManagement);
-    const binding = manager.assign("diagnostic", { mode: "auto" });
-    expect(binding.instanceId).toBe("diagnostic-1");
-    // 厳密な周期値は記述子の既定であり、実時間待ちなしに確かめる。
-    expect(intervals).toEqual([DEFAULT_DIAGNOSTIC_POLL_MS]);
-    const tick = ticks[0];
-    if (tick === undefined) throw new Error("周期処理が無い。");
-    const before = changed;
-    tick();
-    expect(changed).toBe(before);
-    stats = { diagnosticEcho: 1, diagnosticPing: 0 };
-    tick();
-    expect(changed).toBe(before + 1);
-  } finally {
-    manager.close();
+test("登録単位は管理記述子・companion 宣言・endpoint 工場の三つの組である", () => {
+  for (const registration of [textGuiRegistration, diagnosticGuiRegistration, udpGuiRegistration]) {
+    expect(registration.management.kind).toBe(registration.companion.kind);
+    expect(typeof registration.createEndpoint).toBe("function");
+    // 旧 export（固有操作の汎用表・監視方式・射影）は持たない。
+    const management = registration.management as unknown as Record<string, unknown>;
+    expect(management["observation"]).toBeUndefined();
+    expect(management["projectView"]).toBeUndefined();
+    expect(management["buildOperations"]).toBeUndefined();
   }
 });

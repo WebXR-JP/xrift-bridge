@@ -45,9 +45,56 @@ test("bundle は Electroview と RPC 実装を inline している", () => {
   // Electroview の実行時（host 接続先の読取り）が bundle 内にある。
   expect(bundle.includes("__electrobunWebviewId")).toBe(true);
   expect(bundle.includes("__electrobunHostSocketPort")).toBe(true);
-  // 子画面の固有契約（初回取得・状態 push の名前）が bundle 内にある。
+  // 子画面の固有契約（初期取得の要求名・状態通知のイベント名）が bundle 内にある。
   expect(bundle.includes("getDiagnosticState")).toBe(true);
   expect(bundle.includes("diagnosticStateChanged")).toBe(true);
+  // 中継の共通形（固定の中継要求＋中継通知）を使う。
+  expect(bundle.includes("relay")).toBe(true);
+  expect(bundle.includes("emitted")).toBe(true);
+});
+
+/**
+ * 撤去済みの共有口の集合。3 プラグインで同一集合を検査する（同形複写）。
+ *
+ * 正本は `design/bridge-app.md`「子画面の中継契約と寿命」の撤去リストであり、
+ * 共通中継は `CompanionChannelRpc` の `relay` 要求＋`emitted` 通知だけである。
+ * 素の `revision`・`send` は検査しない。改訂番号は新しい不透明 DTO の項目として
+ * 残り、新しい不透明な要求名（`sendText` 等）や DOM 識別子に `send` が含まれる
+ * ため、素の部分一致では誤検知する。`toSnapshot` は共有契約のものを指し、
+ * プラグイン側の同名の局所関数は対象外である（子 bundle には含まれない）。
+ * `selectNewer` 自体は管理 snapshot 用に残るため、個体別の
+ * `selectNewerInstanceSnapshot` だけを検査する。`PLUGIN_INITIAL_FETCH` は旧共有
+ * の接頭辞であり、プラグイン固有の新しい不透明名（`TEXT_INITIAL_FETCH_*` 等）
+ * とは別物である。
+ */
+const REMOVED_SHARED_SYMBOLS = [
+  "observation",
+  "fingerprint",
+  "polling",
+  "projectView",
+  "toSnapshot",
+  "readSnapshot",
+  "pushMessageName",
+  "buildRequestHandlers",
+  "markReady",
+  "viewReady",
+  "InstanceBaseView",
+  "selectNewerInstanceSnapshot",
+  "PLUGIN_INITIAL_FETCH",
+] as const;
+
+test("bundle は撤去済みの共有口を使わない", () => {
+  const bundle = readDist("dist/view/index.js");
+  for (const symbol of REMOVED_SHARED_SYMBOLS) {
+    expect(bundle.includes(symbol), `撤去済みの共有口が残っている: ${symbol}`).toBe(false);
+  }
+});
+
+test("bundle は診断の旧polling定数を使わない", () => {
+  // 診断固有の旧定数（`DEFAULT_DIAGNOSTIC_POLL_MS`）は新中継契約で撤去済みで
+  // ある。共有口の統一検査では `polling` を見るが、旧定数名の復活も固有検査で
+  // 抑える。
+  expect(readDist("dist/view/index.js").includes("DEFAULT_DIAGNOSTIC_POLL_MS")).toBe(false);
 });
 
 test("bundle に外部 import・app 配置・build 機配置を残さない", () => {

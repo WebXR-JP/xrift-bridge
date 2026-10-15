@@ -44,7 +44,13 @@ describe("プラグイン操作タブの表示", () => {
     fixture.componentRef.setInput("instances", [instanceOf({ instanceId: "i1" })]);
     fixture.componentRef.setInput("selectedInstanceId", "i1");
     fixture.componentRef.setInput("failures", [
-      { kind: "text", reason: "生成待ちが失効した", instanceId: "i1", localSessionId: null },
+      {
+        kind: "text",
+        reason: "生成待ちが失効した",
+        instanceId: "i1",
+        localSessionId: null,
+        viewGeneration: 1,
+      },
     ]);
     fixture.detectChanges();
     const root = fixture.nativeElement as HTMLElement;
@@ -148,7 +154,13 @@ describe("プラグイン操作タブの表示", () => {
     ]);
     fixture.componentRef.setInput("selectedInstanceId", "i1");
     fixture.componentRef.setInput("failures", [
-      { kind: "text", reason: "生成待ちが失効した", instanceId: "i2", localSessionId: null },
+      {
+        kind: "text",
+        reason: "生成待ちが失効した",
+        instanceId: "i2",
+        localSessionId: null,
+        viewGeneration: 1,
+      },
     ]);
     fixture.detectChanges();
     const root = fixture.nativeElement as HTMLElement;
@@ -185,7 +197,13 @@ describe("プラグイン操作タブの表示", () => {
     ]);
     fixture.componentRef.setInput("selectedInstanceId", "i1");
     fixture.componentRef.setInput("failures", [
-      { kind: "text", reason: "生成待ちが失効した", instanceId: null, localSessionId: null },
+      {
+        kind: "text",
+        reason: "生成待ちが失効した",
+        instanceId: null,
+        localSessionId: null,
+        viewGeneration: null,
+      },
     ]);
     fixture.detectChanges();
     const root = fixture.nativeElement as HTMLElement;
@@ -193,6 +211,34 @@ describe("プラグイン操作タブの表示", () => {
     // `instanceId: null` はどの個体にも結び付かないため、警告印は付かない。
     expect(tabs[0]?.textContent).not.toContain("要確認");
     expect(tabs[1]?.textContent).not.toContain("要確認");
+  });
+
+  it("旧世代の失敗が剪定された後は成功個体に警告を付けずcleanupFailedには付ける", async () => {
+    // B が世代 G1 で失敗し G2 で成功した場合、main が G1 の失敗を剪定する
+    // ため一覧は空になる。選択中が応答済みなのにタブだけ警告、という矛盾を
+    // 残さないことの表示側の受け皿である。cleanupFailed の警告は剪定と
+    // 無関係に付く。
+    await TestBed.compileComponents();
+    const fixture = TestBed.createComponent(PluginOperationsComponent);
+    fixture.componentRef.setInput("instances", [
+      instanceOf({ instanceId: "i1" }),
+      instanceOf({ instanceId: "i2", localSessionId: "s2" }),
+    ]);
+    fixture.componentRef.setInput("selectedInstanceId", "i1");
+    fixture.componentRef.setInput("failures", []);
+    fixture.detectChanges();
+    const root = fixture.nativeElement as HTMLElement;
+    const tabs = [...root.querySelectorAll('[role="tab"]')];
+    expect(tabs[0]?.textContent).not.toContain("要確認");
+    expect(tabs[1]?.textContent).not.toContain("要確認");
+    fixture.componentRef.setInput("instances", [
+      instanceOf({ instanceId: "i1" }),
+      instanceOf({ instanceId: "i2", localSessionId: "s2", phase: "cleanupFailed" }),
+    ]);
+    fixture.detectChanges();
+    const warned = [...root.querySelectorAll('[role="tab"]')];
+    expect(warned[0]?.textContent).not.toContain("要確認");
+    expect(warned[1]?.textContent).toContain("要確認");
   });
 
   it("tablistとtabの関連付けがあり選択だけがtabindex0である", async () => {

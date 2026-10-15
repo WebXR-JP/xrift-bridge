@@ -661,3 +661,26 @@ test("操作口はハンドル経由で取得できる", () => {
   // 汎用の任意 payload 送信口は作らない。
   expect(操作口).not.toHaveProperty("sendReliable");
 });
+
+test("改訂番号は状態変更で進み読み取りでは進まない", async () => {
+  const fake = new 偽サーバー();
+  const { handle, ops, 生成口 } = udp割当て(fake, UDP_SESSION_ID);
+
+  // 生成直後の割当てで 1 進んでいる。読み取りでは進めない。
+  const 割当て直後 = handle.getState().revision;
+  expect(handle.getState().revision).toBe(割当て直後);
+  expect(handle.getState().revision).toBe(割当て直後);
+
+  // 開始・受信・停止で単調に進む。
+  await ops.start(loopback開始(50001));
+  const 開始後 = handle.getState().revision;
+  expect(開始後).toBeGreaterThan(割当て直後);
+  const socket = 生成口.handedOut[0];
+  if (socket === undefined) throw new Error("偽ソケットが無い。");
+  socket.受信(new Uint8Array([1]));
+  await 完了待ち();
+  expect(handle.getState().revision).toBeGreaterThan(開始後);
+  const 受信後 = handle.getState().revision;
+  await ops.stop();
+  expect(handle.getState().revision).toBeGreaterThan(受信後);
+});

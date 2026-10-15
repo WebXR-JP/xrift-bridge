@@ -238,6 +238,11 @@ export async function runDevOperation(
       });
     case "retryPluginMount":
       return pluginUi.retryPluginUiMount(params["instanceId"]);
+    case "setPluginView":
+      return backend.setPluginView({
+        instanceId: params["instanceId"],
+        baseViewGeneration: params["baseViewGeneration"],
+      });
   }
 }
 

@@ -202,10 +202,11 @@ export interface PluginUiMountPlacement {
   /** 結線段階。 */
   readonly phase: PluginUiMountPhase;
   /**
-   * 表示期間を識別する世代。表示要求の世代を写す。
+   * 表示期間を識別する世代。main が採番した採用済み世代を写す。
    *
    * 古い世代の配置では子を復活させない。同一表示期間の再試行は世代を
-   * 維持し、画面を離れての再表示は新しい世代・新しい mountId で読み直す。
+   * 維持し mountId を更新し、画面を離れての再表示は新しい世代・新しい
+   * mountId で読み直す。
    */
   readonly viewGeneration: number;
   /** plugin の最初の正常応答を受けた場合に真。受付・要求到達とは区別する。 */
@@ -241,28 +242,62 @@ export interface PluginUiMountFailure {
 }
 
 /**
- * Angular から main への表示要求。表示対象一個体または無しを伝える。
+ * Angular から main への表示要求。表示意図（対象一個体または無し）と
+ * 観測した基準世代を運ぶ。
  *
+ * 表示対象と採用済み世代の SSoT は main であり、Angular は表示意図を
+ * 送り、採用された世代を使う。main は基準世代が現在値と一致するときだけ
+ * 採用して自身で世代を進め、不一致は stale として状態を変更しない。
  * 管理画面の配置制御であり、子とアプリ本体の直接のデータ交換ではない。
  * 世代は表示期間の識別であり、業務の改訂番号とは別物である。子 payload
- * にはこの世代を要求しない。
+ * にはこの世代を載せない。無しは表示期間を終了する要求であり、未指定・
+ * 現状維持・一時的な非表示ではない。
  */
 export interface PluginViewRequest {
-  /** 表示する実インスタンスの識別子。無しの場合は `null`。 */
+  /** 表示する実インスタンスの識別子。無し（表示期間の終了）の場合は `null`。 */
   readonly instanceId: string | null;
   /**
-   * 表示期間を識別する世代。単調増加であり、画面を離れての再表示では
-   * 新しい値を使う。同一表示期間の再試行は値を維持する。
+   * Angular が観測した基準世代。採用済み世代そのものではなく、main が
+   * 照合するための値である。main 自身が世代を進める。
    */
+  readonly baseViewGeneration: number;
+}
+
+/**
+ * main が採用した現在の表示対象と世代。
+ *
+ * `ManagementSnapshot.pluginView` に載る値であり、main が所有・採番する
+ * 単調な世代と対象の組である。管理画面はこの世代だけを正とし、古い世代の
+ * 配置・応答・失敗表示では子を復活させない。
+ */
+export interface AdoptedPluginView {
+  /** 採用中の実インスタンスの識別子。無しの場合は `null`。 */
+  readonly instanceId: string | null;
+  /** 採用済みの表示期間の世代。main が進め、ゼロへリセットしない。 */
   readonly viewGeneration: number;
 }
 
 /**
+ * 表示要求への応答。RPC 成功と採用を区別する。
+ *
+ * `adopted` が真の場合だけ要求が採用され世代が進む。偽の場合は状態を
+ * 変更せず、現在の採用済み対象・世代を返す。偽には基準世代不一致の
+ * stale と、対象が既に採用済みで世代を進めない場合の二つがある。
+ * 呼び出し側は通信成功と採用を混同せず、応答の `current` を正とする。
+ */
+export interface SetPluginViewResult {
+  /** 要求を採用した場合に真。偽は stale（基準世代不一致）または既充足（対象が既に採用済み）である。 */
+  readonly adopted: boolean;
+  /** 現在の採用済み表示対象と世代。 */
+  readonly current: AdoptedPluginView;
+}
+
+/**
  * 表示要求の外形か判定する。受付の前段であり、個体の存在・割当ての確認は
- * main が行う。
+ * main が行う。世代の一致・採番は main が担い、ここでは形だけを見る。
  *
  * @param value - 検査する未知値。
- * @returns 世代が有限の非負整数で対象が識別子または無しの場合に真。
+ * @returns 基準世代が有限の非負整数で対象が識別子または無しの場合に真。
  */
 export function isPluginViewRequest(value: unknown): value is PluginViewRequest {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
@@ -270,10 +305,12 @@ export function isPluginViewRequest(value: unknown): value is PluginViewRequest 
   }
   const table = value as Record<string, unknown>;
   const instanceId = table["instanceId"];
-  const viewGeneration = table["viewGeneration"];
+  const baseViewGeneration = table["baseViewGeneration"];
   const idOk = instanceId === null || (typeof instanceId === "string" && instanceId.length > 0);
   const generationOk =
-    typeof viewGeneration === "number" && Number.isInteger(viewGeneration) && viewGeneration >= 0;
+    typeof baseViewGeneration === "number" &&
+    Number.isInteger(baseViewGeneration) &&
+    baseViewGeneration >= 0;
   return idOk && generationOk;
 }
 

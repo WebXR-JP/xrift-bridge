@@ -1,8 +1,8 @@
 /**
  * 管理画面 RPC の接続・型付き送受信だけを担う薄い接続口。
  *
- * Electroview の生成・`defineRPC<ManagementRpc>`・型付き request・`viewReady`
- * 通知・`stateChanged` 購読をここに閉じ込める。表示状態（signals）・DOM
+ * Electroview の生成・`defineRPC<ManagementRpc>`・型付き request・
+ * `stateChanged` 購読をここに閉じ込める。表示状態（signals）・DOM
  * （`document`・`window`）は持たない。契約型は `bridge-gui-contract` の公開
  * subpath から再利用する（循環が無いことを `tsc` で確かめる）。
  *
@@ -22,6 +22,7 @@ import type {
   StateChangedMessage,
   UnassignPluginResult,
 } from "bridge-gui-contract/management";
+import type { PluginViewRequest, SetPluginViewResult } from "bridge-gui-contract/plugin-instance";
 import type { ApprovalResult, RejectionResult } from "bridge-server";
 
 /** `stateChanged` push の受信処理。採用判断は呼び出し側が行う。 */
@@ -204,12 +205,17 @@ export class ManagementRpcClient {
   }
 
   /**
-   * 準備完了を通知する。題名は呼び出し側が渡す（DOM を読まない）。
+   * 実プラグイン子画面の表示要求を送る。表示意図と観測した基準世代を伝える。
    *
-   * @param title - 通知に載せる文書題。
+   * 基準世代は採用中 snapshot の採用済み世代であり、採番は main が行う。
+   * 応答は採用／stale と現在の採用済み対象・世代を返す（RPC 成功と採用を
+   * 混同しない）。
+   *
+   * @param request - 表示意図と観測した基準世代。
+   * @returns 採用可否と現在の採用済み表示対象・世代。
    */
-  notifyViewReady(title: string): void {
-    this.rpc.send.viewReady({ title });
+  setPluginView(request: PluginViewRequest): Promise<SetPluginViewResult> {
+    return this.rpc.request.setPluginView(request);
   }
 
   /**

@@ -1,73 +1,55 @@
 /**
- * 個体別チャネルの SDK 適合層。`BrowserView` への依存はこの小さな層に隔離する。
+ * 個体別チャネルの Electrobun 適合層。`BrowserView` への依存はこの小さな層に隔離する。
  *
- * 要求処理の表は各 companion のアダプターが組み立て、
- * ここでは登録表の記述子を使った汎用の transport 結線と push 口の適合だけを
- * 担う。型検査で確認できた形だけを採用する。
+ * main が持つ Electrobun RPC スキーマは固定の中継要求 `relay` 一つ＋中継通知
+ * `emitted` 一つ（`CompanionChannelRpc`）である。子は `relay` だけを呼べ、
+ * アプリ本体への専用 ready・ping・状態取得口は持たない。要求相関・応答待ちは
+ * 既存 Electrobun RPC を使い、独自 RPC 基盤を追加しない。各マウントの接続は
+ * 独立とし、文字列で配送先を選ぶ共有 dispatcher は作らない。
+ *
+ * 中継の共通形は子→プラグイン `{method, params}`、プラグイン→子
+ * `{event, payload}` である。main は中継だけを担い、要求・通知の中身を
+ * 解釈しない。未知 method・params の検証は endpoint が行い、main は外形だけを
+ * 見る。
  *
  * @packageDocumentation
  */
 import { BrowserView } from "electrobun/main";
-import type { CompanionRequestEnv } from "bridge-gui-plugin-sdk/companion";
-import type { PluginCompanionRegistry } from "./plugin-companions.ts";
 import type {
+  CompanionChannelRpc,
+  PluginRelayEvent,
+  PluginRelayResult,
+} from "bridge-gui-contract/plugin-instance";
+import type {
+  PluginRelayHandler,
   PluginUiChannel,
   PluginUiChannelFactory,
   PluginUiChildView,
 } from "./plugin-ui-mounts.ts";
 
 /**
- * 種別を問わない個体別 RPC の汎用スキーマ。要求・通知の表は
- * 各 companion の記述子が作り、ここでは素朴に素通りさせる。
- */
-type GenericCompanionRpc = {
-  bun: {
-    requests: Record<string, { params: unknown; response: unknown }>;
-    messages: Record<string, unknown>;
-  };
-  webview: {
-    requests: Record<string, { params: unknown; response: unknown }>;
-    messages: Record<string, unknown>;
-  };
-};
-
-/** 汎用スキーマの main 側ハンドラ表。実行時の振る舞いは素朴な表渡しである。 */
-
-/**
  * 当該マウントに束縛した個体専用のチャネルを作る。
  *
- * 登録表の記述子が作った要求処理の表で既定 RPC を置き換え、transport を
- * 結線する。子からの識別子指定は受け付けず、結線時に束縛した個体だけを使う。
+ * 固定の中継要求 `relay` を当該マウントに閉じ込めた処理へ素通しし、通知は
+ * `emitted` で送る。子からの識別子指定は受け付けず、結線時に束縛した個体だけを
+ * 使う。
  *
  * @param view - 照合済みの `BrowserView`。
- * @param mountId - 結び付けるマウント識別子。
- * @param kind - 束縛する個体の種別トークン。登録済みであること。
- * @param env - main 側の汎用口。
- * @param registry - 種別トークンから記述子を引く登録表。backend が生成した表を渡す。
+ * @param mountId - 結び付けるマウント識別子。記録用である。
+ * @param onRelay - 当該マウントに閉じ込めた中継処理。
  * @returns 当該マウント専用の push 口。
- * @throws `RangeError` — 未登録種別の場合。
  */
 export function createCompanionChannel(
   view: BrowserView,
   mountId: string,
-  kind: string,
-  env: CompanionRequestEnv,
-  registry: PluginCompanionRegistry,
+  onRelay: PluginRelayHandler,
 ): PluginUiChannel {
-  const companion = registry.get(kind);
-  if (companion === undefined) {
-    throw new RangeError("未登録の種別である。");
-  }
-  const requestHandlers = companion.buildRequestHandlers(mountId, env);
-  // ADR: 汎用表の受け渡しに `as never` を使う理由は、`defineRPC` の
-  // ハンドラ型付けが具象スキーマごとであり、種別を問わない表を静的に
-  // 証明できないためである。根拠は、`defineElectrobunRPC` がハンドラ表を
-  // 実行時に素朴に束ねるだけで表の不足・余剰を検査しないこと、要求名ごとの
-  // 型付けは companion の組み立て側（具象の表リテラル）と子画面側（具象の
-  // RPC 型）で行うことである。
-  const rpc = BrowserView.defineRPC<GenericCompanionRpc>({
+  void mountId;
+  const rpc = BrowserView.defineRPC<CompanionChannelRpc>({
     handlers: {
-      requests: requestHandlers as never,
+      requests: {
+        relay: (params): Promise<PluginRelayResult> | PluginRelayResult => onRelay(params),
+      },
       messages: {},
     },
   });
@@ -75,13 +57,9 @@ export function createCompanionChannel(
   // 作るため、専用定義を先に代入してから呼び出す。推測の結線口は使わない。
   view.rpc = rpc;
   view.initializeRpcTransport();
-  const messageName = companion.pushMessageName;
   return {
-    push(message: unknown): void {
-      // ADR: `as` を使う理由は上記と同様であり、通知名は記述子が固定する。
-      // 根拠は、対応付けが同一種別の記述子で結線・送信を対にすることである。
-      const send = rpc.send as unknown as Record<string, (payload: unknown) => void>;
-      send[messageName](message);
+    push(event: PluginRelayEvent): void {
+      rpc.send.emitted(event);
     },
   };
 }
@@ -143,19 +121,16 @@ export class ElectrobunPluginUiChildView implements PluginUiChildView {
 /**
  * 対応付けが使うチャネル工場。適合層の取り出し専用である。
  *
- * 登録表の記述子を使って種別を問わず個体別チャネルを結線する。
+ * 当該マウントに閉じ込めた中継処理で種別を問わず個体別チャネルを結線する。
  * 子からの識別子指定は受け付けず、結線時に束縛した個体だけを使う。
  *
- * @param registry - 種別トークンから記述子を引く登録表。backend が生成した表を渡す。
  * @returns `ElectrobunPluginUiChildView` 専用の工場。偽ハンドルには使わない。
  */
-export function createPluginUiChannelFactory(
-  registry: PluginCompanionRegistry,
-): PluginUiChannelFactory {
-  return (view: PluginUiChildView, mountId: string, kind: string, env: CompanionRequestEnv) => {
+export function createPluginUiChannelFactory(): PluginUiChannelFactory {
+  return (view: PluginUiChildView, mountId: string, onRelay: PluginRelayHandler) => {
     if (!(view instanceof ElectrobunPluginUiChildView)) {
       throw new Error("適合層の子画面ではない。");
     }
-    return createCompanionChannel(view.unwrap(), mountId, kind, env, registry);
+    return createCompanionChannel(view.unwrap(), mountId, onRelay);
   };
 }

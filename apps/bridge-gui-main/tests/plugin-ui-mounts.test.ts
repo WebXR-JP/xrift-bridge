@@ -1,160 +1,40 @@
 /**
- * 実プラグイン子画面の対応付け・配置・回収の検証。
+ * 実プラグイン子画面の表示要求駆動の対応付け・中継・回収の検証。
  *
- * 偽の子画面・偽チャネル・偽 backend で対応付けの振る舞いだけを確かめ、
+ * 偽の子画面・偽チャネル・偽 manager で対応付けの振る舞いだけを確かめ、
  * Electrobun の SDK 呼び出しは適合層に隔離したまま触らない。
- * 現割当てへの追随、生成照合、失効・失敗時の回収、失敗の局所化と再試行、
- * 残存なしを保証する。送信本文は記録に残さない。
+ * 表示要求への追随、生成照合、不透明中継と最初の正常応答、期限、失効・失敗時の
+ * 回収、失敗の局所化と再試行、残存なしを保証する。本文・応答値は記録に残さない。
  *
  * @packageDocumentation
  */
 import { expect, test } from "vite-plus/test";
-import type { TextSendResult } from "bridge-plugin-text";
-import {
-  PluginUiCoordinator,
-  type PluginUiChannel,
-  type PluginUiChannelFactory,
-  type PluginUiChildView,
-} from "../src/main/plugin-ui-mounts.ts";
-import { PluginCompanionRegistry } from "../src/main/plugin-companions.ts";
-import type { PluginCompanion } from "bridge-gui-plugin-sdk/companion";
-import type {
-  DiagnosticInstanceSnapshot,
-  DiagnosticInstanceView,
-} from "bridge-plugin-diagnostic/gui-contract";
-import type { TextInstanceSnapshot, TextInstanceView } from "bridge-plugin-text/gui-contract";
-import {
-  BUNDLED_PLUGIN_ASSETS,
-  getBundledPluginAsset,
-} from "../src/composition/bundled-plugin-assets.ts";
+import type { PluginRelayEvent, PluginRelayResult } from "bridge-gui-contract/plugin-instance";
 import {
   buildPluginBlankUrl,
+  buildPluginNavigationRules,
   buildPluginViewUrl,
   parsePluginMountId,
   pluginMountKindOf,
   PLUGIN_PENDING_TIMEOUT_MS,
 } from "bridge-gui-contract/plugin-instance";
-
-/** 検証用の解決済み view パス。静的 manifest の値を正本とする。 */
-function bundledViewPath(kind: string): string {
-  const entry = getBundledPluginAsset(BUNDLED_PLUGIN_ASSETS, kind);
-  if (entry === undefined) throw new Error(`資産が無い: ${kind}`);
-  return entry.viewPath;
-}
-
-/** 検証用の束縛情報。表示の照合だけに使う。 */
-interface TestBinding {
-  instanceId: string;
-  localSessionId: string;
-  portId: string;
-}
-
-/** 検証用の偽 backend。外部変化の通知口だけを持つ。 */
-class FakeBackend {
-  textBinding: TestBinding | null = null;
-  diagnostics: TestBinding[] = [];
-  textView: TextInstanceView | null = null;
-  diagnosticView: DiagnosticInstanceView | null = null;
-  notified = 0;
-  /** 真の場合に要望読みを失敗させる。種別ごとの失敗隔離の検証に使う。 */
-  textDesiredFails = false;
-  /** 真の場合に要望読みを失敗させる。種別ごとの失敗隔離の検証に使う。 */
-  diagnosticDesiredFails = false;
-
-  notifyExternalChange(): void {
-    this.notified += 1;
-  }
-}
-
-/**
- * 検証用のテキスト companion。材料（FakeBackend）を capture する。
- */
-function stubTextCompanion(store: FakeBackend): PluginCompanion {
-  return {
-    kind: "text",
-    label: "テキスト",
-    viewPath: bundledViewPath("text"),
-    listDesired: () => {
-      if (store.textDesiredFails) {
-        throw new Error("テキストの要望読みに失敗した。");
-      }
-      const binding = store.textBinding;
-      return binding === null ? [] : [{ ...binding }];
-    },
-    readView: (instanceId: string) => {
-      const view = store.textView;
-      if (view === null || view.instanceId !== instanceId) {
-        throw new RangeError("束縛したテキスト個体ではない。");
-      }
-      if (store.textBinding === null || store.textBinding.instanceId !== instanceId) {
-        throw new RangeError("束縛したテキスト個体ではない。");
-      }
-      return view;
-    },
-    toSnapshot: (view, revision) => ({ ...(view as TextInstanceView), revision }),
-    send: (instanceId: string, params: unknown) => {
-      if (store.textBinding === null || store.textBinding.instanceId !== instanceId) {
-        return Promise.reject(new RangeError("束縛したテキスト個体ではない。"));
-      }
-      // ADR: `as` を使う理由は、操作引数の形状を companion が固定するためである。
-      const table = params as { text: unknown };
-      if (typeof table.text !== "string" || table.text.length === 0) {
-        return Promise.reject(new RangeError("text は空でない文字列であること。"));
-      }
-      return Promise.resolve({ status: "acknowledged" as const, id: "test-1" });
-    },
-    pushMessageName: "textStateChanged",
-    buildRequestHandlers: (mountId: string, env) => ({
-      getTextState: () => {
-        const snapshot = env.readSnapshot("text", mountId);
-        const typed = snapshot as TextInstanceSnapshot;
-        env.markReady(mountId);
-        return typed;
-      },
-      sendText: (params: { text: string }) => {
-        const result = env.send("text", mountId, params);
-        return result as Promise<TextSendResult>;
-      },
-    }),
-  };
-}
-
-/**
- * 検証用の診断 companion。材料（FakeBackend）を capture する。
- */
-function stubDiagnosticCompanion(store: FakeBackend): PluginCompanion {
-  return {
-    kind: "diagnostic",
-    label: "診断",
-    viewPath: bundledViewPath("diagnostic"),
-    listDesired: () => {
-      if (store.diagnosticDesiredFails) {
-        throw new Error("診断の要望読みに失敗した。");
-      }
-      return store.diagnostics.map((binding) => ({ ...binding }));
-    },
-    readView: (instanceId: string) => {
-      const view = store.diagnosticView;
-      if (view === null || view.instanceId !== instanceId) {
-        throw new RangeError("束縛した診断個体ではない。");
-      }
-      if (!store.diagnostics.some((binding) => binding.instanceId === instanceId)) {
-        throw new RangeError("診断の現割当てが無い。");
-      }
-      return view;
-    },
-    toSnapshot: (view, revision) => ({ ...(view as DiagnosticInstanceView), revision }),
-    pushMessageName: "diagnosticStateChanged",
-    buildRequestHandlers: (mountId: string, env) => ({
-      getDiagnosticState: () => {
-        const snapshot = env.readSnapshot("diagnostic", mountId);
-        const typed = snapshot as DiagnosticInstanceSnapshot;
-        env.markReady(mountId);
-        return typed;
-      },
-    }),
-  };
-}
+import type { PluginEmissionPort, PluginEndpoint } from "bridge-gui-plugin-sdk/companion";
+import type { BoundPluginRef } from "bridge-gui-plugin-sdk/management";
+import {
+  PluginUiCoordinator,
+  type PluginRelayHandler,
+  type PluginUiChannel,
+  type PluginUiChannelFactory,
+  type PluginUiChildView,
+} from "../src/main/plugin-ui-mounts.ts";
+import { PluginCompanionRegistry } from "../src/main/plugin-companions.ts";
+import { PluginInstanceManager } from "../src/main/plugin-instance-manager.ts";
+import {
+  alphaDescriptor,
+  firstFitPolicy,
+  makeSession,
+  setupFixture,
+} from "./plugin-instance-manager-fakes.ts";
 
 /** 検証用の偽子画面。破棄と読込みの事実だけを残す。 */
 class FakeView implements PluginUiChildView {
@@ -168,7 +48,8 @@ class FakeView implements PluginUiChildView {
     readonly renderer = "native",
     readonly sandbox = false,
     readonly preload: string | null = null,
-    readonly navigationRules: string | null = null,
+    // 省略時は静的登録の期待規則と一致する正規値を載せる。
+    readonly navigationRules: string | null = JSON.stringify(EXPECTED_NAVIGATION_RULES),
   ) {}
   loadPluginUrl(url: string): void {
     if (this.loadFails) {
@@ -181,612 +62,456 @@ class FakeView implements PluginUiChildView {
   }
 }
 
-/** 検証用の偽チャネル工場。種別ごとの push 到達を記録する。 */
-function setupFactory(options: { failBind?: boolean } = {}): {
-  factory: PluginUiChannelFactory;
-  textPushes: Map<string, unknown[]>;
-  diagnosticPushes: Map<string, unknown[]>;
-  boundKinds: Map<string, string>;
-} {
-  const textPushes = new Map<string, unknown[]>();
-  const diagnosticPushes = new Map<string, unknown[]>();
-  const boundKinds = new Map<string, string>();
-  const factory: PluginUiChannelFactory = (view, mountId, kind, hooks) => {
-    void view;
-    void hooks;
-    if (options.failBind) {
-      throw new Error("結線失敗");
+/** 検証用の偽 endpoint。要求名 `ping` に不透明値で応答する。 */
+class FakeEndpoint implements PluginEndpoint {
+  disposed = false;
+  disposeCalls = 0;
+  constructor(
+    private readonly ref: BoundPluginRef<unknown, unknown>,
+    private readonly emission: PluginEmissionPort,
+    private readonly onRequest?: (method: string) => void,
+  ) {}
+  async handleRequest(request: { method: string; params: unknown }): Promise<unknown> {
+    if (this.disposed) {
+      throw new Error("終了済みの endpoint である。");
     }
-    boundKinds.set(mountId, kind);
-    const pushed: unknown[] = [];
-    if (kind === "text") {
-      textPushes.set(mountId, pushed);
-    } else {
-      diagnosticPushes.set(mountId, pushed);
+    this.onRequest?.(request.method);
+    if (request.method === "ping") {
+      // 所有段階・現割当ての照合は参照口が行う。
+      this.ref.getBinding();
+      return { pong: true };
     }
+    if (request.method === "fail-business") {
+      return { error: "業務の失敗である。" };
+    }
+    if (request.method === "throw-unexpected") {
+      throw new Error("想定外の失敗である。");
+    }
+    return { error: `未知の要求である: ${request.method}` };
+  }
+  notify(payload: unknown): void {
+    this.emission.emit({ event: "state-changed", payload });
+  }
+  dispose(): void {
+    if (this.disposed) return;
+    this.disposed = true;
+    this.disposeCalls += 1;
+  }
+}
+
+/**
+ * 静的登録の期待遷移規則。`setup` の登録内容（alpha の view パス）から導く。
+ * main が照合する期待値と同じ作り方である。
+ */
+const EXPECTED_NAVIGATION_RULES = buildPluginNavigationRules(["views://plugin-alpha/index.html"]);
+
+/** 検証用の組み立て。 */
+interface MountFixture {
+  coordinator: PluginUiCoordinator;
+  manager: PluginInstanceManager;
+  notified: { count: number };
+  pushes: Map<string, PluginRelayEvent[]>;
+  relays: Map<string, PluginRelayHandler>;
+  endpoints: Map<string, FakeEndpoint>;
+  setNow: (value: number) => void;
+  setView: (instanceId: string | null, viewGeneration: number) => void;
+  instanceId: string;
+}
+
+/** 検証用の対応付けを作る。表示要求は差し替え可能である。 */
+function setup(): MountFixture {
+  const fixture = setupFixture([makeSession("local-1", "conn-a")]);
+  const manager = new PluginInstanceManager(fixture.dependencies);
+  manager.register(alphaDescriptor({ assignment: firstFitPolicy(null) }));
+  const binding = manager.assign("alpha");
+  const registry = new PluginCompanionRegistry();
+  const endpoints = new Map<string, FakeEndpoint>();
+  registry.register(
+    {
+      kind: "alpha",
+      label: "合成",
+      viewEntry: "index.html",
+      viewPath: "views://plugin-alpha/index.html",
+    },
+    (ref, emission) => {
+      const endpoint = new FakeEndpoint(ref, emission);
+      // 束縛個体ごとに最新を残す。表示期間ごとの作り直しで置き換わる。
+      endpoints.set(binding.instanceId, endpoint);
+      return endpoint;
+    },
+  );
+  const notified = { count: 0 };
+  const pushes = new Map<string, PluginRelayEvent[]>();
+  const relays = new Map<string, PluginRelayHandler>();
+  const factory: PluginUiChannelFactory = (_view, mountId, onRelay) => {
+    relays.set(mountId, onRelay);
+    const pushed: PluginRelayEvent[] = [];
+    pushes.set(mountId, pushed);
     const channel: PluginUiChannel = {
-      push: (message: unknown) => {
-        pushed.push(message);
+      push: (event) => {
+        pushed.push(event);
       },
     };
     return channel;
   };
-  return { factory, textPushes, diagnosticPushes, boundKinds };
-}
-
-/** テキスト個体の限定表示の雛形。検証対象は対応付けの照合のみである。 */
-const TEXT_VIEW: TextInstanceView = {
-  instanceId: "instance-1",
-  pluginId: "text",
-  portId: "text",
-  localSessionId: "local-1",
-  canSend: true,
-  pendingId: null,
-  lastResult: null,
-  stats: { attempts: 0, acknowledged: 0, unknown: 0 },
-};
-
-/** 診断個体の限定表示の雛形。検証対象は対応付けの照合のみである。 */
-const DIAGNOSTIC_VIEW: DiagnosticInstanceView = {
-  instanceId: "instance-9",
-  pluginId: "diagnostic",
-  portId: "diagnostic",
-  localSessionId: "local-9",
-  stats: { diagnosticEcho: 2, diagnosticPing: 3 },
-};
-
-/** 検証用の対応付け。時刻を差し替えて期限を確かめる。 */
-function setup(options: { failBind?: boolean } = {}): {
-  backend: FakeBackend;
-  coordinator: PluginUiCoordinator;
-  textPushes: Map<string, unknown[]>;
-  diagnosticPushes: Map<string, unknown[]>;
-  boundKinds: Map<string, string>;
-  setNow: (value: number) => void;
-} {
-  const backend = new FakeBackend();
-  const fakes = setupFactory(options);
   let nowMs = 0;
-  const registry = new PluginCompanionRegistry();
-  registry.register(stubTextCompanion(backend));
-  registry.register(stubDiagnosticCompanion(backend));
-  const coordinator = new PluginUiCoordinator(7, backend, fakes.factory, () => nowMs, registry);
+  let view: { instanceId: string | null; viewGeneration: number } = {
+    instanceId: null,
+    viewGeneration: 0,
+  };
+  const coordinator = new PluginUiCoordinator(
+    7,
+    { notifyExternalChange: () => void (notified.count += 1) },
+    factory,
+    () => nowMs,
+    registry,
+    manager,
+    () => ({ ...view }),
+  );
   return {
-    backend,
     coordinator,
-    textPushes: fakes.textPushes,
-    diagnosticPushes: fakes.diagnosticPushes,
-    boundKinds: fakes.boundKinds,
+    manager,
+    notified,
+    pushes,
+    relays,
+    endpoints,
     setNow: (value: number) => {
       nowMs = value;
     },
+    setView: (instanceId: string | null, viewGeneration: number) => {
+      view = { instanceId, viewGeneration };
+    },
+    instanceId: binding.instanceId,
   };
 }
 
-test("実プラグインの識別子は往復しスパイクと混ざらない", () => {
-  // 子画面 URL の組み立ては対応付けが汎用の組み立てで行う。相対 entrypoint の
-  // 宣言と解決済み view パスの対応は資産の同期テストで固定する。
-  const textUrl = buildPluginViewUrl(bundledViewPath("text"), "plugin-text-3");
-  expect(parsePluginMountId(textUrl)).toBe("plugin-text-3");
-  expect(pluginMountKindOf("plugin-text-3")).toBe("text");
-  const diagnosticUrl = buildPluginViewUrl(bundledViewPath("diagnostic"), "plugin-diagnostic-4");
-  expect(parsePluginMountId(diagnosticUrl)).toBe("plugin-diagnostic-4");
-  expect(pluginMountKindOf("plugin-diagnostic-4")).toBe("diagnostic");
-  expect(parsePluginMountId(buildPluginBlankUrl("plugin-text-3"))).toBe("plugin-text-3");
-  // 段0スパイクの識別子は実プラグインの名前空間に入らない。
+/** 配置を1件作り、タグ生成で結線する。 */
+function placeAndBind(fixture: MountFixture, generation = 1): string {
+  fixture.setView(fixture.instanceId, generation);
+  expect(fixture.coordinator.syncNow()).toBe(true);
+  const placements = fixture.coordinator.listPlacements();
+  expect(placements).toHaveLength(1);
+  const placement = placements[0];
+  if (placement === undefined) throw new Error("配置が無い。");
+  expect(placement.viewGeneration).toBe(generation);
+  expect(placement.pluginResponded).toBe(false);
+  const view = new FakeView(11, 7, placement.initialUrl);
+  expect(fixture.coordinator.handleTagCreated(view)).toBe(true);
+  expect(placement.mountId).toBe(fixture.coordinator.listPlacements()[0]?.mountId);
+  return placement.mountId;
+}
+
+test("実プラグインの識別子は往復し他名前空間と混ざらない", () => {
+  const url = buildPluginViewUrl("views://plugin-alpha/index.html", "plugin-alpha-3");
+  expect(parsePluginMountId(url)).toBe("plugin-alpha-3");
+  expect(pluginMountKindOf("plugin-alpha-3")).toBe("alpha");
+  expect(parsePluginMountId(buildPluginBlankUrl("plugin-alpha-3"))).toBe("plugin-alpha-3");
   expect(parsePluginMountId("views://plugin-host/blank.html#mount=spike-1")).toBeNull();
   expect(parsePluginMountId(null)).toBeNull();
   expect(pluginMountKindOf("spike-1")).toBeNull();
-  // 形式正しい未知種別は構文として受け付け、既知・未登録の判定は登録表が行う。
   expect(parsePluginMountId("views://plugin-host/blank.html#mount=plugin-unknown-1")).toBe(
     "plugin-unknown-1",
   );
   expect(pluginMountKindOf("plugin-unknown-1")).toBe("unknown");
 });
 
-test("現割当てに配置を作る", () => {
-  const { backend, coordinator } = setup();
-  backend.textBinding = { instanceId: "instance-1", localSessionId: "local-1", portId: "text" };
-  backend.textView = TEXT_VIEW;
-  expect(coordinator.syncNow()).toBe(true);
-  expect(coordinator.size).toBe(1);
-  expect(backend.notified).toBeGreaterThan(0);
-  const placements = coordinator.listPlacements();
-  expect(placements).toHaveLength(1);
+test("表示要求が無ければ配置を作らない", () => {
+  const fixture = setup();
+  expect(fixture.coordinator.syncNow()).toBe(false);
+  expect(fixture.coordinator.size).toBe(0);
+  expect(fixture.coordinator.listPlacements()).toHaveLength(0);
+});
+
+test("表示要求で配置を作りタグ生成で結線する", () => {
+  const fixture = setup();
+  fixture.setView(fixture.instanceId, 1);
+  expect(fixture.coordinator.syncNow()).toBe(true);
+  expect(fixture.coordinator.size).toBe(1);
+  expect(fixture.notified.count).toBeGreaterThan(0);
+  const placements = fixture.coordinator.listPlacements();
   const placement = placements[0];
   if (placement === undefined) throw new Error("配置が無い。");
-  expect(placement.mountId).toBe("plugin-text-1");
-  expect(placement.kind).toBe("text");
-  expect(placement.initialUrl).toBe(buildPluginBlankUrl("plugin-text-1"));
+  expect(placement.mountId).toBe("plugin-alpha-1");
+  expect(placement.kind).toBe("alpha");
+  expect(placement.initialUrl).toBe(buildPluginBlankUrl("plugin-alpha-1"));
   expect(placement.phase).toBe("pending");
-  expect(placement.ready).toBe(false);
-  expect(placement.instanceId).toBe("instance-1");
+  expect(placement.instanceId).toBe(fixture.instanceId);
   expect(placement.localSessionId).toBe("local-1");
   // 変化が無ければ通知を重ねない。
-  const notified = backend.notified;
-  expect(coordinator.syncNow()).toBe(false);
-  expect(backend.notified).toBe(notified);
-});
-
-test("要望が無ければ配置を作らない", () => {
-  const { coordinator } = setup();
-  expect(coordinator.syncNow()).toBe(false);
-  expect(coordinator.size).toBe(0);
-  expect(coordinator.listPlacements()).toHaveLength(0);
-});
-
-test("タグ生成で個体別チャネルを結線する", () => {
-  const { backend, coordinator, boundKinds } = setup();
-  backend.textBinding = { instanceId: "instance-1", localSessionId: "local-1", portId: "text" };
-  backend.textView = TEXT_VIEW;
-  coordinator.syncNow();
-  const placement = coordinator.listPlacements()[0];
-  if (placement === undefined) throw new Error("配置が無い。");
+  const notified = fixture.notified.count;
+  expect(fixture.coordinator.syncNow()).toBe(false);
+  expect(fixture.notified.count).toBe(notified);
+  // タグ生成で結線する。
   const view = new FakeView(11, 7, placement.initialUrl);
-  expect(coordinator.handleTagCreated(view)).toBe(true);
-  expect(boundKinds.get(placement.mountId)).toBe("text");
-  expect(view.loaded).toEqual([buildPluginViewUrl(bundledViewPath("text"), placement.mountId)]);
+  expect(fixture.coordinator.handleTagCreated(view)).toBe(true);
+  expect(view.loaded).toEqual([
+    buildPluginViewUrl("views://plugin-alpha/index.html", placement.mountId),
+  ]);
   expect(view.removed).toBe(false);
-  const bound = coordinator.listPlacements()[0];
-  if (bound === undefined) throw new Error("配置が無い。");
-  expect(bound.phase).toBe("bound");
-  // 子画面の初期取得で準備完了になる。
-  // ADR: `as` を使う理由は、汎用口が `unknown` で返す表示を試験で種別の
-  // 具象形として確かめるためである。根拠は、対応付けが同一種別の記述子で
-  // 読み・付番を対にすることである。
-  const snapshot = coordinator.readSnapshot("text", placement.mountId) as TextInstanceSnapshot;
-  coordinator.markReady(placement.mountId);
-  expect(snapshot.instanceId).toBe("instance-1");
-  expect(snapshot.revision).toBe(0);
-  expect(coordinator.listPlacements()[0]?.ready).toBe(true);
+  expect(fixture.coordinator.listPlacements()[0]?.phase).toBe("bound");
 });
 
 test("親違いと他名前空間の生成に触らない", () => {
-  const { coordinator } = setup();
-  const foreign = new FakeView(11, 99, buildPluginBlankUrl("plugin-text-1"));
-  expect(coordinator.handleTagCreated(foreign)).toBe(false);
+  const fixture = setup();
+  const foreign = new FakeView(11, 99, buildPluginBlankUrl("plugin-alpha-1"));
+  expect(fixture.coordinator.handleTagCreated(foreign)).toBe(false);
   expect(foreign.removed).toBe(false);
   const spike = new FakeView(12, 7, "views://plugin-host/blank.html#mount=spike-1");
-  expect(coordinator.handleTagCreated(spike)).toBe(false);
+  expect(fixture.coordinator.handleTagCreated(spike)).toBe(false);
   expect(spike.removed).toBe(false);
-  expect(coordinator.size).toBe(0);
+  expect(fixture.coordinator.size).toBe(0);
 });
 
-test("終了した割当ての対応付けを回収する", () => {
-  const { backend, coordinator } = setup();
-  backend.textBinding = { instanceId: "instance-1", localSessionId: "local-1", portId: "text" };
-  backend.textView = TEXT_VIEW;
-  coordinator.syncNow();
-  const placement = coordinator.listPlacements()[0];
-  if (placement === undefined) throw new Error("配置が無い。");
-  const view = new FakeView(11, 7, placement.initialUrl);
-  coordinator.handleTagCreated(view);
-  // Session 終了で現割当てが消える。
-  backend.textBinding = null;
-  expect(coordinator.syncNow()).toBe(true);
-  expect(coordinator.size).toBe(0);
-  expect(view.removed).toBe(true);
-  // 通常の終了は失敗表示に回さない。
-  expect(coordinator.listFailures()).toHaveLength(0);
-  expect(coordinator.failureCount).toBe(0);
+test("中継要求を endpoint へ素通しし最初の正常応答で応答済みにする", async () => {
+  const fixture = setup();
+  const mountId = placeAndBind(fixture);
+  const relay = fixture.relays.get(mountId);
+  if (relay === undefined) throw new Error("中継口が無い。");
+  // 外形破損は内容検査ではなく中継失敗に落とす。
+  const bad = (await relay({ method: "", params: {} })) as PluginRelayResult;
+  expect(bad.ok).toBe(false);
+  expect(fixture.coordinator.listPlacements()[0]?.pluginResponded).toBe(false);
+  // 業務エラーは不透明値として正常応答に載る。
+  const business = (await relay({ method: "fail-business", params: {} })) as PluginRelayResult;
+  expect(business.ok).toBe(true);
+  expect(fixture.coordinator.listPlacements()[0]?.pluginResponded).toBe(true);
 });
 
-test("生成待ちの期限超過を失敗表示に回し再配置しない", () => {
-  const { backend, coordinator, setNow } = setup();
-  backend.textBinding = { instanceId: "instance-1", localSessionId: "local-1", portId: "text" };
-  backend.textView = TEXT_VIEW;
-  coordinator.syncNow();
-  expect(coordinator.size).toBe(1);
-  setNow(PLUGIN_PENDING_TIMEOUT_MS + 1);
-  expect(coordinator.syncNow()).toBe(true);
-  expect(coordinator.size).toBe(0);
-  const failures = coordinator.listFailures();
+test("子からの初回要求到達と最初の正常応答を区別する", async () => {
+  const fixture = setup();
+  const mountId = placeAndBind(fixture);
+  const relay = fixture.relays.get(mountId);
+  if (relay === undefined) throw new Error("中継口が無い。");
+  // 外形破損の到達では応答済みにしない。
+  await relay({ method: "", params: {} });
+  expect(fixture.coordinator.listPlacements()[0]?.pluginResponded).toBe(false);
+  await relay({ method: "ping", params: {} });
+  expect(fixture.coordinator.listPlacements()[0]?.pluginResponded).toBe(true);
+});
+
+test("同一表示期間の snapshot 更新では再生成しない", () => {
+  const fixture = setup();
+  const mountId = placeAndBind(fixture);
+  expect(fixture.coordinator.syncNow()).toBe(false);
+  expect(fixture.coordinator.listPlacements()[0]?.mountId).toBe(mountId);
+});
+
+test("期限超過を失敗表示に回し再配置しない", async () => {
+  const fixture = setup();
+  const mountId = placeAndBind(fixture);
+  expect(fixture.coordinator.size).toBe(1);
+  fixture.setNow(PLUGIN_PENDING_TIMEOUT_MS + 1);
+  expect(fixture.coordinator.syncNow()).toBe(true);
+  expect(fixture.coordinator.size).toBe(0);
+  const failures = fixture.coordinator.listFailures();
   expect(failures).toHaveLength(1);
-  expect(failures[0]?.kind).toBe("text");
-  expect(failures[0]?.instanceId).toBe("instance-1");
-  // 生成待ちの期限超過は従来どおり固有理由であり、準備完了待ちの案内文と混ぜない。
-  expect(failures[0]?.reason).toContain("生成待ちが期限切れ");
-  expect(failures[0]?.reason).not.toContain("このウィンドウをクリック");
-  // 現割当てが残っていても明示の再試行まで再配置しない。
-  expect(coordinator.syncNow()).toBe(false);
-  expect(coordinator.size).toBe(0);
-  expect(coordinator.listFailures()).toHaveLength(1);
+  expect(failures[0]?.kind).toBe("alpha");
+  expect(failures[0]?.instanceId).toBe(fixture.instanceId);
+  expect(failures[0]?.viewGeneration).toBe(1);
+  expect(failures[0]?.reason).toContain("時間内に完了しませんでした");
+  // 現表示要求が残っていても明示の再試行まで再配置しない。
+  expect(fixture.coordinator.syncNow()).toBe(false);
+  expect(fixture.coordinator.size).toBe(0);
+  expect(fixture.coordinator.listFailures()).toHaveLength(1);
+  // endpoint は終了し、旧子への応答は付け替えない。
+  const endpoint = fixture.endpoints.get(fixture.instanceId);
+  expect(endpoint?.disposed).toBe(true);
+  void mountId;
 });
 
-test("結線後に準備完了が無いまま期限超過したら既知の可能性と復旧手順を示し再配置しない", () => {
-  const { backend, coordinator, setNow } = setup();
-  backend.textBinding = { instanceId: "instance-1", localSessionId: "local-1", portId: "text" };
-  backend.textView = TEXT_VIEW;
-  coordinator.syncNow();
-  const placement = coordinator.listPlacements()[0];
-  if (placement === undefined) throw new Error("配置が無い。");
-  const view = new FakeView(11, 7, placement.initialUrl);
-  coordinator.handleTagCreated(view);
-  expect(coordinator.listPlacements()[0]?.phase).toBe("bound");
-  // 子画面の初期取得が無いまま期限を過ぎると失敗表示に回る。
-  setNow(PLUGIN_PENDING_TIMEOUT_MS + 1);
-  expect(coordinator.syncNow()).toBe(true);
-  expect(coordinator.size).toBe(0);
-  expect(view.removed).toBe(true);
-  const failures = coordinator.listFailures();
+test("失敗後に同一個体の新世代で成功すると旧失敗は剪定される", async () => {
+  // 旧世代の失敗を残すと、成功表示の後もタブ警告が残り続け、失敗表示が
+  // 世代ごとに増える。新しい表示期間の採用時に旧世代分を剪定する。
+  const fixture = setup();
+  placeAndBind(fixture, 1);
+  fixture.setNow(PLUGIN_PENDING_TIMEOUT_MS + 1);
+  fixture.coordinator.syncNow();
+  expect(fixture.coordinator.listFailures()).toHaveLength(1);
+  // 同一個体の新しい表示期間では旧世代の失敗を残さない。
+  const mountId = placeAndBind(fixture, 2);
+  expect(fixture.coordinator.listFailures()).toHaveLength(0);
+  const relay = fixture.relays.get(mountId);
+  if (relay === undefined) throw new Error("中継口が無い。");
+  await relay({ method: "ping", params: {} });
+  expect(fixture.coordinator.listPlacements()[0]?.pluginResponded).toBe(true);
+  expect(fixture.coordinator.listFailures()).toHaveLength(0);
+});
+
+test("新世代でも失敗した場合は旧世代を残さず最新のみ保つ", () => {
+  // 失敗が世代をまたいで積み上がらないこと（個体ごとに最新のみ）。
+  const fixture = setup();
+  placeAndBind(fixture, 1);
+  fixture.setNow(PLUGIN_PENDING_TIMEOUT_MS + 1);
+  fixture.coordinator.syncNow();
+  expect(fixture.coordinator.listFailures()).toHaveLength(1);
+  placeAndBind(fixture, 2);
+  expect(fixture.coordinator.listFailures()).toHaveLength(0);
+  fixture.setNow(2 * (PLUGIN_PENDING_TIMEOUT_MS + 1));
+  fixture.coordinator.syncNow();
+  const failures = fixture.coordinator.listFailures();
   expect(failures).toHaveLength(1);
-  expect(failures[0]?.kind).toBe("text");
-  expect(failures[0]?.instanceId).toBe("instance-1");
-  // 原因の断定ではなく既知の可能性と復旧手順を示す。
-  expect(failures[0]?.reason).toContain("子画面の初期化が時間内に完了しませんでした。");
-  expect(failures[0]?.reason).toContain(
-    "このウィンドウをクリックしてから「再試行」を押してください。",
-  );
-  // 生成条件違反・結線例外とは別の理由である。
-  expect(failures[0]?.reason).not.toContain("生成条件");
-  expect(failures[0]?.reason).not.toContain("結線に失敗");
-  // 現割当てが残っていても明示の再試行まで再配置しない。
-  expect(coordinator.syncNow()).toBe(false);
-  expect(coordinator.size).toBe(0);
-  expect(coordinator.listFailures()).toHaveLength(1);
-  // 個体限定の再試行で配置を作り直せる。
-  expect(coordinator.retryFailed("instance-1")).toEqual({ ok: true });
-  expect(coordinator.listFailures()).toHaveLength(0);
-  expect(coordinator.size).toBe(1);
-  expect(coordinator.listPlacements()[0]?.instanceId).toBe("instance-1");
+  expect(failures[0]?.instanceId).toBe(fixture.instanceId);
+  expect(failures[0]?.viewGeneration).toBe(2);
 });
 
-test("準備完了があれば期限超過で回収しない", () => {
-  const { backend, coordinator, setNow } = setup();
-  backend.textBinding = { instanceId: "instance-1", localSessionId: "local-1", portId: "text" };
-  backend.textView = TEXT_VIEW;
-  coordinator.syncNow();
-  const placement = coordinator.listPlacements()[0];
+test("最初の正常応答があれば期限超過で回収しない", async () => {
+  const fixture = setup();
+  const mountId = placeAndBind(fixture);
+  const relay = fixture.relays.get(mountId);
+  if (relay === undefined) throw new Error("中継口が無い。");
+  await relay({ method: "ping", params: {} });
+  fixture.setNow(PLUGIN_PENDING_TIMEOUT_MS + 1);
+  expect(fixture.coordinator.syncNow()).toBe(false);
+  expect(fixture.coordinator.size).toBe(1);
+  expect(fixture.coordinator.listFailures()).toHaveLength(0);
+});
+
+test("個体限定の再試行は世代を維持して作り直す", async () => {
+  const fixture = setup();
+  placeAndBind(fixture, 1);
+  fixture.setNow(PLUGIN_PENDING_TIMEOUT_MS + 1);
+  fixture.coordinator.syncNow();
+  expect(fixture.coordinator.listFailures()).toHaveLength(1);
+  expect(fixture.coordinator.retryFailed(fixture.instanceId)).toEqual({ ok: true });
+  expect(fixture.coordinator.listFailures()).toHaveLength(0);
+  expect(fixture.coordinator.size).toBe(1);
+  const placement = fixture.coordinator.listPlacements()[0];
   if (placement === undefined) throw new Error("配置が無い。");
-  const view = new FakeView(11, 7, placement.initialUrl);
-  coordinator.handleTagCreated(view);
-  coordinator.readSnapshot("text", placement.mountId);
-  coordinator.markReady(placement.mountId);
-  setNow(PLUGIN_PENDING_TIMEOUT_MS + 1);
-  expect(coordinator.syncNow()).toBe(false);
-  expect(coordinator.size).toBe(1);
-  expect(view.removed).toBe(false);
-  expect(coordinator.listFailures()).toHaveLength(0);
-  expect(coordinator.listPlacements()[0]?.ready).toBe(true);
-});
-
-test("再試行で現割当てへ再配置する", () => {
-  const { backend, coordinator, setNow } = setup();
-  backend.textBinding = { instanceId: "instance-1", localSessionId: "local-1", portId: "text" };
-  backend.textView = TEXT_VIEW;
-  coordinator.syncNow();
-  setNow(PLUGIN_PENDING_TIMEOUT_MS + 1);
-  coordinator.syncNow();
-  expect(coordinator.listFailures()).toHaveLength(1);
-  expect(coordinator.retryFailed("instance-1")).toEqual({ ok: true });
-  expect(coordinator.listFailures()).toHaveLength(0);
-  expect(coordinator.size).toBe(1);
-  // 識別子は使い回さない。
-  expect(coordinator.listPlacements()[0]?.mountId).toBe("plugin-text-2");
-});
-
-test("個体限定の再試行は対象個体だけに作用する", () => {
-  const { backend, coordinator, setNow } = setup();
-  backend.textBinding = { instanceId: "instance-1", localSessionId: "local-1", portId: "text" };
-  backend.textView = TEXT_VIEW;
-  backend.diagnostics = [
-    { instanceId: "instance-9", localSessionId: "local-9", portId: "diagnostic" },
-  ];
-  backend.diagnosticView = DIAGNOSTIC_VIEW;
-  coordinator.syncNow();
-  expect(coordinator.size).toBe(2);
-  // 両方を期限超過で失敗表示に回す。
-  setNow(PLUGIN_PENDING_TIMEOUT_MS + 1);
-  coordinator.syncNow();
-  expect(coordinator.size).toBe(0);
-  expect(coordinator.listFailures()).toHaveLength(2);
-  // テキスト側の結線済み配置を用意し、再試行の前後で保全されることを見る。
-  // まず対象個体だけを再試行し、診断の失敗は残る。
-  expect(coordinator.retryFailed("instance-1")).toEqual({ ok: true });
-  const failures = coordinator.listFailures();
-  expect(failures).toHaveLength(1);
-  expect(failures[0]?.instanceId).toBe("instance-9");
-  // 対象個体だけが再配置され、他個体の再配置は起きない。
-  const placements = coordinator.listPlacements();
-  expect(placements).toHaveLength(1);
-  expect(placements[0]?.instanceId).toBe("instance-1");
-  expect(placements[0]?.mountId).toBe("plugin-text-3");
-  // 割当ての実体には触らない（要望側の束縛は保つ）。
-  expect(backend.textBinding?.instanceId).toBe("instance-1");
-  expect(backend.diagnostics.map((binding) => binding.instanceId)).toEqual(["instance-9"]);
+  // 識別子は使い回さず、世代は維持する。
+  expect(placement.mountId).toBe("plugin-alpha-2");
+  expect(placement.viewGeneration).toBe(1);
 });
 
 test("未知の個体の再試行は例外にせず何も変えない", () => {
-  const { backend, coordinator, setNow } = setup();
-  backend.textBinding = { instanceId: "instance-1", localSessionId: "local-1", portId: "text" };
-  backend.textView = TEXT_VIEW;
-  coordinator.syncNow();
-  setNow(PLUGIN_PENDING_TIMEOUT_MS + 1);
-  coordinator.syncNow();
-  expect(coordinator.listFailures()).toHaveLength(1);
-  const before = coordinator.listPlacements().map((placement) => placement.mountId);
-  // 現所有・失敗のいずれにも無い識別子は作用なしで受付とする。
-  expect(coordinator.retryFailed("instance-unknown")).toEqual({ ok: true });
-  expect(coordinator.listFailures()).toHaveLength(1);
-  expect(coordinator.listPlacements().map((placement) => placement.mountId)).toEqual(before);
-  // 形違いの指定も例外にしない。
-  expect(coordinator.retryFailed("")).toEqual({ ok: true });
-  expect(coordinator.retryFailed(null)).toEqual({ ok: true });
-  expect(coordinator.listFailures()).toHaveLength(1);
-});
-
-test("破棄後の再試行は受付だけを返す", () => {
-  const { coordinator } = setup();
-  coordinator.dispose();
-  expect(coordinator.retryFailed("instance-1")).toEqual({ ok: true });
-});
-
-test("個体限定の再試行は正常マウントと送信に触らない", () => {
-  const { backend, coordinator, setNow, textPushes } = setup();
-  backend.textBinding = { instanceId: "instance-1", localSessionId: "local-1", portId: "text" };
-  backend.textView = TEXT_VIEW;
-  backend.diagnostics = [
-    { instanceId: "instance-9", localSessionId: "local-9", portId: "diagnostic" },
-  ];
-  backend.diagnosticView = DIAGNOSTIC_VIEW;
-  coordinator.syncNow();
-  // テキスト側だけを結線して準備完了にし、診断側は生成待ちのまま期限切れにする。
-  const textMountId = coordinator
-    .listPlacements()
-    .find((placement) => placement.kind === "text")?.mountId;
-  if (textMountId === undefined) throw new Error("テキストの配置が無い。");
-  const textView = new FakeView(11, 7, buildPluginBlankUrl(textMountId));
-  coordinator.handleTagCreated(textView);
-  coordinator.readSnapshot("text", textMountId);
-  coordinator.markReady(textMountId);
-  coordinator.pushBound();
-  expect(textPushes.get(textMountId)).toHaveLength(1);
-  setNow(PLUGIN_PENDING_TIMEOUT_MS + 1);
-  coordinator.syncNow();
-  // 準備完了のテキストは残り、診断だけが失敗表示に回る。
-  expect(coordinator.listPlacements().map((placement) => placement.mountId)).toEqual([textMountId]);
-  expect(coordinator.listFailures()).toHaveLength(1);
-  expect(coordinator.listFailures()[0]?.instanceId).toBe("instance-9");
-  // 診断個体だけを再試行し、テキストの配置・改訂・push 先に触らない。
-  expect(coordinator.retryFailed("instance-9")).toEqual({ ok: true });
-  expect(coordinator.listPlacements().some((placement) => placement.mountId === textMountId)).toBe(
-    true,
+  const fixture = setup();
+  placeAndBind(fixture, 1);
+  fixture.setNow(PLUGIN_PENDING_TIMEOUT_MS + 1);
+  fixture.coordinator.syncNow();
+  expect(fixture.coordinator.listFailures()).toHaveLength(1);
+  const before = fixture.coordinator.listPlacements().map((placement) => placement.mountId);
+  expect(fixture.coordinator.retryFailed("instance-unknown")).toEqual({ ok: true });
+  expect(fixture.coordinator.listFailures()).toHaveLength(1);
+  expect(fixture.coordinator.listPlacements().map((placement) => placement.mountId)).toEqual(
+    before,
   );
-  expect(textPushes.get(textMountId)).toHaveLength(1);
-  expect(
-    coordinator.listPlacements().find((placement) => placement.mountId === textMountId)?.revision,
-  ).toBe(1);
-  expect(coordinator.listFailures()).toHaveLength(0);
+  expect(fixture.coordinator.retryFailed("")).toEqual({ ok: true });
+  expect(fixture.coordinator.retryFailed(null)).toEqual({ ok: true });
+  expect(fixture.coordinator.listFailures()).toHaveLength(1);
+});
+
+test("無し要求で破棄する", () => {
+  const fixture = setup();
+  const mountId = placeAndBind(fixture, 1);
+  const endpoint = fixture.endpoints.get(fixture.instanceId);
+  fixture.setView(null, 2);
+  expect(fixture.coordinator.syncNow()).toBe(true);
+  expect(fixture.coordinator.size).toBe(0);
+  // 通常の終了は失敗表示に回さない。
+  expect(fixture.coordinator.listFailures()).toHaveLength(0);
+  expect(endpoint?.disposed).toBe(true);
+  void mountId;
+});
+
+test("世代の進行で旧子破棄・新子生成する", () => {
+  const fixture = setup();
+  const first = placeAndBind(fixture, 1);
+  fixture.setView(fixture.instanceId, 2);
+  expect(fixture.coordinator.syncNow()).toBe(true);
+  const placements = fixture.coordinator.listPlacements();
+  expect(placements).toHaveLength(1);
+  expect(placements[0]?.mountId).not.toBe(first);
+  expect(placements[0]?.viewGeneration).toBe(2);
+  expect(placements[0]?.phase).toBe("pending");
+});
+
+test("束縛の失効時は表示中の子も破棄する", () => {
+  const fixture = setup();
+  placeAndBind(fixture, 1);
+  fixture.manager.unassign("alpha", fixture.instanceId);
+  expect(fixture.coordinator.syncNow()).toBe(true);
+  expect(fixture.coordinator.size).toBe(0);
+  // 失効の破棄は失敗表示に回さない。
+  expect(fixture.coordinator.listFailures()).toHaveLength(0);
+});
+
+test("失効後の要求は中継失敗に落とす", async () => {
+  const fixture = setup();
+  const mountId = placeAndBind(fixture, 1);
+  const relay = fixture.relays.get(mountId);
+  if (relay === undefined) throw new Error("中継口が無い。");
+  fixture.manager.unassign("alpha", fixture.instanceId);
+  const result = (await relay({ method: "ping", params: {} })) as PluginRelayResult;
+  expect(result.ok).toBe(false);
+  if (result.ok === false) {
+    expect(result.error.code).toBe("unmounted");
+  }
+});
+
+test("通知は同一マウント生存時のみ素通しする", async () => {
+  const fixture = setup();
+  const mountId = placeAndBind(fixture, 1);
+  const endpoint = fixture.endpoints.get(fixture.instanceId);
+  if (endpoint === undefined) throw new Error("endpoint が無い。");
+  endpoint.notify({ count: 1 });
+  expect(fixture.pushes.get(mountId)).toHaveLength(1);
+  // 破棄後は届けない。
+  fixture.setView(null, 2);
+  fixture.coordinator.syncNow();
+  endpoint.notify({ count: 2 });
+  expect(fixture.pushes.get(mountId)).toHaveLength(1);
 });
 
 test("結線の失敗をそのマウントに局所化する", () => {
-  const { backend, coordinator } = setup({ failBind: true });
-  backend.textBinding = { instanceId: "instance-1", localSessionId: "local-1", portId: "text" };
-  backend.textView = TEXT_VIEW;
-  coordinator.syncNow();
-  const placement = coordinator.listPlacements()[0];
-  if (placement === undefined) throw new Error("配置が無い。");
-  const view = new FakeView(11, 7, placement.initialUrl);
-  expect(coordinator.handleTagCreated(view)).toBe(true);
-  expect(coordinator.size).toBe(0);
-  expect(view.removed).toBe(true);
-  expect(coordinator.listFailures()).toHaveLength(1);
-  // 原因が分かる失敗は固有理由のままであり、準備完了待ちの案内文と混ぜない。
-  expect(coordinator.listFailures()[0]?.reason).toContain("結線に失敗");
-});
-
-test("子画面の読込み失敗をそのマウントに局所化する", () => {
-  const { backend, coordinator } = setup();
-  backend.textBinding = { instanceId: "instance-1", localSessionId: "local-1", portId: "text" };
-  backend.textView = TEXT_VIEW;
-  coordinator.syncNow();
-  const placement = coordinator.listPlacements()[0];
+  const fixture = setup();
+  fixture.setView(fixture.instanceId, 1);
+  fixture.coordinator.syncNow();
+  const placement = fixture.coordinator.listPlacements()[0];
   if (placement === undefined) throw new Error("配置が無い。");
   const view = new FakeView(11, 7, placement.initialUrl);
   view.loadFails = true;
-  expect(coordinator.handleTagCreated(view)).toBe(true);
-  expect(coordinator.size).toBe(0);
+  expect(fixture.coordinator.handleTagCreated(view)).toBe(true);
+  expect(fixture.coordinator.size).toBe(0);
   expect(view.removed).toBe(true);
-  expect(coordinator.listFailures()).toHaveLength(1);
-});
-
-test("失効した束縛の初期取得で対応付けを回収する", () => {
-  const { backend, coordinator } = setup();
-  backend.textBinding = { instanceId: "instance-1", localSessionId: "local-1", portId: "text" };
-  backend.textView = TEXT_VIEW;
-  coordinator.syncNow();
-  const placement = coordinator.listPlacements()[0];
-  if (placement === undefined) throw new Error("配置が無い。");
-  const view = new FakeView(11, 7, placement.initialUrl);
-  coordinator.handleTagCreated(view);
-  // 現割当てが失効した後の初期取得は拒否し、対応付けを回収する。
-  backend.textBinding = null;
-  expect(() => coordinator.readSnapshot("text", placement.mountId)).toThrow(RangeError);
-  expect(coordinator.size).toBe(0);
-  expect(view.removed).toBe(true);
-  expect(coordinator.listFailures()).toHaveLength(1);
-});
-
-test("結線済みの対応付けへ最新状態を送る", () => {
-  const { backend, coordinator, textPushes } = setup();
-  backend.textBinding = { instanceId: "instance-1", localSessionId: "local-1", portId: "text" };
-  backend.textView = TEXT_VIEW;
-  coordinator.syncNow();
-  const placement = coordinator.listPlacements()[0];
-  if (placement === undefined) throw new Error("配置が無い。");
-  coordinator.handleTagCreated(new FakeView(11, 7, placement.initialUrl));
-  coordinator.readSnapshot("text", placement.mountId);
-  coordinator.markReady(placement.mountId);
-  coordinator.pushBound();
-  const pushed = textPushes.get(placement.mountId);
-  expect(pushed).toHaveLength(1);
-  expect(coordinator.listPlacements()[0]?.revision).toBe(1);
-  coordinator.pushBound();
-  expect(textPushes.get(placement.mountId)).toHaveLength(2);
-  expect(coordinator.listPlacements()[0]?.revision).toBe(2);
-});
-
-test("送信 push の失効で対応付けを回収する", () => {
-  const { backend, coordinator, textPushes } = setup();
-  backend.textBinding = { instanceId: "instance-1", localSessionId: "local-1", portId: "text" };
-  backend.textView = TEXT_VIEW;
-  coordinator.syncNow();
-  const placement = coordinator.listPlacements()[0];
-  if (placement === undefined) throw new Error("配置が無い。");
-  coordinator.handleTagCreated(new FakeView(11, 7, placement.initialUrl));
-  backend.textBinding = null;
-  coordinator.pushBound();
-  expect(textPushes.get(placement.mountId)).toHaveLength(0);
-  expect(coordinator.size).toBe(0);
-  expect(coordinator.listFailures()).toHaveLength(1);
-});
-
-test("診断の配置・結線・送信 push が通る", () => {
-  const { backend, coordinator, diagnosticPushes, boundKinds } = setup();
-  backend.diagnostics = [
-    { instanceId: "instance-9", localSessionId: "local-9", portId: "diagnostic" },
-  ];
-  backend.diagnosticView = DIAGNOSTIC_VIEW;
-  coordinator.syncNow();
-  const placement = coordinator.listPlacements()[0];
-  if (placement === undefined) throw new Error("配置が無い。");
-  expect(placement.mountId).toBe("plugin-diagnostic-1");
-  expect(placement.kind).toBe("diagnostic");
-  const view = new FakeView(21, 7, placement.initialUrl);
-  expect(coordinator.handleTagCreated(view)).toBe(true);
-  expect(boundKinds.get(placement.mountId)).toBe("diagnostic");
-  expect(view.loaded).toEqual([
-    buildPluginViewUrl(bundledViewPath("diagnostic"), placement.mountId),
-  ]);
-  const snapshot = coordinator.readSnapshot(
-    "diagnostic",
-    placement.mountId,
-  ) as DiagnosticInstanceSnapshot;
-  coordinator.markReady(placement.mountId);
-  expect(snapshot.stats).toEqual({ diagnosticEcho: 2, diagnosticPing: 3 });
-  coordinator.pushBound();
-  expect(diagnosticPushes.get(placement.mountId)).toHaveLength(1);
+  expect(fixture.coordinator.listFailures()).toHaveLength(1);
 });
 
 test("全破棄で購読・表示の残存を残さない", () => {
-  const { backend, coordinator } = setup();
-  backend.textBinding = { instanceId: "instance-1", localSessionId: "local-1", portId: "text" };
-  backend.textView = TEXT_VIEW;
-  backend.diagnostics = [
-    { instanceId: "instance-9", localSessionId: "local-9", portId: "diagnostic" },
-  ];
-  backend.diagnosticView = DIAGNOSTIC_VIEW;
-  coordinator.syncNow();
-  expect(coordinator.size).toBe(2);
-  const views = coordinator.listPlacements().map((placement) => {
-    const view = new FakeView(30, 7, placement.initialUrl);
-    coordinator.handleTagCreated(view);
-    return view;
-  });
-  expect(coordinator.resetAll("試験")).toEqual({ ok: true });
-  expect(coordinator.size).toBe(0);
-  expect(coordinator.listPlacements()).toHaveLength(0);
-  expect(coordinator.listFailures()).toHaveLength(0);
-  for (const view of views) {
-    expect(view.removed).toBe(true);
-  }
+  const fixture = setup();
+  const mountId = placeAndBind(fixture, 1);
+  const endpoint = fixture.endpoints.get(fixture.instanceId);
+  expect(fixture.coordinator.resetAll("試験")).toEqual({ ok: true });
+  expect(fixture.coordinator.size).toBe(0);
+  expect(fixture.coordinator.listPlacements()).toHaveLength(0);
+  expect(fixture.coordinator.listFailures()).toHaveLength(0);
+  expect(endpoint?.disposed).toBe(true);
+  void mountId;
 });
 
 test("退役後の遅延生成を回収する", () => {
-  const { backend, coordinator } = setup();
-  backend.textBinding = { instanceId: "instance-1", localSessionId: "local-1", portId: "text" };
-  backend.textView = TEXT_VIEW;
-  coordinator.syncNow();
-  const placement = coordinator.listPlacements()[0];
+  const fixture = setup();
+  fixture.setView(fixture.instanceId, 1);
+  fixture.coordinator.syncNow();
+  const placement = fixture.coordinator.listPlacements()[0];
   if (placement === undefined) throw new Error("配置が無い。");
-  coordinator.resetAll("試験");
+  fixture.coordinator.resetAll("試験");
   // 配置待ちの破棄後に届いた遅延生成は回収する。
   const late = new FakeView(11, 7, placement.initialUrl);
-  expect(coordinator.handleTagCreated(late)).toBe(true);
+  expect(fixture.coordinator.handleTagCreated(late)).toBe(true);
   expect(late.removed).toBe(true);
   expect(late.loaded).toHaveLength(0);
-  expect(coordinator.size).toBe(0);
+  expect(fixture.coordinator.size).toBe(0);
 });
 
 test("重複する生成を回収する", () => {
-  const { backend, coordinator } = setup();
-  backend.textBinding = { instanceId: "instance-1", localSessionId: "local-1", portId: "text" };
-  backend.textView = TEXT_VIEW;
-  coordinator.syncNow();
-  const placement = coordinator.listPlacements()[0];
+  const fixture = setup();
+  fixture.setView(fixture.instanceId, 1);
+  fixture.coordinator.syncNow();
+  const placement = fixture.coordinator.listPlacements()[0];
   if (placement === undefined) throw new Error("配置が無い。");
-  coordinator.handleTagCreated(new FakeView(11, 7, placement.initialUrl));
+  fixture.coordinator.handleTagCreated(new FakeView(11, 7, placement.initialUrl));
   const duplicated = new FakeView(12, 7, placement.initialUrl);
-  expect(coordinator.handleTagCreated(duplicated)).toBe(true);
+  expect(fixture.coordinator.handleTagCreated(duplicated)).toBe(true);
   expect(duplicated.removed).toBe(true);
   expect(duplicated.loaded).toHaveLength(0);
-  expect(coordinator.size).toBe(1);
-});
-
-test("要望読みに失敗した種別の既存マウントを保全し成功側は追随する", () => {
-  const { backend, coordinator } = setup();
-  backend.textBinding = { instanceId: "instance-1", localSessionId: "local-1", portId: "text" };
-  backend.textView = TEXT_VIEW;
-  backend.diagnostics = [
-    { instanceId: "instance-9", localSessionId: "local-9", portId: "diagnostic" },
-  ];
-  backend.diagnosticView = DIAGNOSTIC_VIEW;
-  coordinator.syncNow();
-  expect(coordinator.size).toBe(2);
-  // 両方結線する。要望不明と割当て終了を区別するため、結線済みで確かめる。
-  const views = new Map<string, FakeView>();
-  for (const placement of coordinator.listPlacements()) {
-    const view = new FakeView(30, 7, placement.initialUrl);
-    coordinator.handleTagCreated(view);
-    views.set(placement.mountId, view);
-  }
-  const diagnosticMountId = coordinator
-    .listPlacements()
-    .find((placement) => placement.kind === "diagnostic")?.mountId;
-  if (diagnosticMountId === undefined) throw new Error("診断の配置が無い。");
-  const textMountId = coordinator
-    .listPlacements()
-    .find((placement) => placement.kind === "text")?.mountId;
-  if (textMountId === undefined) throw new Error("テキストの配置が無い。");
-
-  // 診断の要望読みだけを失敗させ、テキストの現割当ては新しい個体へ進める。
-  backend.diagnosticDesiredFails = true;
-  backend.textBinding = { instanceId: "instance-2", localSessionId: "local-2", portId: "text" };
-  backend.textView = { ...TEXT_VIEW, instanceId: "instance-2", localSessionId: "local-2" };
-  expect(coordinator.syncNow()).toBe(true);
-
-  // 成功側（テキスト）は追随し、失敗側（診断）の既存マウントは保全される。
-  const diagnostic = coordinator
-    .listPlacements()
-    .find((placement) => placement.kind === "diagnostic");
-  expect(diagnostic?.mountId).toBe(diagnosticMountId);
-  expect(views.get(diagnosticMountId)?.removed).toBe(false);
-  const text = coordinator.listPlacements().find((placement) => placement.kind === "text");
-  expect(text?.instanceId).toBe("instance-2");
-  expect(text?.mountId).toBe("plugin-text-3");
-  expect(views.get(textMountId)?.removed).toBe(true);
-  // 要望不明は失敗表示に回さない。
-  expect(coordinator.listFailures()).toHaveLength(0);
-});
-
-test("全種別の要望読みに失敗したら何も変えない", () => {
-  const { backend, coordinator } = setup();
-  backend.textBinding = { instanceId: "instance-1", localSessionId: "local-1", portId: "text" };
-  backend.textView = TEXT_VIEW;
-  coordinator.syncNow();
-  const placement = coordinator.listPlacements()[0];
-  if (placement === undefined) throw new Error("配置が無い。");
-  const view = new FakeView(11, 7, placement.initialUrl);
-  coordinator.handleTagCreated(view);
-
-  // 全種別で失敗する。要望が空の場合と同様に、対応付けを変えない。
-  backend.textDesiredFails = true;
-  backend.diagnosticDesiredFails = true;
-  const notified = backend.notified;
-  expect(coordinator.syncNow()).toBe(false);
-  expect(coordinator.size).toBe(1);
-  expect(coordinator.listPlacements()[0]?.mountId).toBe(placement.mountId);
-  expect(view.removed).toBe(false);
-  expect(backend.notified).toBe(notified);
-  expect(coordinator.listFailures()).toHaveLength(0);
+  expect(fixture.coordinator.size).toBe(1);
 });

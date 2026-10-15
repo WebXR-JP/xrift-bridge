@@ -1,5 +1,5 @@
 /**
- * インスタンス管理層の検証用偽物。偽 core・偽セッション・偽時計と
+ * インスタンス管理層の検証用偽物。偽 core・偽セッションと
  * 合成プラグイン2種（`alpha`・`beta`）の記述子を置く。
  *
  * 具象プラグイン（text/diagnostic）の import は置かない。試験本体の
@@ -14,7 +14,6 @@ import type {
   SessionCapability,
 } from "bridge-app-core/core";
 import type { AssignedSession } from "bridge-app-core/core";
-import type { InstanceBaseView } from "bridge-gui-contract/plugin-instance";
 import type {
   GuiPluginManagementDescriptor,
   PluginAssignmentCandidate,
@@ -245,62 +244,6 @@ export class FakeSessions {
   }
 }
 
-/** 検証用の周期記録。 */
-export interface FakeTimer {
-  /** 実行間隔（ミリ秒）。 */
-  readonly intervalMs: number;
-  /** 周期ごとの処理。 */
-  readonly tick: () => void;
-  /** 停止済みなら真。 */
-  stopped: boolean;
-}
-
-/**
- * 検証用の偽時計。実時間待ちなしに周期処理を進められる。
- *
- * 停止済み callback の強制実行にも対応し、古い callback の無視を確かめる。
- */
-export class FakeClock {
-  /** 開始した周期の一覧。 */
-  readonly timers: FakeTimer[] = [];
-  /** 開始に失敗させる場合の失敗。`null` なら成功する。 */
-  failEvery: unknown = null;
-
-  every(intervalMs: number, tick: () => void): () => void {
-    if (this.failEvery !== null) {
-      throw this.failEvery;
-    }
-    const timer: FakeTimer = { intervalMs, tick, stopped: false };
-    this.timers.push(timer);
-    return () => {
-      timer.stopped = true;
-    };
-  }
-
-  /** 停止していない周期だけ進める。 */
-  runLive(): void {
-    for (const timer of this.timers) {
-      if (!timer.stopped) {
-        timer.tick();
-      }
-    }
-  }
-
-  /** 停止済みの周期だけ強制実行する。古い callback の無視の検証に使う。 */
-  runStopped(): void {
-    for (const timer of this.timers) {
-      if (timer.stopped) {
-        timer.tick();
-      }
-    }
-  }
-
-  /** 停止していない周期の件数。 */
-  liveCount(): number {
-    return this.timers.filter((timer) => !timer.stopped).length;
-  }
-}
-
 /** 合成 `alpha` の状態。計数だけを持つ。 */
 export interface AlphaState {
   /** 計数値。 */
@@ -318,40 +261,13 @@ export interface AlphaOperations {
   add(delta: number): number;
 }
 
-/** 合成 `alpha` の限定表示。 */
-export interface AlphaView extends InstanceBaseView {
-  /** 計数値。 */
-  readonly count: number;
-}
-
-/** 合成 `alpha` の公開操作。個体指定で計数を読み書きする。 */
-export interface AlphaApi {
-  /**
-   * 計数を読む。
-   *
-   * @param instanceId - 対象の個体識別子。
-   * @returns 計数値。
-   */
-  readCount(instanceId: string): number;
-  /**
-   * 計数に加える。
-   *
-   * @param instanceId - 対象の個体識別子。
-   * @param delta - 加える値。
-   * @returns 加算後の計数値。
-   */
-  writeCount(instanceId: string, delta: number): number;
-}
-
 /**
- * 検証用の `alpha` 個体。状態の取得失敗を1回だけ起こせる。
+ * 検証用の `alpha` 個体。
  */
 export class FakeAlphaInstance implements PluginInstance<AlphaState, AlphaOperations> {
   private count = 0;
   private attachedPort: string | null = null;
   private disposed = false;
-  /** 真の間は次の `getState` で失敗する。指紋失敗の再現に使う。 */
-  failNextGetState = false;
 
   attach(portId: string, _session: AssignedSession): void {
     if (portId !== "main") {
@@ -369,10 +285,6 @@ export class FakeAlphaInstance implements PluginInstance<AlphaState, AlphaOperat
   }
 
   getState(): AlphaState {
-    if (this.failNextGetState) {
-      this.failNextGetState = false;
-      throw new Error("状態の取得に失敗した。");
-    }
     return { count: this.count };
   }
 
@@ -404,23 +316,6 @@ export interface BetaOperations {
    * @param next - 次の表示名。
    */
   rename(next: string): void;
-}
-
-/** 合成 `beta` の限定表示。 */
-export interface BetaView extends InstanceBaseView {
-  /** 表示名。 */
-  readonly label: string;
-}
-
-/** 合成 `beta` の公開操作。表示名の読み書き口だけを持つ。 */
-export interface BetaApi {
-  /**
-   * 表示名を読む。
-   *
-   * @param instanceId - 対象の個体識別子。
-   * @returns 表示名。
-   */
-  readLabel(instanceId: string): string;
 }
 
 /** 検証用の `beta` 個体。 */
@@ -462,7 +357,7 @@ export const alphaDefinition: PluginDefinition<AlphaState, AlphaOperations> = {
   create: () => new FakeAlphaInstance(),
 };
 
-/** `beta` の生成元。`alpha` と異なる状態・操作・表示を持つ。 */
+/** `beta` の生成元。`alpha` と異なる状態・操作を持つ。 */
 export const betaDefinition: PluginDefinition<BetaState, BetaOperations> = {
   pluginId: "beta",
   ports: [{ portId: "main", accepts: [RELIABLE_BIDI] }],
@@ -539,70 +434,32 @@ export function uniquePolicy(maxInstances: number | null): PluginAssignmentPolic
 /**
  * `alpha` の管理記述子を作る。
  *
- * @param options - 割当て方針と監視方式。
+ * @param options - 割当て方針。
  * @returns 管理記述子。
  */
 export function alphaDescriptor(options: {
   readonly assignment: PluginAssignmentPolicy;
-  readonly observation: GuiPluginManagementDescriptor<
-    AlphaState,
-    AlphaOperations,
-    AlphaView,
-    AlphaApi
-  >["observation"];
-}): GuiPluginManagementDescriptor<AlphaState, AlphaOperations, AlphaView, AlphaApi> {
+}): GuiPluginManagementDescriptor<AlphaState, AlphaOperations> {
   return {
     kind: "alpha",
     definition: alphaDefinition,
     assignment: options.assignment,
-    observation: options.observation,
-    projectView: (input) => ({
-      instanceId: input.binding.instanceId,
-      pluginId: input.binding.pluginId,
-      portId: input.binding.portId,
-      localSessionId: input.binding.localSessionId,
-      count: input.state.count,
-    }),
-    buildOperations: (access) => ({
-      readCount: (instanceId: string) =>
-        access.withOperations(instanceId, (operations) => operations.add(0)),
-      writeCount: (instanceId: string, delta: number) =>
-        access.withOperations(instanceId, (operations) => operations.add(delta)),
-    }),
   };
 }
 
 /**
  * `beta` の管理記述子を作る。
  *
- * @param options - 割当て方針と監視方式。
+ * @param options - 割当て方針。
  * @returns 管理記述子。
  */
 export function betaDescriptor(options: {
   readonly assignment: PluginAssignmentPolicy;
-  readonly observation: GuiPluginManagementDescriptor<
-    BetaState,
-    BetaOperations,
-    BetaView,
-    BetaApi
-  >["observation"];
-}): GuiPluginManagementDescriptor<BetaState, BetaOperations, BetaView, BetaApi> {
+}): GuiPluginManagementDescriptor<BetaState, BetaOperations> {
   return {
     kind: "beta",
     definition: betaDefinition,
     assignment: options.assignment,
-    observation: options.observation,
-    projectView: (input) => ({
-      instanceId: input.binding.instanceId,
-      pluginId: input.binding.pluginId,
-      portId: input.binding.portId,
-      localSessionId: input.binding.localSessionId,
-      label: input.state.label,
-    }),
-    buildOperations: (access) => ({
-      readLabel: (instanceId: string) =>
-        access.withOperations(instanceId, (_operations, binding) => binding.instanceId),
-    }),
   };
 }
 
@@ -612,8 +469,6 @@ export interface ManagerFixture {
   readonly core: FakeCore;
   /** 偽セッション。 */
   readonly sessions: FakeSessions;
-  /** 偽時計。 */
-  readonly clock: FakeClock;
   /** 変化通知の回数。 */
   readonly changed: { count: number; failNext: boolean };
   /** 問題報告の一覧。 */
@@ -632,13 +487,11 @@ export function setupFixture(entries: readonly PluginSessionMetadata[] = []): Ma
   const core = new FakeCore();
   const sessions = new FakeSessions();
   sessions.entries = [...entries];
-  const clock = new FakeClock();
   const changed = { count: 0, failNext: false };
   const issues: PluginManagerIssue[] = [];
   const dependencies: PluginInstanceManagerDependencies = {
     core,
     sessions,
-    clock,
     onChanged: () => {
       if (changed.failNext) {
         changed.failNext = false;
@@ -650,5 +503,5 @@ export function setupFixture(entries: readonly PluginSessionMetadata[] = []): Ma
       issues.push(issue);
     },
   };
-  return { core, sessions, clock, changed, issues, dependencies };
+  return { core, sessions, changed, issues, dependencies };
 }

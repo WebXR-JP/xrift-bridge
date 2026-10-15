@@ -64,9 +64,16 @@ export interface TextStats {
 /**
  * テキストプラグインの UI 非依存の状態。
  *
- * 送信可能状態・実行中・直近結果・統計を提供する。本文は含まない。
+ * 送信可能状態・実行中・直近結果・統計・改訂番号を提供する。本文は含まない。
+ * 改訂番号は単調増加し、状態変更時に進める。読取りでは進めない。
  */
 export interface TextPluginState {
+  /**
+   * 単調増加の改訂番号。初期値は 0 であり、状態変更の確定ごとに進める。
+   *
+   * GUI アダプターは引き継ぐだけで進めず、子は新しい状態のみ採用する。
+   */
+  readonly revision: number;
   /** 割当てがあり実行中でなければ真。 */
   readonly canSend: boolean;
   /** 実行中の要求の相関識別子。待機がなければ `null`。 */
@@ -132,6 +139,9 @@ class TextInstance implements PluginInstance<TextPluginState, TextPluginOperatio
   private attempts = 0;
   private acknowledged = 0;
   private unknownCount = 0;
+  // 改訂番号の所有者は本体であり、状態変更の確定ごとに進める。
+  // 読取り（`getState`）では進めない。
+  private revision = 0;
   private readonly stateListeners = new Set<(state: TextPluginState) => void>();
   private disposed = false;
 
@@ -173,6 +183,7 @@ class TextInstance implements PluginInstance<TextPluginState, TextPluginOperatio
   getState(): TextPluginState {
     const session = this.session;
     return {
+      revision: this.revision,
       canSend: !this.disposed && session !== null && session.isAlive && this.pending === null,
       pendingId: this.pending?.id ?? null,
       lastResult: this.lastResult,
@@ -345,6 +356,9 @@ class TextInstance implements PluginInstance<TextPluginState, TextPluginOperatio
 
   /** 状態購読者へ最新の状態を届ける。購読者の例外は隔離する。 */
   private notifyStateChanged(): void {
+    // 改訂番号の所有者は本体であり、状態変更の確定時に進める。
+    // 読取りでは進めない。
+    this.revision += 1;
     const snapshot = this.getState();
     // ADR: 通知中の購読解除に備えて写しへ届ける。`Array.from` は反復子の
     // 振る舞いを変えず、既存の配送スナップショット方針に合わせる。

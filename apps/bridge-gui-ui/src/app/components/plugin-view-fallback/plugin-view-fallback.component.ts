@@ -4,7 +4,7 @@
  * 子画面が出せないときの文言だけを担い、スロット（`#plugin-slot`）内で
  * 子画面タグと同一矩形に重ねて出す。状態の判定は共有の導出関数
  * （`derivePluginViewState`）の結果を受け、ここでは複製しない。
- * `ready` のときは状態文を出さず子画面のみにする。
+ * `answered` のときは状態文を出さず子画面のみにする。
  * 重なり順で子画面より上に描かれても操作を奪わないよう、受け口自体は
  * 操作を受け付けず、再試行・再読み込みのボタンだけ受け付ける。
  */
@@ -18,7 +18,7 @@ import { HlmButton } from "../../ui/button/hlm-button.ts";
   imports: [HlmButton],
   templateUrl: "./plugin-view-fallback.component.html",
   // ADR: 代替表示は子画面タグと同一矩形に重なるため、受け口自体は透過させ
-  // （`pointer-events: none`）、空の `ready` が子画面への操作を奪わない。
+  // （`pointer-events: none`）、空の `answered` が子画面への操作を奪わない。
   // 操作可能なボタンだけテンプレートで `pointer-events: auto` を戻す。
   // 大域規則に置かず受け口の属性に閉じるため、試験でも値で確かめられる。
   host: {

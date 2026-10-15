@@ -16,6 +16,7 @@ function snapshot(revision: number): ManagementSnapshot {
     pluginMounts: [],
     pluginMountFailures: [],
     pluginNavigationRules: [],
+    pluginView: { instanceId: null, viewGeneration: 0 },
   };
 }
 

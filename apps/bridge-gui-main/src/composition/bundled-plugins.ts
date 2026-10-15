@@ -1,45 +1,40 @@
 /**
  * 同梱プラグインの選択と登録順の宣言（composition root）。
  *
- * backend が具象を知らずに済むよう、同梱の選択と登録順（text→diagnostic→udp）、
- * 管理記述子・companion factory の対応付けをここに宣言する。各プラグインの
- * GUI 登録口（`bridge-plugin-text/gui`・`bridge-plugin-diagnostic/gui`・`bridge-plugin-udp/gui`）を import してよいのはここだけであり、
+ * backend が具象を知らずに済むよう、同梱の選択と登録順（text→diagnostic→udp）
+ * をここに宣言する。各プラグインの GUI 登録単位
+ * （`bridge-plugin-text/gui`・`bridge-plugin-diagnostic/gui`・
+ * `bridge-plugin-udp/gui`）を import してよいのはここだけであり、
  * `main` 配下は汎用の登録関数だけを受け取る。登録済みインスタンスや
- * registry singleton を持たず、呼ぶたびに新しい companion・公開参照口を作る
- * ため、同じ登録関数を複数 backend で使い回せる。
+ * registry singleton を持たず、呼ぶたびに新しい登録単位を渡すため、
+ * 同じ登録関数を複数 backend で使い回せる。
  *
- * companion factory は解決前の宣言（振る舞いと相対 entrypoint）だけを返し、
- * ここで静的 manifest（`bundled-plugin-assets.ts`）と照合して解決済み
- * view パスを付与し、登録表に載せる。registry は解決済みだけを扱う。
+ * companion 宣言の解決（相対 entrypoint→解決済み view パス）は backend が
+ * 注入された resolver で行い、ここでは行わない。resolver 自体は静的 manifest
+ * （`bundled-plugin-assets.ts`）との照合だけであり、endpoint 工場を import
+ * しない。
  *
  * @packageDocumentation
  */
 import type { GuiPluginRegistrar } from "bridge-gui-plugin-sdk/registration";
-import type { PluginCompanion, PluginCompanionDeclaration } from "bridge-gui-plugin-sdk/companion";
 import { BUNDLED_PLUGIN_ASSETS, resolveBundledViewPath } from "./bundled-plugin-assets.ts";
-import { createTextCompanion, textManagement } from "bridge-plugin-text/gui";
-import { createDiagnosticCompanion, diagnosticManagement } from "bridge-plugin-diagnostic/gui";
-import { createUdpCompanion, udpManagement } from "bridge-plugin-udp/gui";
+import { textGuiRegistration } from "bridge-plugin-text/gui";
+import { diagnosticGuiRegistration } from "bridge-plugin-diagnostic/gui";
+import { udpGuiRegistration } from "bridge-plugin-udp/gui";
 
 /**
- * 解決前の宣言に解決済み view パスを付与する。相対 entrypoint は manifest と
- * 照合し、不一致・未登録は拒否する。登録表に載せるのは解決済みだけである。
+ * 解決前の companion 宣言を manifest と照合し、解決済み view パスを返す。
  *
- * @param declaration - companion factory が返した解決前の宣言。
- * @returns 登録表に載せる解決済みの記述子。
+ * backend の registrar が登録時に使う resolver である。SDK の型を変更せずに
+ * 済む形であり、解決は静的 manifest との照合だけである。
+ *
+ * @param kind - companion の宣言した種別トークン。
+ * @param viewEntry - companion の宣言した相対 entrypoint。
+ * @returns 解決済みの view パス。
  * @throws `RangeError` — 未登録種別・相対 entrypoint の不一致の場合。
  */
-export function resolveCompanion(declaration: PluginCompanionDeclaration): PluginCompanion {
-  const viewPath = resolveBundledViewPath(
-    BUNDLED_PLUGIN_ASSETS,
-    declaration.kind,
-    declaration.viewEntry,
-  );
-  // ADR: 相対 entrypoint の宣言（`viewEntry`）は解決の材料であり、登録表の
-  // 記述子には載せない。残余の振る舞いはそのまま引き継ぐ。
-  const { viewEntry: _viewEntry, ...behavior } = declaration;
-  void _viewEntry;
-  return { ...behavior, viewPath };
+export function resolveBundledPluginViewPath(kind: string, viewEntry: string): string {
+  return resolveBundledViewPath(BUNDLED_PLUGIN_ASSETS, kind, viewEntry);
 }
 
 /**
@@ -49,18 +44,9 @@ export function resolveCompanion(declaration: PluginCompanionDeclaration): Plugi
  * @param registrar - backend が渡す汎用の登録口。
  */
 export function registerBundledPlugins(registrar: GuiPluginRegistrar): void {
-  registrar.registerPlugin({
-    management: textManagement,
-    createCompanion: (access) => resolveCompanion(createTextCompanion(access)),
-  });
-  registrar.registerPlugin({
-    management: diagnosticManagement,
-    createCompanion: (access) => resolveCompanion(createDiagnosticCompanion(access)),
-  });
-  registrar.registerPlugin({
-    management: udpManagement,
-    createCompanion: (access) => resolveCompanion(createUdpCompanion(access)),
-  });
+  registrar.registerPlugin(textGuiRegistration);
+  registrar.registerPlugin(diagnosticGuiRegistration);
+  registrar.registerPlugin(udpGuiRegistration);
 }
 
 /**

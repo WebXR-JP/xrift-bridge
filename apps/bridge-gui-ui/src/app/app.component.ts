@@ -210,7 +210,12 @@ export class AppComponent implements OnInit {
       }
     });
     effect(() => {
-      this.management.setPluginViewState(this.selected() === "operations", this.selectedInstance());
+      // ADR: 表示要求の送出は非同期であり、効果の再実行を待たない。世代発行と
+      // 失効は状態サービスが担い、ここでは表示切替だけを伝える。
+      void this.management.setPluginViewState(
+        this.selected() === "operations",
+        this.selectedInstance(),
+      );
     });
   }
 
@@ -221,11 +226,11 @@ export class AppComponent implements OnInit {
     // ADR: 読み込み直しの残存掃除は main 側の `did-navigate` が実プラグインの
     // 対応付け破棄として行うため、ここでは送らない（重複排除）。
     // 初期化では所有一覧の読直しだけを行い、タグと表示を合わせる。
+    // 子から main への専用 ready 通知は持たない（寿命は表示要求の世代で管理する）。
     if (this.pluginHost !== undefined) {
       this.management.registerPluginHost(this.pluginHost.nativeElement);
     }
     await this.management.fetchInitial();
-    this.management.notifyReady();
   }
 
   /** 受付を有効化する（人間の操作用）。 */

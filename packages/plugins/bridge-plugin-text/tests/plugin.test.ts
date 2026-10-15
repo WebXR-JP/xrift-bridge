@@ -118,7 +118,9 @@ test("正常な送信は反映確認で決着する", async () => {
   fake.受信(localSessionId, { op: "shown", id: 要求.id });
   const 決着 = await 決着約束;
   expect(決着).toEqual({ status: "acknowledged", id: 要求.id });
+  // 改訂番号は割当て・送信開始・反映確認の確定で進む（読取りでは進めない）。
   expect(handle.getState()).toEqual({
+    revision: 3,
     canSend: true,
     pendingId: null,
     lastResult: 決着,
@@ -400,4 +402,27 @@ test("切替え時は旧要求を持ち越さない", async () => {
   const 新決着 = await 新決着約束;
   // 旧識別子の確認では決着しないため、期限切れで結果不明になる。
   expect(新決着.status).toBe("unknown");
+});
+
+test("改訂番号は状態変更で進み読取りでは進まない", async () => {
+  const fake = new 偽サーバー();
+  const { handle, ops, localSessionId, session } = テキスト割当て(fake, "text");
+
+  // 割当て確定で 1 まで進む。
+  const 割当て直後 = handle.getState().revision;
+  expect(割当て直後).toBe(1);
+  // 読取りでは進めない。
+  expect(handle.getState().revision).toBe(割当て直後);
+  expect(handle.getState().revision).toBe(割当て直後);
+
+  const 決着約束 = ops.sendText("改訂", localSessionId);
+  // 送信開始で進む。
+  const 送信中 = handle.getState().revision;
+  expect(送信中).toBeGreaterThan(割当て直後);
+
+  const 要求 = 送信要求(session);
+  fake.受信(localSessionId, { op: "shown", id: 要求.id });
+  await 決着約束;
+  // 反映確認の確定でさらに進む。
+  expect(handle.getState().revision).toBeGreaterThan(送信中);
 });

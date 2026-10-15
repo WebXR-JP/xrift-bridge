@@ -276,6 +276,12 @@ export type DevBusinessSummary =
   | { readonly kind: "pairingDecision"; readonly status: string }
   | { readonly kind: "ack" }
   | {
+      readonly kind: "pluginView";
+      readonly adopted: boolean;
+      readonly instanceId: string | null;
+      readonly viewGeneration: number;
+    }
+  | {
       readonly kind: "assignment";
       readonly pluginKind: string;
       readonly pluginId: string;
@@ -290,7 +296,8 @@ export type DevBusinessSummary =
  *
  * 操作ごとに許可項目だけを抜き出し、比較コード本文・業務 payload・
  * テキスト本文は捨てる。`getPairingView` は有無だけに落とす
- * （本文の取得と承認の自動化をしない）。
+ * （本文の取得と承認の自動化をしない）。`setPluginView` は RPC 成功と
+ * 採用を混同せず、採用／stale と現在の採用済み対象・世代を残す。
  *
  * @param op - 実行した許可操作名。
  * @param result - backend・所有表が返した業務結果。
@@ -336,9 +343,28 @@ export function summarizeBusinessResult(op: DevOpName, result: unknown): DevBusi
       };
     }
     case "disconnectConnection":
-    case "retryPluginMount":
-    case "setPluginView": {
+    case "retryPluginMount": {
       return { kind: "ack" };
+    }
+    case "setPluginView": {
+      // RPC 成功と採用を混同しないため、採用／stale と現在の採用済みを残す。
+      const current =
+        typeof table["current"] === "object" && table["current"] !== null
+          ? (table["current"] as Record<string, unknown>)
+          : {};
+      const instanceId = current["instanceId"];
+      const viewGeneration = current["viewGeneration"];
+      return {
+        kind: "pluginView",
+        adopted: table["adopted"] === true,
+        instanceId: typeof instanceId === "string" && instanceId.length > 0 ? instanceId : null,
+        viewGeneration:
+          typeof viewGeneration === "number" &&
+          Number.isInteger(viewGeneration) &&
+          viewGeneration >= 0
+            ? viewGeneration
+            : -1,
+      };
     }
     case "assignPlugin": {
       return {

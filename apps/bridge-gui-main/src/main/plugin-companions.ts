@@ -1,38 +1,44 @@
 /**
  * プラグイン所有の GUI companion の登録表（ホスト実装）。
  *
- * companion の公開面（`PluginCompanion`・`CompanionRequestEnv`・
- * `CompanionDesiredBinding`）は `bridge-gui-plugin-sdk/companion` が正本で
- * あり、ここでは再 export する。ここには backend ごとの登録表の実装だけを
- * 置く。共通の対応付け・結線（binder・coordinator・channel factory）は種別分岐を
+ * 解決済み companion（表示名・相対 entry の解決結果である解決済み view パス）と
+ * endpoint 工場の対応付けだけを持ち、WebView 生成・transport・束縛・失効は
+ * 持たない。共通の対応付け・結線（coordinator・channel factory）は種別分岐を
  * 持たず、ここから引いた記述子に委譲する。新しい companion の追加は
  * backend ごとの表への登録だけであり、共通コードの分岐追加は要らない。
  *
- * 実同梱には登録表への追加だけでは足りない。共通対応付け層の範囲に限り、
- * 登録だけで配置・結線・状態取得・push が通る。子画面の実体は別途
- * 静的 manifest（`src/composition/bundled-plugin-assets.ts`）から導く
- * `electrobun.config.ts` の `build.views`（子画面 entrypoint）と `copy`
- * （HTML・CSS の同梱）に載せ、遷移規則は登録済みの解決済み view パスから
- * backend が snapshot へ配布する（同期はテストで固定する）。
- *
- * companion は backend を capture した factory（例 `createTextCompanion(access)`）
- * で作り、backend を引数で受け取らない。共有の具象 companion インスタンス・
- * 既定引数・共有 singleton・共有表 helper は持たず、backend ごとに
- * registry を生成・注入する。登録順は text→diagnostic→udp である。
- *
- * WebView 生成・transport・個体束縛・失効・同梱許可・管理 DTO はホストが
- * 持ち続ける。`bridge-app-core` への GUI 逆依存は足さない。
+ * 解決前の宣言を登録表に載せない。view パスの解決は backend の registrar が
+ * 登録時に静的 manifest 由来の resolver で行い、解決済みだけを載せる。
  *
  * @packageDocumentation
  */
 import { isPluginKind } from "bridge-gui-plugin-sdk/management";
-import type { PluginCompanion } from "bridge-gui-plugin-sdk/companion";
-
-export type {
-  CompanionDesiredBinding,
-  CompanionRequestEnv,
-  PluginCompanion,
+import type {
+  PluginEmissionPort,
+  PluginEndpoint,
+  ResolvedPluginCompanion,
 } from "bridge-gui-plugin-sdk/companion";
+import type { BoundPluginRef } from "bridge-gui-plugin-sdk/management";
+
+/**
+ * 型を消した endpoint 工場。登録時に具象型の到達を閉包へ包み、
+ * 駆動は消した型で行う。型消去は閉包内に限定し、ホストは状態の型・
+ * 内容を解釈しない。
+ */
+export type ErasedEndpointFactory = (
+  ref: BoundPluginRef<unknown, unknown>,
+  emission: PluginEmissionPort,
+) => PluginEndpoint;
+
+/**
+ * 登録表の1行。解決済み companion と endpoint 工場の組である。
+ */
+export interface PluginCompanionEntry {
+  /** 解決済み companion。表示名と解決済み view パスを持つ。 */
+  readonly companion: ResolvedPluginCompanion;
+  /** 束縛個体用の endpoint 工場。 */
+  readonly createEndpoint: ErasedEndpointFactory;
+}
 
 /**
  * companion の登録表。種別トークンから記述子を引く。
@@ -41,41 +47,66 @@ export type {
  * テスト専用の unregister は持たない（表を使い捨てる）。
  */
 export class PluginCompanionRegistry {
-  private readonly companions = new Map<string, PluginCompanion>();
+  private readonly entries = new Map<string, PluginCompanionEntry>();
 
   /**
-   * companion を登録する。同梱 companion だけを登録し、任意の追加はしない。
+   * 解決済み companion と endpoint 工場を登録する。同梱だけを登録し、
+   * 任意の追加はしない。
    *
-   * @param companion - 登録する companion の記述子。
+   * @param companion - 登録する解決済み companion。
+   * @param createEndpoint - 束縛個体用の endpoint 工場。
    * @throws `Error` — 種別トークンが空・形式外・登録済みの場合。
    */
-  register(companion: PluginCompanion): void {
+  register(companion: ResolvedPluginCompanion, createEndpoint: ErasedEndpointFactory): void {
     if (!isPluginKind(companion.kind)) {
       throw new Error("companion の種別トークンが形式外である。");
     }
-    if (this.companions.has(companion.kind)) {
+    if (companion.viewPath.length === 0) {
+      throw new Error("companion の view パスが空である。");
+    }
+    if (this.entries.has(companion.kind)) {
       throw new Error(`companion は登録済みである: ${companion.kind}`);
     }
-    this.companions.set(companion.kind, companion);
+    this.entries.set(companion.kind, { companion, createEndpoint });
   }
 
   /**
-   * 種別トークンから記述子を引く。未登録なら `undefined` とし、
+   * 種別トークンから行を引く。未登録なら `undefined` とし、
    * 呼び出し側が拒否・回収する。
    *
    * @param kind - 照合する種別トークン。
-   * @returns 記述子。未登録なら `undefined`。
+   * @returns 行。未登録なら `undefined`。
    */
-  get(kind: string): PluginCompanion | undefined {
-    return this.companions.get(kind);
+  getEntry(kind: string): PluginCompanionEntry | undefined {
+    return this.entries.get(kind);
   }
 
   /**
-   * 登録済み companion を登録順に返す。配置の要望読みに使う。
+   * 種別トークンから解決済み companion を引く。
    *
-   * @returns 登録済みの記述子の一覧。
+   * @param kind - 照合する種別トークン。
+   * @returns 解決済み companion。未登録なら `undefined`。
    */
-  list(): readonly PluginCompanion[] {
-    return [...this.companions.values()];
+  getCompanion(kind: string): ResolvedPluginCompanion | undefined {
+    return this.entries.get(kind)?.companion;
+  }
+
+  /**
+   * 登録済み行を登録順に返す。配置の解決済み view パス集合・遷移規則の
+   * 生成に使う。
+   *
+   * @returns 登録済みの行の一覧。
+   */
+  list(): readonly PluginCompanionEntry[] {
+    return [...this.entries.values()];
+  }
+
+  /**
+   * 登録済み companion を登録順に返す。
+   *
+   * @returns 登録済みの解決済み companion の一覧。
+   */
+  listCompanions(): readonly ResolvedPluginCompanion[] {
+    return [...this.entries.values()].map((entry) => entry.companion);
   }
 }

@@ -69,8 +69,8 @@ describe("代替表示の文言", () => {
     expect(root.querySelector("[data-plugin-view-retry]")).toBe(null);
   });
 
-  it("readyでは状態文を出さず子画面のみにする", async () => {
-    const fixture = await prepareWith({ kind: "ready" });
+  it("応答済みでは状態文を出さず子画面のみにする", async () => {
+    const fixture = await prepareWith({ kind: "answered" });
     const root = fixture.nativeElement as HTMLElement;
     expect((root.textContent ?? "").trim()).toBe("");
     expect(root.querySelector("button")).toBe(null);
@@ -135,8 +135,8 @@ describe("失敗と再試行", () => {
 // 操作が必要な状態のボタンだけが操作を受け付けることを確かめる。
 // native 子画面の実表示（重なり順・クリック受付）は自動化の対象外である。
 describe("子画面への操作の透過", () => {
-  it("readyでは受け口自体が操作を奪わず操作要素も無い", async () => {
-    const fixture = await prepareWith({ kind: "ready" });
+  it("応答済みでは受け口自体が操作を奪わず操作要素も無い", async () => {
+    const fixture = await prepareWith({ kind: "answered" });
     const root = fixture.nativeElement as HTMLElement;
     expect(root.style.pointerEvents).toBe("none");
     expect(root.querySelector("button")).toBe(null);

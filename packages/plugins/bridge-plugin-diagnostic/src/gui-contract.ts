@@ -1,70 +1,148 @@
 /**
  * 診断子画面の固有契約の正本（`./gui-contract`）。
  *
- * RPC 契約型・限定 DTO・種別トークン・相対 entrypoint の定義元はここだけであり、
- * 重複定義を持たない。共有型（`InstanceBaseView`）だけを共有契約
- * （`bridge-gui-contract/plugin-instance`）から借りる。表示先は相対 entrypoint
- * の宣言だけを持ち、絶対 `views://` パスや子画面 URL の組み立ては持たない。
- * 解決（配置先・`views://` パス・URL 組み立て）はホスト（composition の静的
- * manifest と対応付け）が行う。子画面（`src/view/index.ts`）は同パッケージ内の
- * 相対参照、GUI 側は `bridge-plugin-diagnostic/gui-contract` を参照する。
+ * 要求名・イベント名・限定 DTO・実行時検証・種別トークン・相対 entrypoint の
+ * 定義元はここだけであり、重複定義を持たない。中継の共通形
+ * （子→プラグイン `{method, params}`・プラグイン→子 `{event, payload}`）の
+ * 外形だけを共有契約（`bridge-gui-contract/plugin-instance`）から借り、
+ * 業務上の型・名前・検証はここが所有する。アプリ本体は不透明中継のみであり、
+ * 内容を解釈しない。表示先は相対 entrypoint の宣言だけを持ち、絶対
+ * `views://` パスや子画面 URL の組み立ては持たない。解決（配置先・`views://`
+ * パス・URL 組み立て）はホスト（composition の静的 manifest と対応付け）が
+ * 行う。子画面（`src/view/index.ts`）は同パッケージ内の相対参照、GUI 側は
+ * `bridge-plugin-diagnostic/gui-contract` を参照する。実行時依存を持たず、
+ * ブラウザ安全な構成とする。
  *
  * @packageDocumentation
  */
-import type { DiagnosticStats } from "./index.ts";
-import type { InstanceBaseView } from "bridge-gui-contract/plugin-instance";
 
 /**
- * 診断個体の限定表示。echo／ping 統計だけを持ち、本文は持たない。
+ * 診断の応答統計の表示用抜粋。echo／ping 件数だけを持ち、本文は持たない。
  */
-export interface DiagnosticInstanceView extends InstanceBaseView {
-  /** 束縛個体の echo／ping 応答統計。 */
-  readonly stats: DiagnosticStats;
+export interface DiagnosticViewStats {
+  /** echo 応答の送信試行件数。 */
+  readonly diagnosticEcho: number;
+  /** ping 応答の送信試行件数。 */
+  readonly diagnosticPing: number;
 }
 
 /**
- * 診断子画面が受け取る snapshot。
+ * 診断個体の限定表示。束縛情報と応答統計と改訂番号の組である。
+ *
+ * 子画面は状態を持たず、この表示を改訂番号の新旧で採用するだけである。
  */
-export interface DiagnosticInstanceSnapshot extends DiagnosticInstanceView {
+export interface DiagnosticInstanceView {
+  /** 束縛した実インスタンスの識別子。再利用しない。 */
+  readonly instanceId: string;
+  /** 由来プラグインの識別子。 */
+  readonly pluginId: string;
+  /** 束縛した接続口の識別子。 */
+  readonly portId: string;
+  /** 現割当ての生存セッションのローカル識別子。 */
+  readonly localSessionId: string;
+  /** 束縛個体の echo／ping 応答統計。 */
+  readonly stats: DiagnosticViewStats;
   /** 単調増加の改訂番号。新しいときだけ採用する。 */
   readonly revision: number;
 }
 
-/** main から診断子画面への状態通知。最新の全状態を送る唯一の通知である。 */
-export interface DiagnosticInstanceChangedMessage {
-  /** 単調増加の改訂番号。 */
-  readonly revision: number;
-  /** 採用対象の表示状態。 */
-  readonly snapshot: DiagnosticInstanceSnapshot;
+/** 子から診断プラグインへの初期取得の要求名。唯一の要求である。 */
+export const DIAGNOSTIC_RELAY_METHOD_GET_STATE = "getDiagnosticState";
+
+/** 診断プラグインから子への状態通知のイベント名。唯一の通知である。 */
+export const DIAGNOSTIC_RELAY_EVENT_STATE_CHANGED = "diagnosticStateChanged";
+
+/**
+ * 未知の要求・不正な引数に対する不透明なエラー値。
+ *
+ * 業務エラーは投げず値として返す（プラグインの結果として扱う）。投げた例外は
+ * 想定外の失敗として中継失敗に落とす。`RangeError` を投げても束縛失効とは
+ * 解釈しない（失効はホスト自身の照合が決める）。
+ */
+export interface DiagnosticRelayError {
+  /** 業務上の失敗である印。中継自体の失敗（`PluginRelayResult` の `error`）とは別である。 */
+  readonly ok: false;
+  /** 失敗の符号。 */
+  readonly code: "unknown-method" | "bad-params";
+  /** 人間向けの短い理由。本文・payload は含めない。 */
+  readonly message: string;
 }
 
-// ADR: Electrobun の `RPCSchema<I>` は `{requests, messages}` に解決される
-// 構造型であり、`ElectrobunRPCSchema` 制約（`{bun, webview}`）も構造適合で
-// 満たせる。そのため契約ではこの素朴な構造型で表し、`electrobun/rpc` を
-// import しない（main 側のビルドを `.hutch` に依存させない）。
-// 制約が構造型を拒否する場合は bridge-gui-main 側のアダプタで最小の型写像を行う。
-type RpcSchema<Requests, Messages> = {
-  requests: Requests;
-  messages: Messages;
-};
+/**
+ * プレーンオブジェクトか判定する。
+ *
+ * @param value - 判定する値。
+ * @returns 配列でないオブジェクトであれば真。
+ */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
-/** 診断子画面用 RPC の型。main・子画面の両方から参照する。 */
-export type DiagnosticInstanceRpc = {
-  bun: RpcSchema<
-    {
-      /** 束縛個体の状態取得。識別子の指定は受け付けない。読み取りは revision を進めない。 */
-      getDiagnosticState: { params: {}; response: DiagnosticInstanceSnapshot };
-    },
-    {}
-  >;
-  webview: RpcSchema<
-    {},
-    {
-      /** main からの状態 push。 */
-      diagnosticStateChanged: DiagnosticInstanceChangedMessage;
-    }
-  >;
-};
+/**
+ * 空でない文字列か判定する。
+ *
+ * @param value - 判定する値。
+ * @returns 空でない文字列であれば真。
+ */
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0;
+}
+
+/**
+ * 有限の非負整数か判定する。
+ *
+ * @param value - 判定する値。
+ * @returns 有限の非負整数であれば真。
+ */
+function isNonNegativeInteger(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0;
+}
+
+/**
+ * 初期取得の引数の形状か判定する。引数は空の組みだけを受け付ける。
+ *
+ * @param value - 検査する未知値。
+ * @returns 空のプレーンオブジェクトであれば真。
+ */
+export function isDiagnosticGetStateParams(value: unknown): value is Record<string, never> {
+  if (!isRecord(value)) return false;
+  return Object.keys(value).length === 0;
+}
+
+/**
+ * 診断個体の限定表示の形状か判定する。子と endpoint の両方が使う。
+ *
+ * @param value - 検査する未知値。
+ * @returns 限定表示の形状であれば真。
+ */
+export function isDiagnosticInstanceView(value: unknown): value is DiagnosticInstanceView {
+  if (!isRecord(value)) return false;
+  if (!isNonEmptyString(value["instanceId"])) return false;
+  if (!isNonEmptyString(value["pluginId"])) return false;
+  if (!isNonEmptyString(value["portId"])) return false;
+  if (!isNonEmptyString(value["localSessionId"])) return false;
+  if (!isNonNegativeInteger(value["revision"])) return false;
+  const stats: unknown = value["stats"];
+  if (!isRecord(stats)) return false;
+  if (!isNonNegativeInteger(stats["diagnosticEcho"])) return false;
+  if (!isNonNegativeInteger(stats["diagnosticPing"])) return false;
+  return true;
+}
+
+/**
+ * 不透明なエラー値の形状か判定する。子が業務エラーを識別するために使う。
+ *
+ * @param value - 検査する未知値。
+ * @returns 不透明なエラー値の形状であれば真。
+ */
+export function isDiagnosticRelayError(value: unknown): value is DiagnosticRelayError {
+  if (!isRecord(value)) return false;
+  if (value["ok"] !== false) return false;
+  const code: unknown = value["code"];
+  if (code !== "unknown-method" && code !== "bad-params") return false;
+  const message: unknown = value["message"];
+  return typeof message === "string" && message.length > 0;
+}
 
 /** 診断 companion の種別トークン。マウント識別子に載る。 */
 export const DIAGNOSTIC_MOUNT_KIND = "diagnostic";

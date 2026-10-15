@@ -138,9 +138,13 @@ export interface UdpStats {
  * UDP プラグインの UI 非依存の状態。
  *
  * 段階・要求した bind・実際の bind 先・統計・直近異常・開始可否を提供する。
- * payload 本文は含まない。
+ * payload 本文は含まない。`revision` は本体が所有する単調増加の改訂番号で
+ * あり、状態変更で進め読み取りでは進めない。GUI アダプターは引き継ぐだけ
+ * であり、子は新しい状態のみ採用する。
  */
 export interface UdpPluginState {
+  /** 本体が所有する単調増加の改訂番号。生成直後は 0 であり、状態変更で進む。 */
+  readonly revision: number;
   /** 現在の段階。 */
   readonly phase: UdpPhase;
   /** 直近に要求した bind 設定。未開始なら `null`。 */
@@ -309,6 +313,7 @@ class UdpInstance implements PluginInstance<UdpPluginState, UdpPluginOperations>
   private socketUnsubs: (() => void)[] = [];
   private closePromise: Promise<void> | null = null;
   private generation = 0;
+  private revision = 0;
   private phase: UdpPhase = "unassigned";
   private requestedBind: UdpBindConfig | null = null;
   private boundAddress: UdpSocketAddress | null = null;
@@ -348,12 +353,13 @@ class UdpInstance implements PluginInstance<UdpPluginState, UdpPluginOperations>
     if (this.phase === "unassigned") {
       this.phase = "stopped";
     }
-    this.notifyStateChanged();
+    this.markChanged();
   }
 
   /** {@inheritDoc PluginInstance.getState} */
   getState(): UdpPluginState {
     return {
+      revision: this.revision,
       phase: this.phase,
       requestedBind: this.requestedBind === null ? null : { ...this.requestedBind },
       boundAddress: this.boundAddress === null ? null : { ...this.boundAddress },
@@ -398,6 +404,7 @@ class UdpInstance implements PluginInstance<UdpPluginState, UdpPluginOperations>
     if (this.socket !== null || this.closePromise !== null) {
       void this.beginClose();
     }
+    this.revision += 1;
     this.phase = "disposed";
   }
 
@@ -461,7 +468,7 @@ class UdpInstance implements PluginInstance<UdpPluginState, UdpPluginOperations>
     this.phase = "starting";
     this.requestedBind = { ...wanted };
     this.cancelStartRequested = false;
-    this.notifyStateChanged();
+    this.markChanged();
     // ADR: 旧→新の順序を厳守する。factory の呼出し（新ソケットの生成）は
     // 旧ソケットの閉塞完了の後に行い、新旧の待受けを混在させない。
     if (this.socket !== null || this.closePromise !== null) {
@@ -471,7 +478,7 @@ class UdpInstance implements PluginInstance<UdpPluginState, UdpPluginOperations>
       }
       if (this.cancelStartRequested) {
         this.phase = "stopped";
-        this.notifyStateChanged();
+        this.markChanged();
         return { ok: false, reason: "cancelled", message: "停止・失効のため開始を取り消した。" };
       }
     }
@@ -505,7 +512,7 @@ class UdpInstance implements PluginInstance<UdpPluginState, UdpPluginOperations>
       }
       if (this.cancelStartRequested || generation !== this.generation) {
         this.phase = "stopped";
-        this.notifyStateChanged();
+        this.markChanged();
         return { ok: false, reason: "cancelled", message: "停止・失効のため開始を取り消した。" };
       }
       return this.failBind(`bind に失敗した: ${describeFailure(error)}`);
@@ -522,13 +529,13 @@ class UdpInstance implements PluginInstance<UdpPluginState, UdpPluginOperations>
       this.detachSocket(created);
       await this.beginCloseDetached(created);
       this.phase = "stopped";
-      this.notifyStateChanged();
+      this.markChanged();
       return { ok: false, reason: "cancelled", message: "停止・失効のため開始を取り消した。" };
     }
     this.boundAddress = { ...bound };
     this.lastError = null;
     this.phase = "running";
-    this.notifyStateChanged();
+    this.markChanged();
     return { ok: true };
   }
 
@@ -548,7 +555,7 @@ class UdpInstance implements PluginInstance<UdpPluginState, UdpPluginOperations>
     }
     if (this.phase === "error") {
       this.phase = "stopped";
-      this.notifyStateChanged();
+      this.markChanged();
       return { ok: true };
     }
     if (this.phase === "stopping") {
@@ -563,7 +570,7 @@ class UdpInstance implements PluginInstance<UdpPluginState, UdpPluginOperations>
       }
       if (this.phase === "stopping") this.phase = "stopped";
       this.boundAddress = null;
-      this.notifyStateChanged();
+      this.markChanged();
       return { ok: true };
     }
     // ADR: 開始途中（`starting`）の停止は取消優先である。取消標識を立てて
@@ -571,14 +578,14 @@ class UdpInstance implements PluginInstance<UdpPluginState, UdpPluginOperations>
     // 継続が先であり、標識を見て bind せず `stopped` に落ち着く。
     this.cancelStartRequested = true;
     this.phase = "stopping";
-    this.notifyStateChanged();
+    this.markChanged();
     await this.beginClose();
     if (this.disposed) {
       return { ok: false, reason: "cancelled", message: "破棄されたため停止を取り消した。" };
     }
     if (this.phase === "stopping") this.phase = "stopped";
     this.boundAddress = null;
-    this.notifyStateChanged();
+    this.markChanged();
     return { ok: true };
   }
 
@@ -595,7 +602,7 @@ class UdpInstance implements PluginInstance<UdpPluginState, UdpPluginOperations>
     this.boundAddress = null;
     this.lastError = message;
     this.phase = "error";
-    this.notifyStateChanged();
+    this.markChanged();
     return { ok: false, reason: "bind-failed", message };
   }
 
@@ -620,7 +627,7 @@ class UdpInstance implements PluginInstance<UdpPluginState, UdpPluginOperations>
       this.boundAddress = null;
       this.lastError = "セッションが終了したため転送を停止した。";
     }
-    this.notifyStateChanged();
+    this.markChanged();
   }
 
   /**
@@ -646,7 +653,7 @@ class UdpInstance implements PluginInstance<UdpPluginState, UdpPluginOperations>
     this.receivedBytes += data.length;
     if (!isUdpSource({ address: rinfo.address, port: rinfo.port })) {
       this.droppedInvalidMetadata += 1;
-      this.notifyStateChanged();
+      this.markChanged();
       return;
     }
     if (data.length > UDP_MAX_DATAGRAM_BYTES) {
@@ -654,14 +661,14 @@ class UdpInstance implements PluginInstance<UdpPluginState, UdpPluginOperations>
       // 輸送フレーム上限（65,536 バイト）を超えると接続全体が壊れるため、
       // 復号後 48,000 バイトで先に落とす。
       this.droppedOversize += 1;
-      this.notifyStateChanged();
+      this.markChanged();
       return;
     }
     // ADR: 送信同時一件・待機域なしである。送信未完了中の新着は base64 化せず
     // 破棄して数える。待機域を作ると遅延転送の山ができ、最新性の意味が崩れる。
     if (this.sendInFlight) {
       this.droppedBusy += 1;
-      this.notifyStateChanged();
+      this.markChanged();
       return;
     }
     const session = this.session;
@@ -671,7 +678,7 @@ class UdpInstance implements PluginInstance<UdpPluginState, UdpPluginOperations>
       // しない。付替え直後・終端直後の生存確認に対する防御であり、転送
       // 不能は送信失敗に数える（再送はしない）。
       this.sendFailures += 1;
-      this.notifyStateChanged();
+      this.markChanged();
       return;
     }
     this.sendInFlight = true;
@@ -686,14 +693,14 @@ class UdpInstance implements PluginInstance<UdpPluginState, UdpPluginOperations>
         this.sendInFlight = false;
         this.forwardedDatagrams += 1;
         this.forwardedBytes += byteLength;
-        this.notifyStateChanged();
+        this.markChanged();
       },
       () => {
         // ADR: 送信失敗は数えるだけで再送しない。順序保証のある再送は
         // 待機域を要求し、片方向転送の意味を崩すためである。
         this.sendInFlight = false;
         this.sendFailures += 1;
-        this.notifyStateChanged();
+        this.markChanged();
       },
     );
   }
@@ -708,7 +715,7 @@ class UdpInstance implements PluginInstance<UdpPluginState, UdpPluginOperations>
     if (generation !== this.generation) return;
     if (this.disposed) return;
     this.lastError = `ソケット異常を検出した: ${describeFailure(error)}`;
-    this.notifyStateChanged();
+    this.markChanged();
   }
 
   /**
@@ -835,6 +842,12 @@ class UdpInstance implements PluginInstance<UdpPluginState, UdpPluginOperations>
     return () => {
       this.stateListeners.delete(handler);
     };
+  }
+
+  /** 状態を変更したことを記録し、購読者へ最新の状態を届ける。読み取りでは進めない。 */
+  private markChanged(): void {
+    this.revision += 1;
+    this.notifyStateChanged();
   }
 
   /** 状態購読者へ最新の状態を届ける。購読者の例外は隔離する。 */

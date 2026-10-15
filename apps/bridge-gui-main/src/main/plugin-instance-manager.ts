@@ -1,52 +1,48 @@
 /**
  * 汎用プラグイン・インスタンス管理層の所有表と駆動。
  *
- * companion の管理記述子（生成元・割当て方針・監視方式・表示射影・固有操作）
- * に従い、生成・割当て・監視・回収・限定参照を行う。種別分岐と汎用の任意
- * payload ディスパッチ表は持たない。
+ * 管理記述子（生成元・割当て方針）に従い、生成・割当て・回収・限定参照を
+ * 行う。種別分岐と汎用の任意 payload ディスパッチ表は持たない。状態の解釈・
+ * 表示用 DTO の組立て・変化の購読は endpoint 工場が組み立てる GUI アダプターの
+ * 責務であり、ここでは行わない。改訂番号・observation・fingerprint・polling・
+ * projectView・toSnapshot・readSnapshot・固有操作用 send は持たない。
  *
- * 割当ての順序は固定である。検査 → 候補・現割当て取得と選択 → 選択検証と
- * 初期化予約 → `createInstance` → `initializing` 記録 → `core.assign` →
- * 監視開始 → 失効印・core 現割当ての再確認 → `active` 確定と通知。
- * 回収は共通経路で行う。`releasing` 化と参照・callback の無効化 → 監視解除 →
- * 所有記録と完全一致する core 割当てがあれば `unassign` → `removeInstance` →
- * 記録削除 → 通知。比較は `localSessionId`・`instanceId`・`portId` の三識別子
- * で行い、同セッションの別割当てには触らない。途中失敗で後続を止めない。
+ * 割当ての順序は固定である。検査 → 候補・現割当て取得と選択 → 選択検証 →
+ * `createInstance` → `initializing` 記録 → `core.assign` →
+ * 失効印・core 現割当ての再確認 → `active` 確定と通知。
+ * 回収は共通経路で行う。`releasing` 化 → 所有記録と完全一致する core 割当てが
+ * あれば `unassign` → `removeInstance` → 記録削除 → 通知。比較は
+ * `localSessionId`・`instanceId`・`portId` の三識別子で行い、同セッションの
+ * 別割当てには触らない。途中失敗で後続を止めない。
  *
  * `instanceId` からと `localSessionId` からの写像は同じ記録オブジェクトを
- * 指す。回収着手の記録を外部呼び出しの前に行い、二重回収を防ぐ。callback は
- * 同一記録オブジェクトかつ `active` のときだけ通知し、停止後の古い callback
- * は無視する。読み取りに回収の副作用は付けず、core 割当ての無音取消しは
- * `reconcile()` で回収する。自動再試行はせず、失敗は `cleanupFailed` と
- * 問題報告に残す。`close()` は同期・冪等であり、core 自体は閉じない。
+ * 指す。回収着手の記録を外部呼び出しの前に行い、二重回収を防ぐ。読み取りに
+ * 回収の副作用は付けず、core 割当ての無音取消しは `reconcile()` で回収する。
+ * 自動再試行はせず、失敗は `cleanupFailed` と問題報告に残す。`close()` は
+ * 同期・冪等であり、core 自体は閉じない。
  *
  * @packageDocumentation
  */
 import type { PluginDefinition, PluginInstanceHandle } from "bridge-app-core/core";
-import type { InstanceBaseView } from "bridge-gui-contract/plugin-instance";
 import { isPluginKind } from "bridge-gui-plugin-sdk/management";
 import type {
-  GuiPluginAccess,
+  BoundPluginRef,
   GuiPluginManagementDescriptor,
-  GuiPluginObservation,
   OwnedPluginInstanceInfo,
   PluginAssignmentCandidate,
   PluginAssignmentPolicy,
   PluginAssignmentRequest,
   PluginBindingInfo,
-  PluginOperationAccess,
-  Stop,
 } from "bridge-gui-plugin-sdk/management";
 import type {
   PluginInstanceManagerDependencies,
   PluginManagerIssue,
   PluginReleaseResult,
 } from "./plugin-instance-management.ts";
+import { createBoundPluginRef } from "./plugin-instances.ts";
 
 /**
  * 型を消した記述子。登録時に具象型の到達を閉包へ包み、駆動は消した型で行う。
- *
- * 具象の状態・操作・表示の値自体は消さず、境界の閉包でだけ型を主張する。
  */
 interface ErasedDescriptor {
   /** companion の種別トークン。 */
@@ -57,11 +53,9 @@ interface ErasedDescriptor {
   readonly definition: PluginDefinition<unknown, unknown>;
   /** 割当て方針。 */
   readonly assignment: PluginAssignmentPolicy;
-  /** 監視方式。 */
-  readonly observation: GuiPluginObservation<unknown, unknown>;
 }
 
-/** 所有の内部記録。公開形に監視解除口・指紋・失効印・回収着手印を足す。 */
+/** 所有の内部記録。公開形に失効印・回収着手印を足す。 */
 interface OwnedRecord {
   /** companion の種別トークン。 */
   readonly kind: string;
@@ -77,10 +71,6 @@ interface OwnedRecord {
   phase: OwnedPluginInstanceInfo["phase"];
   /** 個体参照。型付き handle を消して持つ。 */
   readonly handle: PluginInstanceHandle<unknown, unknown>;
-  /** 監視解除口。未監視なら `null`。 */
-  stopObservation: Stop | null;
-  /** ポーリングの前回指紋。未取得なら `null`。 */
-  lastFingerprint: string | null;
   /** 初期化中の終了通知を受けたら真。割当て手続きが補償する。 */
   revoked: boolean;
   /** 回収に着手したら真。外部呼び出しの前に立てる。 */
@@ -135,19 +125,18 @@ function acceptsCapability(
 /**
  * 汎用プラグイン・インスタンス管理層。所有表の操作はすべて同期である。
  *
- * 生成は `register` で受けた記述子だけを使う。`requireBinding` のような
- * 呼び側が型引数を主張する口は作らず、表示型・操作型は `register` の
- * 戻り値で保つ。`unregister` は持たず、表を使い捨てる。
+ * 生成は `register` で受けた記述子だけを使う。`unregister` は持たず、
+ * 表を使い捨てる。
  */
 export class PluginInstanceManager {
   private readonly descriptors = new Map<string, ErasedDescriptor>();
   private readonly byInstance = new Map<string, OwnedRecord>();
   private readonly bySession = new Map<string, OwnedRecord>();
-  private sessionsUnsubscribe: Stop | null = null;
+  private sessionsUnsubscribe: (() => void) | null = null;
   private closed = false;
 
   /**
-   * @param dependencies - core・セッション・時計・通知の注入口。
+   * @param dependencies - core・セッション・通知の注入口。
    */
   constructor(private readonly dependencies: PluginInstanceManagerDependencies) {
     this.sessionsUnsubscribe = dependencies.sessions.onEnded((localSessionId) => {
@@ -156,21 +145,16 @@ export class PluginInstanceManager {
   }
 
   /**
-   * 管理記述子を登録し、種別ごとの公開参照口を返す。
+   * 管理記述子を登録する。
    *
    * 登録は最初の `assign` より前に済ませる。重複・形式外の種別は拒否する。
    *
    * @typeParam S - 状態の型。
    * @typeParam O - プラグイン固有の操作口の型。
-   * @typeParam V - 限定表示の型。
-   * @typeParam A - 公開する固有操作の型。
    * @param descriptor - companion が宣言する管理記述子。
-   * @returns 種別の公開参照口。表示型・操作型を保つ。
    * @throws `Error` — 終了済み・種別が形式外・登録済み・記述子が欠けた場合。
    */
-  register<S, O, V extends InstanceBaseView, A>(
-    descriptor: GuiPluginManagementDescriptor<S, O, V, A>,
-  ): GuiPluginAccess<V, A> {
+  register<S, O>(descriptor: GuiPluginManagementDescriptor<S, O>): void {
     if (this.closed) {
       throw new Error("管理層は終了済みのため登録を受け付けない。");
     }
@@ -184,88 +168,21 @@ export class PluginInstanceManager {
       descriptor.definition === null ||
       descriptor.definition === undefined ||
       descriptor.assignment === null ||
-      descriptor.assignment === undefined ||
-      descriptor.observation === null ||
-      descriptor.observation === undefined ||
-      typeof descriptor.projectView !== "function" ||
-      typeof descriptor.buildOperations !== "function"
+      descriptor.assignment === undefined
     ) {
       throw new Error("管理記述子が必要な項目を欠いている。");
     }
     const kind = descriptor.kind;
     // ADR: 型消しは駆動表の保持のためであり、値の到達は閉包で保つ。
-    // `PluginInstance<S, O>` の到達は戻り値の共変で `unknown` に載るため、
-    // 生成元の主張は要らない。以下も同様に境界の閉包だけで主張する。
+    // `PluginInstance<S, O>` の到達は共変で `unknown` に載るため、
+    // 生成元の主張は要らない。
     const definition: PluginDefinition<unknown, unknown> = descriptor.definition;
-    const observation = this.eraseObservation(descriptor.observation);
     this.descriptors.set(kind, {
       kind,
       pluginId: descriptor.definition.pluginId,
       definition,
       assignment: descriptor.assignment,
-      observation,
     });
-    const access: PluginOperationAccess<O> = {
-      withOperations: <R>(
-        instanceId: string,
-        use: (operations: O, binding: PluginBindingInfo) => R,
-      ): R => {
-        // ADR: `as` を使う理由は、消した操作値を使う処理を同じ記述子の
-        // 操作型へ戻すためである。根拠は、実行時の値が当該個体の操作口
-        // そのものであり、保存せず利用の都度渡すことである。
-        const useErased = use as (operations: unknown, binding: PluginBindingInfo) => R;
-        return this.withOperationsInternal(kind, instanceId, useErased);
-      },
-    };
-    const operations: A = descriptor.buildOperations(access);
-    return {
-      kind,
-      listBindings: () => this.listBindings(kind),
-      requireBinding: (instanceId: string) => this.requireBinding(kind, instanceId),
-      readView: (instanceId: string) => this.readViewInternal(descriptor, kind, instanceId),
-      operations,
-    };
-  }
-
-  /**
-   * 監視方式の型を消す。購読の開始口と指紋関数の到達は閉包で保つ。
-   *
-   * @typeParam S - 状態の型。
-   * @typeParam O - プラグイン固有の操作口の型。
-   * @param observation - 記述子が宣言する監視方式。
-   * @returns 型を消した監視方式。
-   */
-  private eraseObservation<S, O>(
-    observation: GuiPluginManagementDescriptor<S, O, InstanceBaseView, unknown>["observation"],
-  ): GuiPluginObservation<unknown, unknown> {
-    if (observation.mode === "none") {
-      return { mode: "none" };
-    }
-    if (observation.mode === "subscribe") {
-      const start = observation.start;
-      return {
-        mode: "subscribe",
-        start: (handle, changed) => {
-          // ADR: `as` を使う理由は、消した個体参照を同じ記述子の監視へ戻す
-          // ためである。根拠は、参照が当該記述子の生成元から作られたもので
-          // あり、所有記録と対になることである。
-          const typed = handle as PluginInstanceHandle<S, O>;
-          return start(typed, changed);
-        },
-      };
-    }
-    const fingerprint = observation.fingerprint;
-    return {
-      mode: "poll",
-      intervalMs: observation.intervalMs,
-      fingerprint: (state) => {
-        // ADR: `as` を使う理由は、消した状態値を同じ記述子の指紋関数へ戻す
-        // ためである。根拠は、値が当該個体の `getState` の戻り値そのもので
-        // あることである。
-        const typed = state as S;
-        return fingerprint(typed);
-      },
-    };
   }
 
   /**
@@ -314,8 +231,6 @@ export class PluginInstanceManager {
       portId: target.portId,
       phase: "initializing",
       handle,
-      stopObservation: null,
-      lastFingerprint: null,
       revoked: false,
       reclaimStarted: false,
     };
@@ -323,12 +238,6 @@ export class PluginInstanceManager {
     this.bySession.set(record.localSessionId, record);
     try {
       this.dependencies.core.assign(record.localSessionId, record.instanceId, record.portId);
-    } catch (error) {
-      this.compensateFailedInit(record);
-      throw error;
-    }
-    try {
-      this.startObservation(descriptor, record);
     } catch (error) {
       this.compensateFailedInit(record);
       throw error;
@@ -430,6 +339,44 @@ export class PluginInstanceManager {
   }
 
   /**
+   * ホストが選んだ一個体に限定した参照口を作る。各利用時に所有段階・
+   * 現割当てを照合する。
+   *
+   * endpoint 工場へ渡し、マウント時に個体へ束縛した endpoint の生成に使う。
+   * 型消去は endpoint 工場の閉包内に限定する。
+   *
+   * @typeParam S - 状態の型。
+   * @typeParam O - プラグイン固有の操作口の型。
+   * @param kind - 束縛する個体の種別トークン。登録済みであること。
+   * @param instanceId - 束縛する実インスタンスの識別子。
+   * @returns 照合付きの参照口。
+   * @throws `RangeError` — 不明・種別外の場合（生成時の確認）。
+   */
+  createBoundRef<S, O>(kind: string, instanceId: string): BoundPluginRef<S, O> {
+    if (typeof instanceId !== "string" || instanceId.length === 0) {
+      throw new RangeError("instanceId は空でない文字列であること。");
+    }
+    if (!this.descriptors.has(kind)) {
+      throw new RangeError("未登録の種別である。");
+    }
+    return createBoundPluginRef<S, O>({
+      readBinding: () => toBinding(this.verifyActive(kind, instanceId)),
+      readStateValue: () => {
+        const record = this.verifyActive(kind, instanceId);
+        return record.handle.getState();
+      },
+      useOperationsValue: (use) => {
+        const record = this.verifyActive(kind, instanceId);
+        const operations: unknown = record.handle.getOperations?.();
+        if (operations === undefined) {
+          throw new TypeError("操作口が無い。");
+        }
+        return use(operations, toBinding(record));
+      },
+    });
+  }
+
+  /**
    * core 現割当ての無音取消しを回収する。読み取りでは回収しない分を、
    * 明示の照合で片付ける。
    */
@@ -493,53 +440,6 @@ export class PluginInstanceManager {
       }
       this.reclaimRecord(record);
     }
-  }
-
-  /**
-   * 限定表示を読む。所有中・確定済み・現割当て一致でなければ拒否する。
-   *
-   * @typeParam S - 状態の型。
-   * @typeParam V - 限定表示の型。
-   * @param descriptor - 登録済みの管理記述子。
-   * @param kind - 照合する種別トークン。
-   * @param instanceId - 照合する個体識別子。
-   * @returns 子画面へ渡せる限定表示。
-   * @throws `RangeError` — 不明・種別外・失効・現割当て不一致の場合。
-   */
-  private readViewInternal<S, O, V extends InstanceBaseView, A>(
-    descriptor: GuiPluginManagementDescriptor<S, O, V, A>,
-    kind: string,
-    instanceId: string,
-  ): V {
-    const record = this.verifyActive(kind, instanceId);
-    // ADR: `as` を使う理由は、消した状態値を同じ記述子の射影へ戻すためである。
-    // 根拠は、参照が当該記述子の生成元から作られたものであることである。
-    const state = record.handle.getState() as S;
-    return descriptor.projectView({ binding: toBinding(record), state });
-  }
-
-  /**
-   * 操作口を使う。所有中・確定済み・現割当て一致でなければ拒否する。
-   *
-   * @typeParam R - 利用処理の戻り値の型。
-   * @param kind - 照合する種別トークン。
-   * @param instanceId - 照合する個体識別子。
-   * @param use - 操作口と束縛情報を使う処理。
-   * @returns `use` の戻り値。
-   * @throws `TypeError` — 個体が操作口を提供しない場合。
-   * @throws `RangeError` — 不明・種別外・失効・現割当て不一致の場合。
-   */
-  private withOperationsInternal<R>(
-    kind: string,
-    instanceId: string,
-    use: (operations: unknown, binding: PluginBindingInfo) => R,
-  ): R {
-    const record = this.verifyActive(kind, instanceId);
-    const operations: unknown = record.handle.getOperations?.();
-    if (operations === undefined) {
-      throw new TypeError("操作口が無い。");
-    }
-    return use(operations, toBinding(record));
   }
 
   /**
@@ -698,84 +598,13 @@ export class PluginInstanceManager {
   }
 
   /**
-   * 監視を始める。開始時の同期 callback では未確定個体を公開しない。
-   *
-   * @param descriptor - 割当て対象の記述子。
-   * @param record - 監視する所有記録（`initializing`）。
-   * @throws 監視の開始・初回指紋の取得に失敗した場合。そのまま投げる。
-   */
-  private startObservation(descriptor: ErasedDescriptor, record: OwnedRecord): void {
-    const observation = descriptor.observation;
-    if (observation.mode === "none") {
-      return;
-    }
-    if (observation.mode === "subscribe") {
-      const changed = (): void => {
-        // ADR: 同一記録オブジェクトかつ `active` のときだけ通知する。
-        // 開始時の同期 callback と停止後の古い callback は捨てる。
-        if (this.byInstance.get(record.instanceId) !== record) {
-          return;
-        }
-        if (record.phase !== "active") {
-          return;
-        }
-        this.emitChanged(toBinding(record));
-      };
-      record.stopObservation = observation.start(record.handle, changed);
-      return;
-    }
-    if (!Number.isFinite(observation.intervalMs) || observation.intervalMs <= 0) {
-      throw new RangeError("監視間隔は正の有限値であること。");
-    }
-    const initial = record.handle.getState();
-    record.lastFingerprint = observation.fingerprint(initial);
-    const tick = (): void => {
-      if (this.byInstance.get(record.instanceId) !== record) {
-        return;
-      }
-      if (record.phase !== "active") {
-        return;
-      }
-      let current: unknown;
-      try {
-        current = record.handle.getState();
-      } catch (cause) {
-        // ADR: 確定後の指紋取得失敗は個体を解除せず、問題報告に留める。
-        this.reportIssue({ stage: "poll", binding: toBinding(record), cause });
-        return;
-      }
-      let next: string;
-      try {
-        next = observation.fingerprint(current);
-      } catch (cause) {
-        this.reportIssue({ stage: "poll", binding: toBinding(record), cause });
-        return;
-      }
-      if (next !== record.lastFingerprint) {
-        record.lastFingerprint = next;
-        this.emitChanged(toBinding(record));
-      }
-    };
-    record.stopObservation = this.dependencies.clock.every(observation.intervalMs, tick);
-  }
-
-  /**
-   * 初期化に失敗した記録を補償する。監視解除・割当て解除・生成分回収を
+   * 初期化に失敗した記録を補償する。割当て解除・生成分回収を
    * 順に行い、記録を残さない。確定前のため変化通知は送らない。
    *
    * @param record - 補償する所有記録（`initializing`）。
    */
   private compensateFailedInit(record: OwnedRecord): void {
     const binding = toBinding(record);
-    if (record.stopObservation !== null) {
-      const stop = record.stopObservation;
-      record.stopObservation = null;
-      try {
-        stop();
-      } catch (cause) {
-        this.reportIssue({ stage: "observation-stop", binding, cause });
-      }
-    }
     if (this.matchesCoreAssignment(record)) {
       try {
         this.dependencies.core.unassign(record.localSessionId);
@@ -797,9 +626,8 @@ export class PluginInstanceManager {
   }
 
   /**
-   * 共通の回収経路。`releasing` 化と参照・callback の無効化 → 監視解除 →
-   * 完全一致する core 割当てがあれば `unassign` → `removeInstance` →
-   * 記録削除 → 通知。途中失敗で後続を止めない。
+   * 共通の回収経路。`releasing` 化 → 完全一致する core 割当てがあれば
+   * `unassign` → `removeInstance` → 記録削除 → 通知。途中失敗で後続を止めない。
    *
    * @param record - 回収する所有記録。
    * @returns 回収の過程で起きた問題の一覧。
@@ -811,15 +639,6 @@ export class PluginInstanceManager {
     record.phase = "releasing";
     const issues: PluginManagerIssue[] = [];
     const binding = toBinding(record);
-    if (record.stopObservation !== null) {
-      const stop = record.stopObservation;
-      record.stopObservation = null;
-      try {
-        stop();
-      } catch (cause) {
-        issues.push({ stage: "observation-stop", binding, cause });
-      }
-    }
     if (this.matchesCoreAssignment(record)) {
       try {
         this.dependencies.core.unassign(record.localSessionId);

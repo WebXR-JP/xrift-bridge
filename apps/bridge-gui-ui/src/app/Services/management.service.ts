@@ -20,13 +20,17 @@ import type {
   PairingViewResult,
 } from "bridge-gui-contract/management";
 import { selectNewer } from "bridge-gui-contract/management";
-import type { PluginUiMountPlacement } from "bridge-gui-contract/plugin-instance";
+import type {
+  PluginUiMountPlacement,
+  PluginViewRequest,
+  SetPluginViewResult,
+} from "bridge-gui-contract/plugin-instance";
 import { ManagementRpcClient } from "./rpc.ts";
 import { buildNgDebugProbeResult } from "../ng-probe.ts";
 import { buildNgDevObserveResult, DEV_OBSERVE_TARGETS } from "../dev-observe.ts";
 import type { DevObserveElementInput } from "../dev-observe.ts";
 import type { PluginViewState } from "../plugin-view-state.ts";
-import { derivePluginViewState, isPluginViewVisible } from "../plugin-view-state.ts";
+import { derivePluginViewState } from "../plugin-view-state.ts";
 
 /**
  * 比較コードの取得状態（保留行の表示分岐用）。
@@ -76,23 +80,6 @@ export interface EventLogEntry {
 function formatLogTime(now: Date): string {
   const pad = (value: number): string => String(value).padStart(2, "0");
   return `${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`;
-}
-
-/**
- * 子画面タグの `toggleHidden` 初期化待ちの上限（フレーム数）。
- *
- * append 直後は `webviewId` が `null` であったり custom element の upgrade
- * 前で `toggleHidden` が未定義であったりするため、rAF で再試行する。
- * 無制限ループにしないための上限であり、超えたら諦めて記録を残す。
- */
-const PLUGIN_HIDDEN_RETRY_LIMIT = 120;
-
-/** `toggleHidden` と初期化標識を持つ子画面タグの最小形（試験の fake を含む）。 */
-interface PluginVisibilityTag {
-  /** 初期化済みの場合に数値。未初期化は `null` 等である。 */
-  readonly webviewId?: unknown;
-  /** 初期化済みの場合に native 表示を切り替える。未初期化は何もしない。 */
-  toggleHidden?: (hidden?: boolean) => void;
 }
 
 @Injectable({ providedIn: "root" })
@@ -175,30 +162,33 @@ export class ManagementService {
   private readonly inflight = new Set<string>();
 
   // ADR: 子画面タグは Angular テンプレートで宣言的に描画せず、安定した host
-  // 要素へ命令的に追加／削除する。表示状態の更新（revision 進行）で `src` の
-  // 再設定・タグの再生成・DOM の移動をしない。同一性は mountId 単位の所有表
-  // （snapshot の `pluginMounts`）で保ち、一度置いた要素は作り直さない。
-  // 消えた mountId の要素だけを外す。未 ready でも生成・結線・初回取得は
-  // 継続し、隠すだけである。
+  // 要素へ命令的に追加／削除する。子画面の寿命は表示期間ごとの作り直しであり、
+  // 同一表示期間中の管理 snapshot 更新では再生成しない。同一性は mountId 単位の
+  // 所有表（snapshot の `pluginMounts`）で保ち、一度置いた要素は作り直さない。
+  // 消えた mountId の要素だけを外す。非選択個体のタグを保持して隠す方式は
+  // 持たない（表示期間が替われば破棄する）。
   // 配置先の host は入れ物が `registerPluginHost` で渡す（`ViewChild` の要素）。
   private readonly pluginTags = new Map<string, HTMLElement>();
   private pluginHost: HTMLElement | null = null;
 
-  // ADR: native 子画面の表示は `toggleHidden` でのみ切り替える。HTML の
-  // `hidden` 属性は観測されず、CSS の `display:none` は native 子ビューの
-  // 非表示を保証しない。`OverlaySync` の矩形 0x0 停止も非表示にはならない。
-  // 表示対象は mountId 単位の所有表の `instanceId` で決め、タグの再生成・
-  // DOM 移動・`src` 再設定はしない。切替は業務 RPC を送らない。
-  // 可視条件は `操作画面が選択中 && 選択個体 && 所有段階 active &&
-  // 当該マウント ready` である。いずれも同じ applicator（有限 rAF 再試行・
-  // 重複予約抑止）で `toggleHidden` を適用する。
+  // ADR: 子画面タグの有無がそのまま表示である。HTML の `hidden` 属性・CSS の
+  // `display:none`・native の表示切替（`toggleHidden`）による隠し置きはしない。
+  // 可視条件は `操作画面が選択中 && 選択個体 && 所有段階 active` であり、
+  // 表示要求（`setPluginView`）の送出とタグ配置の両方に使う。切替で業務 RPC は
+  // 送らず、選択・生成で送信・UDP 開始・割当て操作を自動実行しない。
   private pluginViewVisible = false;
   private activePluginInstanceId: string | null = null;
   private readonly pluginInstanceIds = new Map<string, string>();
-  private readonly pluginMountReady = new Map<string, boolean>();
-  private readonly pluginDesiredHidden = new Map<string, boolean>();
-  private readonly pluginHiddenRetries = new Map<string, number>();
-  private readonly pluginHiddenScheduled = new Set<string>();
+
+  // ADR: 表示要求の世代は main が所有・採番する採用済み世代であり、Angular は
+  // 採番しない（表示意図と観測した基準世代を送り、採用された世代を使う）。
+  // 送る基準世代は採用中 snapshot の `pluginView`（`AdoptedPluginView`）から
+  // 取り、main が照合する。送出済みの要求を覚え、採用済み一致・同一基準の
+  // 送出済みでは送らない。応答の `current` を正とし、stale でも送出済みを
+  // 巻き戻さない。表示期間の切替（対象変更・無しへの終了・画面離脱）は
+  // 採用の推移で区別し、A→無し→A／A→B→A を「対象が同じ」として省略しない。
+  // 古い世代の配置・応答・失敗表示では子を復活させない。
+  private lastSentView: PluginViewRequest | null = null;
 
   // 採用中 snapshot の遷移規則。backend が登録済み companion の解決済み
   // view パス集合から生成した値の写しであり、タグ属性に載せる正本である。
@@ -257,8 +247,12 @@ export class ManagementService {
       this.appendLog(`更新 via=${via} revision=${next.revision}`);
       // 実プラグイン子画面の配置は snapshot 由来であり、採用時に合わせる。
       // 遷移規則も採用中 snapshot の値を正本とし、以後のタグ配置に使う。
+      // 配置・失敗表示は表示要求の世代だけを正とし、古い世代では復活させない。
       this.pluginNavigationRules = [...next.pluginNavigationRules];
-      this.reconcilePluginTags(next.pluginMounts);
+      this.reconcilePluginTags(next);
+      // 所有段階の進行（`initializing`→`active` 等）で表示対象が変わるため、
+      // 採用ごとに表示要求を合わせる。同一表示期間では再送しない。
+      void this.syncViewRequest();
       // 新しい保留の比較コードだけを一度だけ自動取得する。同じ ID の
       // snapshot 更新・画面切替では再取得せず、承認 RPC は送らない。
       // 取得済み・取得中・取得失敗済みは飛ばし、自動リトライはしない。
@@ -506,16 +500,6 @@ export class ManagementService {
     await this.fetchInitial();
   }
 
-  /** 準備完了を通知する。 */
-  notifyReady(): void {
-    try {
-      this.rpc.notifyViewReady(document.title);
-      console.log("[bridge-gui-ng] 準備完了を通知した");
-    } catch (error: unknown) {
-      console.log(`[bridge-gui-ng] 準備完了の通知に失敗した: ${String(error)}`);
-    }
-  }
-
   /**
    * 子画面タグの配置先を登録する。入れ物の安定した host 要素を受ける。
    *
@@ -530,9 +514,8 @@ export class ManagementService {
     if (current !== null) {
       // 遅延 host 登録時も採用中 snapshot の規則を使う。
       this.pluginNavigationRules = [...current.pluginNavigationRules];
-      this.reconcilePluginTags(current.pluginMounts);
+      this.reconcilePluginTags(current);
     }
-    this.applyPluginVisibility();
   }
 
   /** 子画面タグを1つ作る。属性は所有表の発行値だけを載せる。 */
@@ -552,8 +535,7 @@ export class ManagementService {
    * 実プラグインの配置用 DTO に従ってタグを一度だけ置く。既存は作り直さない。
    *
    * 遷移規則は採用中 snapshot の値を載せる。規則欠落時は旧固定値や全面許可へ
-   * fallback せず、置かずに次回の採用・登録に任せる。未 ready でも置き、
-   * 隠すだけである。
+   * fallback せず、置かずに次回の採用・登録に任せる。
    *
    * @param mountId - 所有表が発行したマウント識別子。
    * @param initialUrl - 所有表が発行した初期 URL。
@@ -571,9 +553,6 @@ export class ManagementService {
     this.pluginHost.append(tag);
     this.pluginTags.set(mountId, tag);
     this.pluginInstanceIds.set(mountId, instanceId);
-    this.pluginDesiredHidden.set(mountId, this.desiredPluginHidden(mountId));
-    this.pluginHiddenRetries.set(mountId, 0);
-    this.applyPluginHidden(mountId);
   }
 
   /** 配置中の実プラグイン用タグを外す。表示の破棄は main の対応付けが行う。 */
@@ -585,21 +564,30 @@ export class ManagementService {
     tag.remove();
     this.pluginTags.delete(mountId);
     this.pluginInstanceIds.delete(mountId);
-    this.pluginMountReady.delete(mountId);
-    this.pluginDesiredHidden.delete(mountId);
-    this.pluginHiddenRetries.delete(mountId);
-    this.pluginHiddenScheduled.delete(mountId);
   }
 
   /**
-   * 実プラグインの配置一覧に合わせてタグを足し引きする。既存は触らない。
+   * 採用中 snapshot の表示要求の世代に合わせてタグを足し引きする。既存は触らない。
    *
-   * ready の変化ではタグを作り直さず、可視の適用だけ行う。
+   * 置くのは、表示対象（操作画面の選択中かつ選択個体かつ所有段階 `active`）に
+   * 一致し、かつ表示要求の世代に一致する配置だけである。古い世代の配置では
+   * 子を復活させない。同一表示期間中の snapshot 更新では再生成しない。
    *
-   * @param mounts - snapshot の配置一覧。
+   * @param snapshot - 採用中の表示状態。
    */
-  reconcilePluginTags(mounts: readonly PluginUiMountPlacement[]): void {
-    const live = new Set(mounts.map((mount) => mount.mountId));
+  reconcilePluginTags(snapshot: ManagementSnapshot): void {
+    const target = this.desiredViewInstance(snapshot);
+    const live = new Map<string, PluginUiMountPlacement>();
+    if (target !== null && snapshot.pluginView.instanceId === target) {
+      for (const mount of snapshot.pluginMounts) {
+        if (
+          mount.instanceId === target &&
+          mount.viewGeneration === snapshot.pluginView.viewGeneration
+        ) {
+          live.set(mount.mountId, mount);
+        }
+      }
+    }
     // 巡回中の削除は当該項目だけであり、仕様上安全である（未訪問の削除は起きない）。
     for (const mountId of this.pluginTags.keys()) {
       if (!live.has(mountId)) {
@@ -607,9 +595,7 @@ export class ManagementService {
         this.appendLog(`実プラグイン子画面を外した mountId=${mountId}`);
       }
     }
-    for (const mount of mounts) {
-      // ready の進行は作り直さず記録だけ更新する（可視制御に使う）。
-      this.pluginMountReady.set(mount.mountId, mount.ready);
+    for (const mount of live.values()) {
       if (!this.pluginTags.has(mount.mountId)) {
         this.placePluginTag(mount.mountId, mount.initialUrl, mount.instanceId);
         // host 未登録で置けなかった場合は記録しない（次回の登録・採用で置く）。
@@ -618,143 +604,167 @@ export class ManagementService {
         }
       }
     }
-    this.applyPluginVisibility();
   }
 
   /**
-   * 子画面の表示対象を切り替える。表示切替だけであり、業務 RPC は送らない。
+   * 子画面の表示要求の対象を求める。表示切替だけであり、業務 RPC は送らない。
    *
-   * 可視条件は `操作画面が選択中 && 選択個体 && 所有段階 active &&
-   * 当該マウント ready` であり、`toggleHidden` で適用する。未初期化のタグは
-   * rAF で上限付き再試行し、desired を保持して初期化後に適用する。
+   * 可視条件は `操作画面が選択中 && 選択個体 && 所有段階 active` である。
+   * `ready` は条件にしない。割当てだけでは対象にしない。
+   *
+   * @param snapshot - 採用中の表示状態。未取得なら表示対象は無い。
+   * @returns 表示対象のインスタンス識別子。無ければ `null`。
+   */
+  private desiredViewInstance(snapshot: ManagementSnapshot | null): string | null {
+    if (!this.pluginViewVisible) {
+      return null;
+    }
+    const target = this.activePluginInstanceId;
+    if (target === null || snapshot === null) {
+      return null;
+    }
+    const selected = snapshot.plugins.instances.find((item) => item.instanceId === target);
+    return selected?.phase === "active" ? target : null;
+  }
+
+  /**
+   * 子画面の表示対象を切り替え、表示要求を基準世代付きで送る。
+   *
+   * 操作画面への出入り・個体タブ切替で表示意図が変わるため、採用中 snapshot
+   * の基準世代とともに送る（採番は main が行う）。同一表示意図（対象が
+   * 変わらない snapshot 更新・再描画・採用済みの追認）では再送しない。
+   * 表示終了（別画面・対象無し・非 `active`）では無しを現基準で送り、表示期間
+   * を終了する。対象外になったタグは応答待ちせず外す。
+   * 選択・生成で送信・UDP 開始・割当て操作を自動実行しない。
    *
    * @param visible - operations 画面が選択されている場合に真。
    * @param activeInstanceId - 表示対象のインスタンス識別子。無ければ `null`。
    */
-  setPluginViewState(visible: boolean, activeInstanceId: string | null): void {
+  async setPluginViewState(visible: boolean, activeInstanceId: string | null): Promise<void> {
     this.pluginViewVisible = visible;
     this.activePluginInstanceId = activeInstanceId;
-    this.applyPluginVisibility();
-  }
-
-  /**
-   * タグの desired hidden を求める。可視条件を満たす場合だけ偽である。
-   *
-   * 代替表示と同じ導出（`derivePluginViewState`）を使い、食い違いを避ける。
-   * 未 ready でもタグ自体は残し、隠すだけである。
-   *
-   * @param mountId - 対象のマウント識別子。
-   * @returns 隠す場合に真。
-   */
-  private desiredPluginHidden(mountId: string): boolean {
-    const state = this.pluginViewStateFor(this.activePluginInstanceId);
-    if (!isPluginViewVisible(state, this.pluginViewVisible)) {
-      return true;
-    }
-    if (this.activePluginInstanceId === null) {
-      return true;
-    }
-    if (this.pluginInstanceIds.get(mountId) !== this.activePluginInstanceId) {
-      return true;
-    }
-    return (this.pluginMountReady.get(mountId) ?? false) !== true;
-  }
-
-  /** 全タグの desired を求め直し、変わったものだけ再試行回数を捨てて適用する。 */
-  private applyPluginVisibility(): void {
-    for (const mountId of this.pluginTags.keys()) {
-      const desired = this.desiredPluginHidden(mountId);
-      if (this.pluginDesiredHidden.get(mountId) !== desired) {
-        this.pluginDesiredHidden.set(mountId, desired);
-        this.pluginHiddenRetries.set(mountId, 0);
+    // 対象外になったタグは古い世代の配置で復活させず、直ちに外す。
+    const desired = this.desiredViewInstance(this.current());
+    for (const [mountId, instanceId] of this.pluginInstanceIds) {
+      if (instanceId !== desired) {
+        this.dropPluginTag(mountId);
+        this.appendLog(`実プラグイン子画面を外した mountId=${mountId}`);
       }
-      this.applyPluginHidden(mountId);
     }
+    await this.syncViewRequest();
   }
 
   /**
-   * 未初期化の表示切替を rAF で上限付き再試行する。
+   * 表示要求の送出を表示意図に合わせる。送る必要がある場合だけ、採用中
+   * snapshot の基準世代とともに送る。
    *
-   * `toggleHidden` 未定義（custom element の upgrade 遅延）と `webviewId`
-   * 未初期化のいずれにも同じ上限・重複予約抑止を使う。上限を超えた場合と
-   * 予約手段が無い場合は記録を残して諦める。無制限ループにしない。
-   *
-   * @param mountId - 対象のマウント識別子。
-   * @param reapply - 次枠で desired を適用し直す処理。
-   * @param retries - 種別ごとの再試行回数表。
-   * @param scheduled - 種別ごとの重複予約抑止集合。
-   * @param stillMounted - 再試行時点で配置が残っている場合に真。
-   * @param giveUpMessage - 上限超過・予約不能時に記録する定型文。
+   * 送らないのは、採用済みが表示意図と一致する場合（同表示期間の更新・採用後の
+   * 追認）と、同一基準で送出済みの場合（応答・採用待ち）である。A→無し→A／
+   * A→B→A は採用の推移で差が出るため省略されない。同時多重送出はせず、
+   * 送出中の切替は完了時の追随で拾う。同一表示期間の再試行は世代に触れない
+   * （再試行は `retryPluginMount` が担う）。送出自体の失敗は送出済みにせず、
+   * 次回の表示切替・採用で送り直す（再表示まで永久抑止しない）。
    */
-  private scheduleHiddenRetry(
-    mountId: string,
-    reapply: () => void,
-    retries: Map<string, number>,
-    scheduled: Set<string>,
-    stillMounted: () => boolean,
-    giveUpMessage: string,
-  ): void {
-    const count = retries.get(mountId) ?? 0;
-    if (count >= PLUGIN_HIDDEN_RETRY_LIMIT) {
-      scheduled.delete(mountId);
-      this.appendLog(giveUpMessage);
+  private async syncViewRequest(): Promise<void> {
+    const snapshot = this.current();
+    if (snapshot === null) {
       return;
     }
-    retries.set(mountId, count + 1);
-    if (scheduled.has(mountId)) {
+    const desired = this.desiredViewInstance(snapshot);
+    const adopted = snapshot.pluginView;
+    // 採用済みが表示意図と一致すれば送らない。
+    if (adopted.instanceId === desired) {
       return;
     }
-    const scheduler = (globalThis as { readonly requestAnimationFrame?: unknown })[
-      "requestAnimationFrame"
-    ];
-    if (typeof scheduler !== "function") {
-      scheduled.delete(mountId);
-      this.appendLog(giveUpMessage);
+    // 同一基準で送出済みなら応答・採用待ちであり重ねて送らない。
+    if (
+      this.lastSentView !== null &&
+      this.lastSentView.instanceId === desired &&
+      this.lastSentView.baseViewGeneration === adopted.viewGeneration
+    ) {
       return;
     }
-    scheduled.add(mountId);
-    (scheduler as typeof requestAnimationFrame)(() => {
-      scheduled.delete(mountId);
-      if (!stillMounted()) {
-        return;
+    // 二重押下での重複送信を抑える汎用の仕組みで多重送出を抑止する。
+    if (!this.beginOperation("set-plugin-view")) {
+      return;
+    }
+    try {
+      await this.sendViewRequest(desired, adopted.viewGeneration);
+    } finally {
+      this.endOperation("set-plugin-view");
+      // 送出中に表示意図が変わっていれば直列で追随する。変わっていなければ
+      // 送らない。送出の失敗時は次回の表示切替・採用に任せ、ここでは追送しない。
+      if (this.desiredViewInstance(this.current()) !== desired) {
+        void this.syncViewRequest();
       }
-      reapply();
-    });
+    }
   }
 
   /**
-   * 実プラグインの1つのタグへ desired を適用する。未初期化なら rAF で上限付き再試行する。
+   * 表示要求を一度送り、応答の `current` を正として送出済みを更新する。
    *
-   * `toggleHidden` 未定義・`webviewId` 未初期化のいずれも同じ有限再試行で
-   * 初期化後に適用する。happy-dom の未知要素のように初期化しない場合は
-   * 上限で諦める。タグの再生成・DOM 移動・`src` 再設定はしない。
+   * `adopted:true` なら採用であり、`adopted:false`（stale）でも送出済みを
+   * 巻き戻さない。stale で現在の採用対象が最新の表示意図と異なるときだけ、
+   * `current` の世代を基準に一度だけ送り直す（追送の連鎖はしない）。
+   * 送出自体の失敗は記録に残し、送出済みにしない。
    *
-   * @param mountId - 対象のマウント識別子。
+   * @param desired - 送る表示意図。無し（表示期間の終了）の場合は `null`。
+   * @param base - 基準世代。採用中 snapshot の採用済み世代である。
    */
-  private applyPluginHidden(mountId: string): void {
-    const tag = this.pluginTags.get(mountId);
-    if (tag === undefined) {
+  private async sendViewRequest(desired: string | null, base: number): Promise<void> {
+    let result: SetPluginViewResult;
+    try {
+      result = await this.rpc.setPluginView({ instanceId: desired, baseViewGeneration: base });
+    } catch (error: unknown) {
+      console.log(`[bridge-gui-ng] 表示要求に失敗した: ${String(error)}`);
+      this.appendLog("表示要求に失敗した");
       return;
     }
-    const desired = this.pluginDesiredHidden.get(mountId) ?? this.desiredPluginHidden(mountId);
-    this.pluginDesiredHidden.set(mountId, desired);
-    const candidate = tag as HTMLElement & PluginVisibilityTag;
-    if (typeof candidate.toggleHidden !== "function" || typeof candidate.webviewId !== "number") {
-      this.scheduleHiddenRetry(
-        mountId,
-        () => {
-          this.applyPluginHidden(mountId);
-        },
-        this.pluginHiddenRetries,
-        this.pluginHiddenScheduled,
-        () => this.pluginTags.has(mountId),
-        `実プラグイン子画面の表示切替を諦めた mountId=${mountId}`,
+    // 送った事実を残す。stale でも巻き戻さない。
+    this.lastSentView = { instanceId: desired, baseViewGeneration: base };
+    const targetLabel = desired ?? "なし";
+    if (result.adopted) {
+      console.log(
+        `[bridge-gui-ng] 表示要求が採用された instanceId=${targetLabel} generation=${result.current.viewGeneration}`,
       );
+      this.appendLog(`表示要求が採用された generation=${result.current.viewGeneration}`);
       return;
     }
-    this.pluginHiddenScheduled.delete(mountId);
-    this.pluginHiddenRetries.set(mountId, 0);
-    candidate.toggleHidden(desired);
+    console.log(
+      `[bridge-gui-ng] 表示要求が古いため採用されなかった instanceId=${targetLabel} current=${result.current.viewGeneration}`,
+    );
+    this.appendLog("表示要求が古いため採用されなかった");
+    const nowDesired = this.desiredViewInstance(this.current());
+    if (result.current.instanceId === nowDesired) {
+      // 最新の表示意図は既に採用済み。再送しない。
+      return;
+    }
+    // 最新の表示意図で `current` 世代を基準に一度だけ送り直す。
+    // 再送応答が stale でも追送しない（次回の表示切替・採用で合わせる）。
+    try {
+      const retried = await this.rpc.setPluginView({
+        instanceId: nowDesired,
+        baseViewGeneration: result.current.viewGeneration,
+      });
+      this.lastSentView = {
+        instanceId: nowDesired,
+        baseViewGeneration: result.current.viewGeneration,
+      };
+      if (retried.adopted) {
+        console.log(
+          `[bridge-gui-ng] 表示要求の送り直しが採用された generation=${retried.current.viewGeneration}`,
+        );
+        this.appendLog(
+          `表示要求の送り直しが採用された generation=${retried.current.viewGeneration}`,
+        );
+      } else {
+        console.log("[bridge-gui-ng] 表示要求の送り直しも古いため採用されなかった");
+        this.appendLog("表示要求の送り直しも古いため採用されなかった");
+      }
+    } catch (error: unknown) {
+      console.log(`[bridge-gui-ng] 表示要求の送り直しに失敗した: ${String(error)}`);
+      this.appendLog("表示要求の送り直しに失敗した");
+    }
   }
 
   /** 受付を有効化し、採用中の表示状態を返す。 */
@@ -1071,7 +1081,8 @@ export class ManagementService {
    *
    * 指定した実インスタンスの失敗表示だけを消し、その個体が現割当てに
    * あれば配置を作り直す。他個体の失敗・既存の配置・割当て・送信には
-   * 触らない。応答は受付であり ready を保証しない。
+   * 触らない。同一表示期間の再試行は世代を維持し、表示要求は送り直さない。
+   * 応答は受付であり plugin の応答を保証しない。
    *
    * @param instanceId - 再試行する対象のインスタンス識別子。
    */

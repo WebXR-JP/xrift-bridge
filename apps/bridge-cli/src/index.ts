@@ -13,9 +13,12 @@
  */
 import { createInterface } from "node:readline";
 import { formatPairingCode } from "bridge-protocol";
-import type { DiagnosticStats } from "bridge-plugin-diagnostic";
 import { createBridgeServer, PRODUCTION_ORIGIN, type BridgeServer } from "bridge-server";
-import { startDiagnostics, type BridgeDiagnostics } from "./diagnostics.ts";
+import {
+  startDiagnostics,
+  type BridgeDiagnostics,
+  type DiagnosticCounters,
+} from "./diagnostics.ts";
 
 const DEFAULT_PORT = 3100;
 
@@ -92,14 +95,14 @@ const stdoutOutput: CommandOutput = {
  * @param line - 入力行。
  * @param server - 起動中のブリッジ。
  * @param out - 表示の出力先。省略時は標準出力。
- * @param diagnostics - 診断統計の取得口。省略時は診断の項目を出さない。
+ * @param diagnostics - 診断カウンタの取得口。省略時は診断の項目を出さない。
  * @returns 終了する場合に真。
  */
 export function handleCommand(
   line: string,
   server: BridgeServer,
   out: CommandOutput = stdoutOutput,
-  diagnostics?: { getStats(): DiagnosticStats },
+  diagnostics?: { getStats(): DiagnosticCounters },
 ): boolean {
   const [command, ...rest] = line.trim().split(/\s+/);
   if (command === "accept") {

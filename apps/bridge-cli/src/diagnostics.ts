@@ -17,6 +17,7 @@ import {
 import {
   DIAGNOSTIC_PORT_ID,
   diagnosticPlugin,
+  type DiagnosticOperations,
   type DiagnosticStats,
 } from "bridge-plugin-diagnostic";
 import { TEXT_SESSION_ID } from "bridge-plugin-text/contract";
@@ -25,10 +26,24 @@ import { TEXT_SESSION_ID } from "bridge-plugin-text/contract";
  * CLI の診断実行状態の操作口。
  */
 export interface BridgeDiagnostics {
-  /** 累積値と生存インスタンスの合計の応答統計。 */
-  getStats(): DiagnosticStats;
+  /** echo・ping の累積値と生存インスタンスの合計。個体改訂番号は含めない。 */
+  getStats(): DiagnosticCounters;
   /** app-core を閉じる。 */
   close(): void;
+}
+
+/**
+ * CLI が集計して返す診断カウンタ。
+ *
+ * echo・ping の送信試行件数の合計だけを持ち、個体改訂番号は横断集約
+ * しない。個体の状態型（`DiagnosticStats`）とは別物であり、個体の
+ * `revision` は当該個体の状態として残し、合計値に足さない。
+ */
+export interface DiagnosticCounters {
+  /** echo 応答の送信試行件数の合計。 */
+  readonly diagnosticEcho: number;
+  /** ping 応答の送信試行件数の合計。 */
+  readonly diagnosticPing: number;
 }
 
 /**
@@ -48,7 +63,9 @@ export function startDiagnostics(server: BridgeServer): BridgeDiagnostics {
   let closed = false;
   let echoAccumulated = 0;
   let pingAccumulated = 0;
-  const live = new Map<string, PluginInstanceHandle<DiagnosticStats>>();
+  // ADR: 個体改訂番号は当該個体の状態であり、横断集約しない。累積値に
+  // 足さず、CLI の集計型にも載せない。
+  const live = new Map<string, PluginInstanceHandle<DiagnosticStats, DiagnosticOperations>>();
 
   const attach = (info: BridgeSessionInfo): void => {
     if (closed) return;
@@ -76,7 +93,7 @@ export function startDiagnostics(server: BridgeServer): BridgeDiagnostics {
     if (handle === undefined) return;
     live.delete(info.localSessionId);
     // ADR: 終了通知の時点で応答統計を累積値へ回収してから削除する。
-    // 再接続の同名セッションへ割当ては継承しない。
+    // 再接続の同名セッションへ割当ては継承しない。個体改訂番号は回収しない。
     try {
       const state = handle.getState();
       echoAccumulated += state.diagnosticEcho;
@@ -103,7 +120,7 @@ export function startDiagnostics(server: BridgeServer): BridgeDiagnostics {
   });
 
   return {
-    getStats: (): DiagnosticStats => {
+    getStats: (): DiagnosticCounters => {
       let echo = echoAccumulated;
       let ping = pingAccumulated;
       for (const handle of live.values()) {

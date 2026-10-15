@@ -1,187 +1,184 @@
 /**
- * テキストの GUI companion の登録口（`./gui`）。
+ * テキストの GUI 登録単位（`./gui`）。
  *
- * 管理記述子と companion factory の対応付けだけを持ち、子画面固有契約の
+ * 管理記述子・companion 宣言・endpoint 工場の組だけを持ち、子画面固有契約の
  * 定義は `gui-contract`、通信契約は `contract`、本体は `plugin` が持つ。
  * ここでは再定義せず、公開 entry（`bridge-plugin-text/gui`）越しに
  * ホストの composition root だけが参照する。
+ *
+ * 中継の共通形は子→プラグインが `{method, params}`、プラグイン→子が
+ * `{event, payload}` であり、応答は `PluginRelayResult`
+ * （`{ok:true,value}`・`{ok:false,error}`）である。業務エラーは `value` 側に
+ * 載せ、投げた例外は中継失敗に落とす。未知 `method` は不透明なエラー値で
+ * 拒否し、反射呼出し（`operations[method]` 等）はしない。
  *
  * @packageDocumentation
  */
 import { TEXT_PORT_ID, textPlugin } from "./plugin.ts";
 import type { TextPluginOperations, TextPluginState, TextSendResult } from "./plugin.ts";
-import { TEXT_SESSION_ID } from "./contract.ts";
-import type {
-  GuiPluginAccess,
-  GuiPluginManagementDescriptor,
-  PluginOperationAccess,
-} from "bridge-gui-plugin-sdk/management";
-import type {
-  CompanionRequestEnv,
-  PluginCompanionDeclaration,
-} from "bridge-gui-plugin-sdk/companion";
-import type { InstanceBaseView } from "bridge-gui-contract/plugin-instance";
-import { TEXT_MOUNT_KIND, TEXT_VIEW_ENTRY } from "./gui-contract.ts";
-import type { TextInstanceSnapshot, TextInstanceView } from "./gui-contract.ts";
+import { TEXT_SESSION_ID, validateTextForSend } from "./contract.ts";
+import type { BoundPluginRef } from "bridge-gui-plugin-sdk/management";
+import type { PluginEmissionPort, PluginEndpoint } from "bridge-gui-plugin-sdk/companion";
+import type { GuiPluginRegistration } from "bridge-gui-plugin-sdk/registration";
+import type { PluginRelayRequest } from "bridge-gui-contract/plugin-instance";
+import type { Unsubscribe } from "bridge-app-core/core";
+import {
+  TEXT_GET_STATE_METHOD,
+  TEXT_MOUNT_KIND,
+  TEXT_SEND_TEXT_METHOD,
+  TEXT_STATE_CHANGED_EVENT,
+  TEXT_VIEW_ENTRY,
+  isTextSendTextParams,
+  type TextChildSnapshot,
+} from "./gui-contract.ts";
 
 /**
- * テキストの公開する固有操作。
+ * 表示用 DTO を組み立てる。本体の状態と束縛情報を写すだけであり、本文は
+ * 載せない。改訂番号は本体が進めた値を引き継ぐだけである。
  *
- * raw operations を保存せず、利用の都度限定口を通す。
+ * @param state - 本体の現在状態または変更通知の状態。
+ * @param ref - ホストが選んだ一個体に限定した参照口。束縛情報の読取りに使う。
+ * @returns 子へ送る表示用 DTO。
+ * @throws `RangeError` — 所有外・失効・現割当て不一致の場合（ホスト自身の照合）。
  */
-export interface TextManagementOperations {
-  /**
-   * 束縛個体の現割当てへ本文を送る。
-   *
-   * @param instanceId - 操作対象の個体識別子。
-   * @param text - 送信する本文。文字列であること（詳細検証はプラグインが行う）。
-   * @returns 反映確認または結果不明。送信処理の失敗は `Promise` の拒否で表す。
-   * @throws `RangeError` — 本文が文字列でない、不明・失効・現割当て不一致の場合（同期的）。
-   */
-  sendText(instanceId: string, text: unknown): Promise<TextSendResult>;
+function toChildSnapshot(
+  state: TextPluginState,
+  ref: BoundPluginRef<TextPluginState, TextPluginOperations>,
+): TextChildSnapshot {
+  const binding = ref.getBinding();
+  return {
+    revision: state.revision,
+    instanceId: binding.instanceId,
+    localSessionId: binding.localSessionId,
+    portId: binding.portId,
+    canSend: state.canSend,
+    pendingId: state.pendingId,
+    lastResult: state.lastResult,
+    stats: state.stats,
+  };
 }
 
 /**
- * テキストの管理記述子。`definition: textPlugin`、`maxInstances: 1`。
+ * テキストの登録単位。管理記述子・companion 宣言・endpoint 工場の組である。
  *
- * 候補は生存・未割当て・`sessionId===TEXT_SESSION_ID`・reliable/bidirectional
- * で全接続通じて唯一のときのみ選択する（0/複数は `RangeError`、`mode:"session"`
- * でも唯一条件を緩めない）。監視は購読（`handle.getOperations()`→
- * `onStateChanged`、操作口不足は `TypeError`）で行う。
+ * composition root が静的登録で使い、マウント時に個体へ束縛した endpoint を
+ * 生成する。旧 export（`createTextCompanion`・`textManagement` 等）は持たない。
  */
-export const textManagement: GuiPluginManagementDescriptor<
-  TextPluginState,
-  TextPluginOperations,
-  TextInstanceView,
-  TextManagementOperations
-> = {
-  kind: TEXT_MOUNT_KIND,
-  definition: textPlugin,
-  assignment: {
-    maxInstances: 1,
-    select({ request, candidates }) {
-      const eligible = candidates.filter(
-        (candidate) =>
-          candidate.alive &&
-          candidate.assignment === null &&
-          candidate.sessionId === TEXT_SESSION_ID &&
-          candidate.capability.kind === "reliable" &&
-          candidate.capability.direction === "bidirectional",
-      );
-      if (eligible.length === 0) {
-        throw new RangeError("テキスト割当ての候補が無い。");
-      }
-      if (eligible.length > 1) {
-        throw new RangeError("テキスト割当ての候補が複数ある。");
-      }
-      const target = eligible[0];
-      if (target === undefined) {
-        throw new RangeError("テキスト割当ての候補が無い。");
-      }
-      if (request.mode === "session" && target.localSessionId !== request.localSessionId) {
-        throw new RangeError("指定した候補と割当て先が一致しない。");
-      }
-      return { localSessionId: target.localSessionId, portId: TEXT_PORT_ID };
-    },
-  },
-  observation: {
-    mode: "subscribe",
-    start(handle, changed) {
-      const operations = handle.getOperations?.();
-      if (operations === undefined) {
-        throw new TypeError("テキストの操作口が無い。");
-      }
-      return operations.onStateChanged(() => {
-        changed();
-      });
-    },
-  },
-  projectView({ binding, state }) {
-    return {
-      instanceId: binding.instanceId,
-      pluginId: binding.pluginId,
-      portId: binding.portId,
-      localSessionId: binding.localSessionId,
-      canSend: state.canSend,
-      pendingId: state.pendingId,
-      lastResult: state.lastResult,
-      stats: state.stats,
-    };
-  },
-  buildOperations(access: PluginOperationAccess<TextPluginOperations>): TextManagementOperations {
-    return {
-      sendText(instanceId: string, text: unknown): Promise<TextSendResult> {
-        if (typeof text !== "string") {
-          throw new RangeError("text は文字列であること。");
-        }
-        const body = text;
-        return access.withOperations(instanceId, (operations, binding) =>
-          operations.sendText(body, binding.localSessionId),
+export const textGuiRegistration: GuiPluginRegistration<TextPluginState, TextPluginOperations> = {
+  management: {
+    kind: TEXT_MOUNT_KIND,
+    definition: textPlugin,
+    assignment: {
+      maxInstances: 1,
+      select({ request, candidates }) {
+        const eligible = candidates.filter(
+          (candidate) =>
+            candidate.alive &&
+            candidate.assignment === null &&
+            candidate.sessionId === TEXT_SESSION_ID &&
+            candidate.capability.kind === "reliable" &&
+            candidate.capability.direction === "bidirectional",
         );
+        if (eligible.length === 0) {
+          throw new RangeError("テキスト割当ての候補が無い。");
+        }
+        if (eligible.length > 1) {
+          throw new RangeError("テキスト割当ての候補が複数ある。");
+        }
+        const target = eligible[0];
+        if (target === undefined) {
+          throw new RangeError("テキスト割当ての候補が無い。");
+        }
+        if (request.mode === "session" && target.localSessionId !== request.localSessionId) {
+          throw new RangeError("指定した候補と割当て先が一致しない。");
+        }
+        return { localSessionId: target.localSessionId, portId: TEXT_PORT_ID };
+      },
+    },
+  },
+  companion: {
+    kind: TEXT_MOUNT_KIND,
+    label: "テキスト",
+    viewEntry: TEXT_VIEW_ENTRY,
+  },
+  createEndpoint(
+    ref: BoundPluginRef<TextPluginState, TextPluginOperations>,
+    emission: PluginEmissionPort,
+  ): PluginEndpoint {
+    let disposed = false;
+    let unsubscribe: Unsubscribe | null = null;
+
+    // 本体の状態変更を購読し、表示用 DTO をその表示期間の子へ送る。
+    // アプリにキュー・再配信・最新状態キャッシュは無い。
+    const publish = (state: TextPluginState): void => {
+      if (disposed) return;
+      let snapshot: TextChildSnapshot;
+      try {
+        snapshot = toChildSnapshot(state, ref);
+      } catch {
+        // 失効時は送らない。旧子への付け替え・自動再送もしない。
+        return;
+      }
+      emission.emit({ event: TEXT_STATE_CHANGED_EVENT, payload: snapshot });
+    };
+    unsubscribe = ref.withOperations((operations) => operations.onStateChanged(publish));
+
+    return {
+      async handleRequest(request: PluginRelayRequest): Promise<unknown> {
+        if (disposed) {
+          throw new Error("終了済みの endpoint である。");
+        }
+        if (request.method === TEXT_GET_STATE_METHOD) {
+          // 読取りは改訂を進めない。失効は投げて中継失敗に落とす。
+          const state = ref.readState();
+          return toChildSnapshot(state, ref);
+        }
+        if (request.method === TEXT_SEND_TEXT_METHOD) {
+          if (!isTextSendTextParams(request.params)) {
+            return { error: "送信要求の形状が不正である。" };
+          }
+          const validated = validateTextForSend(request.params.text);
+          if (!validated.ok) {
+            const reason =
+              validated.reason === "empty"
+                ? "本文が空のため送信しない。"
+                : validated.reason === "too-long"
+                  ? "本文が長すぎるため送信しない。"
+                  : "本文が文字列でないため送信しない。";
+            return { error: reason };
+          }
+          const text = validated.text;
+          // ADR: 同期の投げ（所有外・失効・操作口不足）はそのまま投げて中継失敗に
+          // 落とし、非同期の `RangeError` 拒否（送信不可・重複等）は業務エラー
+          // として値に載せる。`sendText` の送信前拒否は `Promise` の拒否であり、
+          // 同期投げとは分かれるため、この分け方が成立する。
+          const flight: Promise<TextSendResult> = ref.withOperations((operations, binding) =>
+            operations.sendText(text, binding.localSessionId),
+          );
+          try {
+            return await flight;
+          } catch (error: unknown) {
+            if (error instanceof RangeError) {
+              return { error: error.message };
+            }
+            throw error;
+          }
+        }
+        return { error: `未知の要求である: ${request.method}` };
+      },
+      dispose(): void {
+        if (disposed) return;
+        disposed = true;
+        const stop = unsubscribe;
+        unsubscribe = null;
+        if (stop !== null) {
+          try {
+            stop();
+          } catch {
+            // 解放の失敗は二重解放にしない。
+          }
+        }
       },
     };
   },
 };
-
-/**
- * テキスト companion を組み立てる。`GuiPluginAccess` を capture する。
- *
- * 解決前の宣言（振る舞いと相対 entrypoint）だけを返し、解決済み view パス・
- * 子画面 URL の組み立ては持たない。composition が静的 manifest と照合して
- * 解決済みを付与し、登録表に載せる。
- *
- * @param access - 管理層が返す種別の公開参照口。
- * @returns テキスト companion の解決前の宣言。
- */
-export function createTextCompanion(
-  access: GuiPluginAccess<TextInstanceView, TextManagementOperations>,
-): PluginCompanionDeclaration {
-  return {
-    kind: TEXT_MOUNT_KIND,
-    label: "テキスト",
-    viewEntry: TEXT_VIEW_ENTRY,
-    listDesired() {
-      return access.listBindings().map((binding) => ({
-        instanceId: binding.instanceId,
-        localSessionId: binding.localSessionId,
-        portId: binding.portId,
-      }));
-    },
-    readView(instanceId: string): InstanceBaseView {
-      return access.readView(instanceId);
-    },
-    toSnapshot(view: InstanceBaseView, revision: number): unknown {
-      // ADR: `as` を使う理由は、同じ companion の `readView` が作った表示に
-      // 改訂番号だけを付けるためである。根拠は、対応付けが同一種別の記述子で
-      // 読み・付番を対にすることである。
-      const typed = view as TextInstanceView;
-      const snapshot: TextInstanceSnapshot = { ...typed, revision };
-      return snapshot;
-    },
-    send(instanceId: string, params: unknown): Promise<unknown> {
-      // ADR: `as` を使う理由は、操作引数の形状を companion が固定するためである。
-      // 根拠は、要求表の `sendText` が本文だけを渡すことである。本文の検証は
-      // 委譲先（固有操作）が行う。
-      const table = params as { text: unknown };
-      return access.operations.sendText(instanceId, table.text);
-    },
-    pushMessageName: "textStateChanged",
-    buildRequestHandlers(mountId: string, env: CompanionRequestEnv) {
-      return {
-        getTextState: () => {
-          const snapshot = env.readSnapshot(TEXT_MOUNT_KIND, mountId);
-          // ADR: `as` を使う理由は上記と同様であり、対応付けが同一種別の
-          // 記述子で読んだ表示を返すためである。
-          const typed = snapshot as TextInstanceSnapshot;
-          env.markReady(mountId);
-          return typed;
-        },
-        sendText: (params: { text: string }) => {
-          const result = env.send(TEXT_MOUNT_KIND, mountId, params);
-          // ADR: `as` を使う理由は上記と同様であり、委譲先の解決型を保つためである。
-          return result as Promise<TextSendResult>;
-        },
-      };
-    },
-  };
-}

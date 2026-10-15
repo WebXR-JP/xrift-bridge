@@ -1,21 +1,21 @@
 /**
- * UDP割当て・限定表示・送信経路・監視の統合検証。
+ * UDP割当て・表示用 DTO・中継の統合検証。
  *
  * バックエンドを直接生成し、`world-client` を Node の `origin` 指定で動かして、
- * 実 WebSocket・既存 `ws`・yamux で候補検査・割当て・表示読取りまでを通す。
- * 割当ては汎用管理操作（`assignPlugin`/`unassignPlugin`）、表示読取りと送信は
- * 本番 companion（backend が生成した登録表）経由で行い、新本番経路を通す。
+ * 実 WebSocket・既存 `ws`・yamux で候補検査・割当て・中継までを通す。
+ * 割当ては汎用管理操作（`assignPlugin`/`unassignPlugin`）、表示読取りと操作は
+ * 本番 endpoint（backend が生成した登録表の endpoint 工場＋束縛個体限定の
+ * 参照口）経由の中継で行い、新本番経路を通す。main は中継だけを担い、
+ * 要求・通知の中身を解釈しない。未知 method の検証は endpoint が行い、
+ * 反射的呼出しはしない。
  * 論理名は各契約の正本（`UDP_SESSION_ID`・診断・テキストの定数）で参照し、
- * 文字列の直書きを持たない。監視の周期駆動は偽時計と管理層の実物で確かめ、
- * 実時間待ちはしない。
+ * 文字列の直書きを持たない。
  *
  * @packageDocumentation
  */
 import { afterEach, expect, test } from "vite-plus/test";
-import { UDP_PORT_ID, type UdpControlResult, type UdpPluginState } from "bridge-plugin-udp";
+import { UDP_PORT_ID } from "bridge-plugin-udp";
 import { UDP_SESSION_ID } from "bridge-plugin-udp/contract";
-import type { UdpInstanceView } from "bridge-plugin-udp/gui-contract";
-import { udpManagement } from "bridge-plugin-udp/gui";
 import { TEXT_SESSION_ID } from "bridge-plugin-text/contract";
 import {
   DIAGNOSTIC_ECHO_SESSION_ID,
@@ -23,9 +23,20 @@ import {
 } from "bridge-plugin-diagnostic/contract";
 import { createConnectionRequest, type ReliableSession, type SessionProvider } from "world-client";
 import { GuiBackend } from "../src/main/backend.ts";
-import { registerBundledPlugins } from "../src/composition/bundled-plugins.ts";
-import { PluginInstanceManager } from "../src/main/plugin-instance-manager.ts";
-import type { PluginCompanion } from "bridge-gui-plugin-sdk/companion";
+import {
+  registerBundledPlugins,
+  resolveBundledPluginViewPath,
+} from "../src/composition/bundled-plugins.ts";
+import type { PluginRelayEvent } from "bridge-gui-contract/plugin-instance";
+import type { PluginEndpoint } from "bridge-gui-plugin-sdk/companion";
+import {
+  UDP_RELAY_EVENT_STATE,
+  UDP_RELAY_METHOD_GET_STATE,
+  UDP_RELAY_METHOD_START,
+  UDP_RELAY_METHOD_STOP,
+  isUdpCompanionSnapshot,
+  type UdpCompanionSnapshot,
+} from "bridge-plugin-udp/gui-contract";
 
 const TEST_ORIGIN = "https://gui-udp-test.invalid";
 
@@ -55,7 +66,10 @@ afterEach(async () => {
 async function startBackend(): Promise<GuiBackend> {
   const backend = await GuiBackend.create(
     { port: 0, allowedOrigins: [TEST_ORIGIN] },
-    { registerPlugins: registerBundledPlugins },
+    {
+      registerPlugins: registerBundledPlugins,
+      resolvePluginViewPath: resolveBundledPluginViewPath,
+    },
   );
   backends.push(backend);
   expect(backend.getSnapshot().backend).toBe("ready");
@@ -120,41 +134,44 @@ async function createSessions(
 }
 
 /**
- * backend が生成した登録表から UDP companion を取り出す。
- *
- * 本番配線（manager→access→companion）で作られた記述子であり、
- * 表示読取り・送信の新本番経路である。
+ * 束縛個体用の UDP endpoint を組み立てる。本番配線（登録表の endpoint 工場＋
+ * 管理層の束縛個体限定の参照口）で作る。
  */
-function udpCompanionOf(backend: GuiBackend): PluginCompanion {
-  const companion = backend.companionRegistry.get("udp");
-  if (companion === undefined) throw new Error("UDP companion が無い。");
-  return companion;
-}
-
-/**
- * 束縛個体の限定表示を読む。本文は含めない。
- */
-function readUdpView(backend: GuiBackend, instanceId: string): UdpInstanceView {
-  // ADR: `as` を使う理由は、汎用口が種別を問わない表示を返し、試験で
-  // 束縛種別の具象表示を取り出すためである。根拠は、対応付けが同一種別の
-  // 記述子で読み・付番を対にすることである。
-  return udpCompanionOf(backend).readView(instanceId) as UdpInstanceView;
-}
-
-/**
- * 束縛個体へ子画面操作を送る。子は操作名と引数だけを渡す。
- */
-function sendUdpViaCompanion(
+function udpEndpointOf(
   backend: GuiBackend,
   instanceId: string,
+  emitted: PluginRelayEvent[],
+): PluginEndpoint {
+  const manager = backend.instanceManager;
+  if (manager === null) throw new Error("管理層が無い。");
+  const entry = backend.companionRegistry.getEntry("udp");
+  if (entry === undefined) throw new Error("UDP の登録が無い。");
+  const ref = manager.createBoundRef("udp", instanceId);
+  return entry.createEndpoint(ref, {
+    emit: (event) => {
+      emitted.push(event);
+    },
+  });
+}
+
+/**
+ * 束縛個体の表示用 DTO を中継で読む。
+ */
+async function readUdpView(endpoint: PluginEndpoint): Promise<UdpCompanionSnapshot> {
+  const value = await endpoint.handleRequest({ method: UDP_RELAY_METHOD_GET_STATE, params: {} });
+  if (!isUdpCompanionSnapshot(value)) throw new Error("表示用 DTO の形状が不正である。");
+  return value;
+}
+
+/**
+ * 束縛個体へ子画面操作を中継で送る。子は操作名と引数だけを渡す。
+ */
+async function sendUdpViaRelay(
+  endpoint: PluginEndpoint,
+  method: string,
   params: unknown,
-): Promise<UdpControlResult> {
-  const send = udpCompanionOf(backend).send;
-  if (send === undefined) throw new Error("UDP の送信口が無い。");
-  // ADR: `as` を使う理由は、汎用口が `unknown` で返す解決値を試験で
-  // 具象の制御結果として確かめるためである。根拠は、companion の固有操作が
-  // UDP 制御の解決型を保つことである。
-  return send(instanceId, params) as Promise<UdpControlResult>;
+): Promise<unknown> {
+  return endpoint.handleRequest({ method, params });
 }
 
 test("候補が無いときはUDP割当てを拒否する", async () => {
@@ -270,101 +287,38 @@ test("論理名がudpでも輸送の適合が違えば対象にしない", async
   expect(backend.getSnapshot().plugins.assignments).toHaveLength(0);
 });
 
-test("割当て後の射影は限定項目だけを含み他個体情報を載せない", async () => {
+test("割当て後の中継の表示は限定項目だけを含み他個体情報を載せない", async () => {
   const backend = await startBackend();
   backend.enableAcceptance();
   const provider = await approveConnection(backend);
   await createSessions(backend, provider, [TEXT_SESSION_ID, UDP_SESSION_ID]);
   const assignment = backend.assignPlugin({ pluginKind: "udp" });
 
-  const view = readUdpView(backend, assignment.instanceId);
-  expect(Object.keys(view).sort()).toEqual([
-    "boundAddress",
-    "canStart",
-    "instanceId",
-    "isRunning",
-    "lastError",
-    "localSessionId",
-    "phase",
-    "pluginId",
-    "portId",
-    "requestedBind",
-    "stats",
-  ]);
-  expect(view.localSessionId).toBe(assignment.localSessionId);
-  expect(view.phase).toBe("stopped");
-  expect(view.requestedBind).toBeNull();
-  expect(view.boundAddress).toBeNull();
-  expect(view.canStart).toBe(true);
-  expect(view.isRunning).toBe(false);
-  expect(view.lastError).toBeNull();
-  expect(view.stats).toEqual({
-    receivedDatagrams: 0,
-    receivedBytes: 0,
-    forwardedDatagrams: 0,
-    forwardedBytes: 0,
-    droppedOversize: 0,
-    droppedBusy: 0,
-    droppedInvalidMetadata: 0,
-    sendFailures: 0,
-  });
-  // 他個体（テキスト表示用）の識別子は載せない。
-  const textSession = backend
-    .getSnapshot()
-    .sessions.find((info) => info.sessionId === TEXT_SESSION_ID);
-  if (textSession === undefined) throw new Error("検証用のセッションが無い。");
-  expect(JSON.stringify(view)).not.toContain(textSession.localSessionId);
-});
-
-test("companionの送信経路は開始と停止の二分岐で未知操作を拒否する", async () => {
-  const backend = await startBackend();
-  backend.enableAcceptance();
-  const provider = await approveConnection(backend);
-  await createSessions(backend, provider, [UDP_SESSION_ID]);
-  const assignment = backend.assignPlugin({ pluginKind: "udp" });
-
-  // 束縛外の個体には送らない（所有検証は同期的）。
-  expect(() => udpCompanionOf(backend).readView("無い")).toThrowError(RangeError);
-  expect(() => sendUdpViaCompanion(backend, "無い", { action: "stop" })).toThrowError(RangeError);
-  // 閉じた二分岐の外は拒否する（引数の詳細検証の前に操作名で落とす）。
-  expect(() =>
-    sendUdpViaCompanion(backend, assignment.instanceId, { action: "erase" }),
-  ).toThrowError(RangeError);
-  expect(() => sendUdpViaCompanion(backend, assignment.instanceId, "start")).toThrowError(
-    RangeError,
-  );
-  // 形状外の開始引数は固有操作まで届き理由付きの失敗で返す（拒否では表さない）。
-  await expect(
-    sendUdpViaCompanion(backend, assignment.instanceId, {
-      action: "start",
-      params: { bind: { address: "", port: 0 }, allowNonLoopback: false },
-    }),
-  ).resolves.toMatchObject({ ok: false, reason: "invalid-config" });
-  // 非 loopback の確認不足も固有操作まで届き確認要求で返す。
-  await expect(
-    sendUdpViaCompanion(backend, assignment.instanceId, {
-      action: "start",
-      params: { bind: { address: "8.8.8.8", port: 50000 }, allowNonLoopback: false },
-    }),
-  ).resolves.toMatchObject({ ok: false, reason: "confirmation-required" });
-  // 失敗した開始は待受けを作らず統計を動かさない。
-  const afterFailed = readUdpView(backend, assignment.instanceId);
-  expect(afterFailed.phase).toBe("stopped");
-  expect(afterFailed.boundAddress).toBeNull();
-  expect(afterFailed.stats.receivedDatagrams).toBe(0);
-  // 待受けが無い停止は成功とする（冪等）。
-  await expect(
-    sendUdpViaCompanion(backend, assignment.instanceId, { action: "stop" }),
-  ).resolves.toEqual({ ok: true });
-});
-
-/** 監視の指紋検証に使う UDP 状態の雛形。 */
-function udpStateOf(overrides?: Partial<UdpPluginState>): UdpPluginState {
-  return {
-    phase: "stopped",
-    requestedBind: null,
-    boundAddress: null,
-    stats: {
+  const emitted: PluginRelayEvent[] = [];
+  const endpoint = udpEndpointOf(backend, assignment.instanceId, emitted);
+  try {
+    const view = await readUdpView(endpoint);
+    expect(Object.keys(view).sort()).toEqual([
+      "boundAddress",
+      "canStart",
+      "instanceId",
+      "isRunning",
+      "lastError",
+      "localSessionId",
+      "phase",
+      "portId",
+      "requestedBind",
+      "revision",
+      "stats",
+    ]);
+    expect(view.localSessionId).toBe(assignment.localSessionId);
+    expect(view.phase).toBe("stopped");
+    expect(view.requestedBind).toBeNull();
+    expect(view.boundAddress).toBeNull();
+    expect(view.canStart).toBe(true);
+    expect(view.isRunning).toBe(false);
+    expect(view.lastError).toBeNull();
+    expect(view.stats).toEqual({
       receivedDatagrams: 0,
       receivedBytes: 0,
       forwardedDatagrams: 0,
@@ -373,108 +327,73 @@ function udpStateOf(overrides?: Partial<UdpPluginState>): UdpPluginState {
       droppedBusy: 0,
       droppedInvalidMetadata: 0,
       sendFailures: 0,
-    },
-    lastError: null,
-    canStart: true,
-    isRunning: false,
-    ...overrides,
-  };
-}
-
-test("監視は500ms周期で統計と段階とbindの変化を指紋で検出する", () => {
-  if (udpManagement.observation.mode !== "poll") {
-    throw new Error("UDP監視は周期照合であること。");
+    });
+    // 他個体（テキスト表示用）の識別子は載せない。
+    const textSession = backend
+      .getSnapshot()
+      .sessions.find((info) => info.sessionId === TEXT_SESSION_ID);
+    if (textSession === undefined) throw new Error("検証用のセッションが無い。");
+    expect(JSON.stringify(view)).not.toContain(textSession.localSessionId);
+    void UDP_RELAY_EVENT_STATE;
+  } finally {
+    endpoint.dispose();
   }
-  expect(udpManagement.observation.intervalMs).toBe(500);
-  const fingerprint = udpManagement.observation.fingerprint;
-  const base = udpStateOf();
-  expect(fingerprint(base)).toBe(fingerprint(udpStateOf()));
-  // 統計・段階・bind・異常のいずれの変化も見逃さない。
-  expect(fingerprint(base)).not.toBe(
-    fingerprint(
-      udpStateOf({
-        stats: { ...base.stats, receivedDatagrams: 1, receivedBytes: 60 },
-      }),
-    ),
-  );
-  expect(fingerprint(base)).not.toBe(fingerprint(udpStateOf({ phase: "running" })));
-  expect(fingerprint(base)).not.toBe(
-    fingerprint(udpStateOf({ requestedBind: { address: "127.0.0.1", port: 50000 } })),
-  );
-  expect(fingerprint(base)).not.toBe(
-    fingerprint(
-      udpStateOf({ boundAddress: { address: "127.0.0.1", port: 50000, family: "IPv4" } }),
-    ),
-  );
-  expect(fingerprint(base)).not.toBe(fingerprint(udpStateOf({ lastError: "異常" })));
 });
 
-test("UDPの周期監視は偽時計の間隔で駆動する", () => {
-  let state = udpStateOf();
-  const assignments: Array<{ localSessionId: string; instanceId: string; portId: string }> = [];
-  const intervals: number[] = [];
-  const ticks: Array<() => void> = [];
-  let changed = 0;
-  const manager = new PluginInstanceManager({
-    core: {
-      createInstance: () => ({
-        instanceId: "udp-1",
-        pluginId: "udp",
-        getState: () => state,
-      }),
-      assign: (localSessionId: string, instanceId: string, portId: string) => {
-        assignments.push({ localSessionId, instanceId, portId });
-      },
-      unassign: () => {},
-      removeInstance: () => {},
-      listAssignments: () => [...assignments],
-    } as never,
-    sessions: {
-      list: () => [
-        {
-          localSessionId: "local-9",
-          connectionId: "connection-9",
-          sessionId: UDP_SESSION_ID,
-          capability: { kind: "reliable", direction: "bidirectional" },
-          alive: true,
-        },
-      ],
-      onEnded: () => () => {},
-    },
-    clock: {
-      every: (intervalMs: number, tick: () => void) => {
-        intervals.push(intervalMs);
-        ticks.push(tick);
-        return () => {};
-      },
-    },
-    onChanged: () => {
-      changed += 1;
-    },
-    onIssue: () => {},
-  });
+test("中継は開始と停止の分岐で未知操作を値に載せる", async () => {
+  const backend = await startBackend();
+  backend.enableAcceptance();
+  const provider = await approveConnection(backend);
+  await createSessions(backend, provider, [UDP_SESSION_ID]);
+  const assignment = backend.assignPlugin({ pluginKind: "udp" });
+
+  const emitted: PluginRelayEvent[] = [];
+  const endpoint = udpEndpointOf(backend, assignment.instanceId, emitted);
   try {
-    manager.register(udpManagement);
-    const binding = manager.assign("udp", { mode: "auto" });
-    expect(binding.instanceId).toBe("udp-1");
-    // 厳密な周期値は記述子の既定であり、実時間待ちなしに確かめる。
-    expect(intervals).toEqual([500]);
-    const tick = ticks[0];
-    if (tick === undefined) throw new Error("周期処理が無い。");
-    const before = changed;
-    tick();
-    expect(changed).toBe(before);
-    state = udpStateOf({
-      phase: "running",
-      requestedBind: { address: "127.0.0.1", port: 50000 },
-      boundAddress: { address: "127.0.0.1", port: 50000, family: "IPv4" },
-      stats: { ...state.stats, receivedDatagrams: 1, receivedBytes: 60 },
-      canStart: true,
-      isRunning: true,
+    // 束縛外の個体の endpoint 生成は失効として拒否する（所有検証は参照口が行う）。
+    expect(() => udpEndpointOf(backend, "無い", emitted)).toThrowError(RangeError);
+    // 閉じた分岐の外は値に載せる（投げない・反射呼出ししない）。
+    const unknown = await sendUdpViaRelay(endpoint, "erase", {});
+    expect(unknown).toMatchObject({ ok: false, reason: "unknown-method" });
+    // 形状外の開始引数は理由付きの失敗で返す（拒否では表さない）。
+    const invalid = await sendUdpViaRelay(endpoint, UDP_RELAY_METHOD_START, {
+      bind: { address: "", port: 0 },
+      allowNonLoopback: false,
     });
-    tick();
-    expect(changed).toBe(before + 1);
+    expect(invalid).toMatchObject({ ok: false, reason: "invalid-config" });
+    // 非 loopback の確認不足も理由付きで返す。
+    const unconfirmed = await sendUdpViaRelay(endpoint, UDP_RELAY_METHOD_START, {
+      bind: { address: "8.8.8.8", port: 50000 },
+      allowNonLoopback: false,
+    });
+    expect(unconfirmed).toMatchObject({ ok: false, reason: "confirmation-required" });
+    // 失敗した開始は待受けを作らず統計を動かさない。
+    const afterFailed = await readUdpView(endpoint);
+    expect(afterFailed.phase).toBe("stopped");
+    expect(afterFailed.boundAddress).toBeNull();
+    expect(afterFailed.stats.receivedDatagrams).toBe(0);
+    // 待受けが無い停止は成功とする（冪等）。
+    const stopped = await sendUdpViaRelay(endpoint, UDP_RELAY_METHOD_STOP, {});
+    expect(stopped).toEqual({ ok: true });
   } finally {
-    manager.close();
+    endpoint.dispose();
   }
+});
+
+test("endpoint の終了は冪等であり二重解放しない", async () => {
+  const backend = await startBackend();
+  backend.enableAcceptance();
+  const provider = await approveConnection(backend);
+  await createSessions(backend, provider, [UDP_SESSION_ID]);
+  const assignment = backend.assignPlugin({ pluginKind: "udp" });
+  const emitted: PluginRelayEvent[] = [];
+  const endpoint = udpEndpointOf(backend, assignment.instanceId, emitted);
+  endpoint.dispose();
+  // 繰返し呼んでも二重解放しない。子の破棄でプラグイン本体は終了しない。
+  endpoint.dispose();
+  const manager = backend.instanceManager;
+  if (manager === null) throw new Error("管理層が無い。");
+  expect(manager.listOwned().some((record) => record.instanceId === assignment.instanceId)).toBe(
+    true,
+  );
 });

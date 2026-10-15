@@ -3,22 +3,24 @@
  *
  * main が束縛した個体の現割当てを使い、子から識別子を指定しない。
  * 受付・保留・照合・承認・接続断・割当て／解除・終了といった管理操作、
- * 他個体の情報は持たない。状態同期は管理画面と同じ規約（更新ハンドラ登録→
- * 初期取得→最新全状態 push、新しい revision のみ採用）で行う。
+ * 他個体の情報は持たない。状態同期は「更新ハンドラ登録→初期取得→
+ * 新しい revision のみ採用」で行う。子画面は表示期間ごとに作り直され、
+ * 状態を持たない。読取り前の通知は初期取得で追い付くため、蓄積を持たない。
  *
- * 統計の更新通知は main 側の最小の状態購読口（GUI 側の変化検出）が担い、
- * 子は push を数えるだけである。汎用プラグイン基盤の再設計はしない。
+ * 中継の共通形（子→プラグイン `{method, params}`・プラグイン→子
+ * `{event, payload}`）だけを使い、アプリ本体との直接のデータ交換はしない。
+ * 要求名・イベント名・表示の形状は固有契約（`gui-contract`）を正本とする。
  */
 import { Electroview } from "electrobun/view";
-import type { DiagnosticInstanceRpc, DiagnosticInstanceSnapshot } from "../gui-contract.ts";
-import { DIAGNOSTIC_MOUNT_KIND } from "../gui-contract.ts";
+import type { CompanionChannelRpc } from "bridge-gui-contract/plugin-instance";
+import { parsePluginMountId, pluginMountKindOf } from "bridge-gui-contract/plugin-instance";
 import {
-  PLUGIN_INITIAL_FETCH_ATTEMPTS,
-  PLUGIN_INITIAL_FETCH_RETRY_MS,
-  parsePluginMountId,
-  pluginMountKindOf,
-  selectNewerInstanceSnapshot,
-} from "bridge-gui-contract/plugin-instance";
+  DIAGNOSTIC_MOUNT_KIND,
+  DIAGNOSTIC_RELAY_EVENT_STATE_CHANGED,
+  DIAGNOSTIC_RELAY_METHOD_GET_STATE,
+  isDiagnosticInstanceView,
+  type DiagnosticInstanceView,
+} from "../gui-contract.ts";
 
 /**
  * 表示欄に短い文を出す。
@@ -40,14 +42,14 @@ if (mountId === null || pluginMountKindOf(mountId) !== DIAGNOSTIC_MOUNT_KIND) {
   show("diagnostic-error", "配置識別子が無いため開始できない。不正な URL である。");
 } else {
   // 現在採用中の表示状態。未取得の間は null である。
-  let current: DiagnosticInstanceSnapshot | null = null;
+  let current: DiagnosticInstanceView | null = null;
 
   /**
    * 採用中の束縛個体の表示を画面に反映する。
    *
    * @param snapshot - 採用中の表示状態。
    */
-  function render(snapshot: DiagnosticInstanceSnapshot): void {
+  function render(snapshot: DiagnosticInstanceView): void {
     show(
       "diagnostic-assignment",
       `${snapshot.localSessionId}（instanceId ${snapshot.instanceId}・接続口 ${snapshot.portId}）`,
@@ -58,23 +60,30 @@ if (mountId === null || pluginMountKindOf(mountId) !== DIAGNOSTIC_MOUNT_KIND) {
   }
 
   /** 受信した表示状態を revision 規約で採用し、採用時のみ描画する。 */
-  function adopt(incoming: DiagnosticInstanceSnapshot): void {
-    const next = selectNewerInstanceSnapshot(current, incoming);
-    if (next !== current) {
-      current = next;
-      console.log(`[bridge-gui] 状態を更新した: revision=${next.revision}`);
-      render(next);
-    } else {
+  function adopt(incoming: DiagnosticInstanceView): void {
+    if (current !== null && incoming.revision <= current.revision) {
       console.log(`[bridge-gui] 古い状態を無視した: incoming=${incoming.revision}`);
+      return;
     }
+    current = incoming;
+    console.log(`[bridge-gui] 状態を更新した: revision=${incoming.revision}`);
+    show("diagnostic-error", "");
+    render(incoming);
   }
 
-  const rpc = Electroview.defineRPC<DiagnosticInstanceRpc>({
+  const rpc = Electroview.defineRPC<CompanionChannelRpc>({
     handlers: {
       requests: {},
       messages: {
-        diagnosticStateChanged: (message) => {
-          adopt(message.snapshot);
+        emitted: (event) => {
+          if (event.event !== DIAGNOSTIC_RELAY_EVENT_STATE_CHANGED) {
+            return;
+          }
+          if (!isDiagnosticInstanceView(event.payload)) {
+            console.log("[bridge-gui] 不正な状態通知を無視した");
+            return;
+          }
+          adopt(event.payload);
         },
       },
     },
@@ -83,27 +92,20 @@ if (mountId === null || pluginMountKindOf(mountId) !== DIAGNOSTIC_MOUNT_KIND) {
   const view = new Electroview({ rpc });
 
   try {
-    // 更新ハンドラ登録後に初回取得し、revision が新しいときだけ採用する。
-    // ADR: 初回同期の到達保証のため bounded に再試行する。子画面側の接続確立や
-    // 主処理の混雑で RPC の既定待機に間に合わない場合に備える。使い果たしたら
-    // 子画面に残し、main 側の準備完了待ちの期限超過に任せる。自動再送はしない。
-    let fetched = false;
-    for (let attempt = 1; attempt <= PLUGIN_INITIAL_FETCH_ATTEMPTS; attempt += 1) {
-      try {
-        const initial = await rpc.request.getDiagnosticState({});
-        adopt(initial);
-        fetched = true;
-        break;
-      } catch (error: unknown) {
-        console.log(`[bridge-gui] 初回取得に失敗した（${attempt}回目）: ${String(error)}`);
-        if (attempt < PLUGIN_INITIAL_FETCH_ATTEMPTS) {
-          await new Promise((resolve) => {
-            setTimeout(resolve, PLUGIN_INITIAL_FETCH_RETRY_MS);
-          });
-        }
-      }
-    }
-    if (!fetched) {
+    // 更新ハンドラ登録後に初期取得し、revision が新しいときだけ採用する。
+    // 読取り前の通知はこの取得で追い付く。取得に失敗しても購読は残し、
+    // 後の通知で追い付く。自動再送・ポーリングはしない。
+    const result = await rpc.request.relay({
+      method: DIAGNOSTIC_RELAY_METHOD_GET_STATE,
+      params: {},
+    });
+    if (!result.ok) {
+      console.log(`[bridge-gui] 初回取得に失敗した: ${result.error.code}`);
+      show("diagnostic-error", "初期取得に失敗した。管理画面の割当てを確認すること。");
+    } else if (isDiagnosticInstanceView(result.value)) {
+      adopt(result.value);
+    } else {
+      console.log("[bridge-gui] 初回取得が業務エラーで返った");
       show("diagnostic-error", "初期取得に失敗した。管理画面の割当てを確認すること。");
     }
   } catch (error: unknown) {

@@ -63,13 +63,14 @@ test("中継の外形判定は内容に立ち入らず外形だけを見る", ()
   expect(isRelayEventShape("changed")).toBe(false);
 });
 
-test("表示要求の外形判定は世代と対象の形だけを見る", () => {
-  expect(isPluginViewRequest({ instanceId: "i1", viewGeneration: 0 })).toBe(true);
-  expect(isPluginViewRequest({ instanceId: null, viewGeneration: 3 })).toBe(true);
-  expect(isPluginViewRequest({ instanceId: "", viewGeneration: 0 })).toBe(false);
-  expect(isPluginViewRequest({ instanceId: "i1", viewGeneration: -1 })).toBe(false);
-  expect(isPluginViewRequest({ instanceId: "i1", viewGeneration: 1.5 })).toBe(false);
+test("表示要求の外形判定は基準世代と対象の形だけを見る", () => {
+  expect(isPluginViewRequest({ instanceId: "i1", baseViewGeneration: 0 })).toBe(true);
+  expect(isPluginViewRequest({ instanceId: null, baseViewGeneration: 3 })).toBe(true);
+  expect(isPluginViewRequest({ instanceId: "", baseViewGeneration: 0 })).toBe(false);
+  expect(isPluginViewRequest({ instanceId: "i1", baseViewGeneration: -1 })).toBe(false);
+  expect(isPluginViewRequest({ instanceId: "i1", baseViewGeneration: 1.5 })).toBe(false);
   expect(isPluginViewRequest({ instanceId: "i1" })).toBe(false);
+  expect(isPluginViewRequest({ instanceId: "i1", viewGeneration: 0 })).toBe(false);
   expect(isPluginViewRequest(null)).toBe(false);
 });
 

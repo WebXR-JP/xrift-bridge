@@ -8,7 +8,7 @@ import type { EventLogEntry } from "./Services/management.service.ts";
 import type { PluginViewState } from "./plugin-view-state.ts";
 import { makeSnapshot } from "./snapshot-fixture.ts";
 
-// 入れ物の起動時の振る舞い。初回取得と準備完了通知だけを行い、
+// 入れ物の起動時の振る舞い。初回取得だけを行い、
 // 起動時の自動走行（受付の往復・子画面作成）はしないことを確かめる。
 
 // ADR: `as` は実行時の検証にならないため、主張する型が成立する根拠を残す。
@@ -27,9 +27,8 @@ function prepareServiceStub() {
       kind: "preparing",
     })),
     fetchInitial: vi.fn(async () => {}),
-    notifyReady: vi.fn(),
     registerPluginHost: vi.fn((_plugin: HTMLElement) => {}),
-    setPluginViewState: vi.fn((_visible: boolean, _activeInstanceId: string | null) => {}),
+    setPluginViewState: vi.fn(async (_visible: boolean, _activeInstanceId: string | null) => {}),
     enableAcceptance: vi.fn(async () => {}),
     disableAcceptance: vi.fn(async () => {}),
     retryPairingView: vi.fn(async (_requestId: string) => {}),
@@ -60,10 +59,9 @@ async function prepareRoot() {
 }
 
 describe("入れ物の起動", () => {
-  it("初回取得と準備完了通知だけを行い自動走行しない", async () => {
+  it("初回取得だけを行い自動走行しない", async () => {
     const { stub } = await prepareRoot();
     expect(stub.fetchInitial).toHaveBeenCalledTimes(1);
-    expect(stub.notifyReady).toHaveBeenCalledTimes(1);
     expect(stub.enableAcceptance).not.toHaveBeenCalled();
     expect(stub.disableAcceptance).not.toHaveBeenCalled();
   });

@@ -21,7 +21,10 @@ import {
   getBundledPluginAsset,
   resolveBundledViewPath,
 } from "../src/composition/bundled-plugin-assets.ts";
-import { registerBundledPlugins } from "../src/composition/bundled-plugins.ts";
+import {
+  registerBundledPlugins,
+  resolveBundledPluginViewPath,
+} from "../src/composition/bundled-plugins.ts";
 import { GuiBackend } from "../src/main/backend.ts";
 import { DIAGNOSTIC_PLUGIN_ASSET } from "bridge-plugin-diagnostic/assets";
 import { DIAGNOSTIC_VIEW_ENTRY } from "bridge-plugin-diagnostic/gui-contract";
@@ -59,23 +62,35 @@ const DECLARED_ENTRIES: Record<string, { view: string }> = {
 const PLUGIN_ASSETS = [TEXT_PLUGIN_ASSET, DIAGNOSTIC_PLUGIN_ASSET, UDP_PLUGIN_ASSET] as const;
 
 test("runtime 登録集合は静的 manifest 集合と一致する", async () => {
-  const backend = await GuiBackend.create({ port: 0 }, { registerPlugins: registerBundledPlugins });
+  const backend = await GuiBackend.create(
+    { port: 0 },
+    {
+      registerPlugins: registerBundledPlugins,
+      resolvePluginViewPath: resolveBundledPluginViewPath,
+    },
+  );
   backends.push(backend);
   expect(backend.getSnapshot().backend).toBe("ready");
   // 登録順も含めて一致させる（管理表示の種別表の順序の正本である）。
-  expect(backend.companionRegistry.list().map((companion) => companion.kind)).toEqual(
+  expect(backend.companionRegistry.list().map((entry) => entry.companion.kind)).toEqual(
     BUNDLED_PLUGIN_ASSETS.map((entry) => entry.kind),
   );
 });
 
 test("登録済みの解決済み view パスは manifest と一致する", async () => {
-  const backend = await GuiBackend.create({ port: 0 }, { registerPlugins: registerBundledPlugins });
+  const backend = await GuiBackend.create(
+    { port: 0 },
+    {
+      registerPlugins: registerBundledPlugins,
+      resolvePluginViewPath: resolveBundledPluginViewPath,
+    },
+  );
   backends.push(backend);
   for (const entry of BUNDLED_PLUGIN_ASSETS) {
-    expect(backend.companionRegistry.get(entry.kind)?.viewPath).toBe(entry.viewPath);
+    expect(backend.companionRegistry.getCompanion(entry.kind)?.viewPath).toBe(entry.viewPath);
   }
   // snapshot 配布の規則も登録由来であり、直書きの残余とずれない。
-  const viewPaths = backend.companionRegistry.list().map((companion) => companion.viewPath);
+  const viewPaths = backend.companionRegistry.list().map((entry) => entry.companion.viewPath);
   expect(backend.getSnapshot().pluginNavigationRules).toEqual(
     buildPluginNavigationRules(viewPaths),
   );

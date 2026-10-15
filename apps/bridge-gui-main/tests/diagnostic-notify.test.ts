@@ -1,20 +1,32 @@
 /**
  * 診断統計の変化通知の検証。
  *
- * 診断プラグインに状態購読が無いため、管理層の最小の変化検出が echo／ping
- * 応答の統計変化を状態通知に載せること（既定周期での到達）を確かめる。
- * 実 WebSocket・既存 `ws`・yamux を通し、比較コード本文・業務 payload は
- * 記録に残さない。厳密な周期値は記述子の単体試験で固定する。
+ * 診断 endpoint は本体の状態変更を購読し、表示用 DTO をその表示期間の子へ
+ * 送る。ここでは実 WebSocket・既存 `ws`・yamux を通し、echo／ping 応答の
+ * 統計変化が通知に載ることを確かめる。比較コード本文・業務 payload は
+ * 記録に残さない。main にキュー・再配信・最新状態キャッシュは無い。
  *
  * @packageDocumentation
  */
 import { afterEach, expect, test } from "vite-plus/test";
 import { createConnectionRequest, type ReliableSession, type SessionProvider } from "world-client";
 import { GuiBackend } from "../src/main/backend.ts";
-import { registerBundledPlugins } from "../src/composition/bundled-plugins.ts";
-import type { PluginCompanion } from "bridge-gui-plugin-sdk/companion";
-import type { DiagnosticInstanceView } from "bridge-plugin-diagnostic/gui-contract";
-import { DIAGNOSTIC_ECHO_SESSION_ID } from "bridge-plugin-diagnostic/contract";
+import {
+  registerBundledPlugins,
+  resolveBundledPluginViewPath,
+} from "../src/composition/bundled-plugins.ts";
+import type { PluginRelayEvent } from "bridge-gui-contract/plugin-instance";
+import type { PluginEndpoint } from "bridge-gui-plugin-sdk/companion";
+import {
+  DIAGNOSTIC_ECHO_SESSION_ID,
+  DIAGNOSTIC_PING_SESSION_ID,
+} from "bridge-plugin-diagnostic/contract";
+import {
+  DIAGNOSTIC_RELAY_EVENT_STATE_CHANGED,
+  DIAGNOSTIC_RELAY_METHOD_GET_STATE,
+  isDiagnosticInstanceView,
+} from "bridge-plugin-diagnostic/gui-contract";
+import { TEXT_SESSION_ID } from "bridge-plugin-text/contract";
 
 const TEST_ORIGIN = "https://gui-diagnostic-notify-test.invalid";
 
@@ -39,8 +51,7 @@ afterEach(async () => {
 });
 
 /**
- * 試験用のバックエンドを生成する。待ち受けは空きポート自動選択であり、
- * 診断の変化検出は記述子の既定周期で行う。
+ * 試験用のバックエンドを生成する。待ち受けは空きポート自動選択である。
  */
 async function startBackend(): Promise<GuiBackend> {
   const backend = await GuiBackend.create(
@@ -48,7 +59,10 @@ async function startBackend(): Promise<GuiBackend> {
       port: 0,
       allowedOrigins: [TEST_ORIGIN],
     },
-    { registerPlugins: registerBundledPlugins },
+    {
+      registerPlugins: registerBundledPlugins,
+      resolvePluginViewPath: resolveBundledPluginViewPath,
+    },
   );
   backends.push(backend);
   expect(backend.getSnapshot().backend).toBe("ready");
@@ -134,18 +148,27 @@ function isEchoOf(payload: unknown, id: string): boolean {
 }
 
 /**
- * 束縛診断個体の限定表示を読む。
+ * 束縛個体用の診断 endpoint を組み立てる。本番配線（登録表の endpoint 工場＋
+ * 管理層の束縛個体限定の参照口）で作る。
  */
-function readDiagnosticView(backend: GuiBackend, instanceId: string): DiagnosticInstanceView {
-  const companion: PluginCompanion | undefined = backend.companionRegistry.get("diagnostic");
-  if (companion === undefined) throw new Error("診断 companion が無い。");
-  // ADR: `as` を使う理由は、汎用口が種別を問わない表示を返し、試験で
-  // 束縛種別の具象表示を取り出すためである。根拠は、対応付けが同一種別の
-  // 記述子で読み・付番を対にすることである。
-  return companion.readView(instanceId) as DiagnosticInstanceView;
+function diagnosticEndpointOf(
+  backend: GuiBackend,
+  instanceId: string,
+  emitted: PluginRelayEvent[],
+): PluginEndpoint {
+  const manager = backend.instanceManager;
+  if (manager === null) throw new Error("管理層が無い。");
+  const entry = backend.companionRegistry.getEntry("diagnostic");
+  if (entry === undefined) throw new Error("診断の登録が無い。");
+  const ref = manager.createBoundRef("diagnostic", instanceId);
+  return entry.createEndpoint(ref, {
+    emit: (event) => {
+      emitted.push(event);
+    },
+  });
 }
 
-test("診断の応答で統計が変わると状態通知が届く", async () => {
+test("診断の応答で統計が変わると通知が届く", async () => {
   const backend = await startBackend();
   backend.enableAcceptance();
   const pairing = await receivePairing(backend);
@@ -165,18 +188,16 @@ test("診断の応答で統計が変わると状態通知が届く", async () =>
     pluginKind: "diagnostic",
     localSessionId: target.localSessionId,
   });
-  expect(readDiagnosticView(backend, assignment.instanceId).stats).toEqual({
-    diagnosticEcho: 0,
-    diagnosticPing: 0,
-  });
-
-  // 通知の到達を数える。内容ではなく改訂の前進で確かめる。
-  let notifiedRevision = backend.getSnapshot().revision;
-  const unsubscribe = backend.onStateChanged(({ revision }) => {
-    notifiedRevision = Math.max(notifiedRevision, revision);
-  });
+  const emitted: PluginRelayEvent[] = [];
+  const endpoint = diagnosticEndpointOf(backend, assignment.instanceId, emitted);
   try {
-    const baseline = backend.getSnapshot().revision;
+    const initial = await endpoint.handleRequest({
+      method: DIAGNOSTIC_RELAY_METHOD_GET_STATE,
+      params: {},
+    });
+    if (!isDiagnosticInstanceView(initial)) throw new Error("表示用 DTO の形状が不正である。");
+    expect(initial.stats).toEqual({ diagnosticEcho: 0, diagnosticPing: 0 });
+
     const collected = collectSession(session);
     await expect(
       session.sendReliable({ op: "echo", id: "gui-n1", value: "通知確認" }),
@@ -184,13 +205,48 @@ test("診断の応答で統計が変わると状態通知が届く", async () =>
     await expect(
       collected.waitForPayload((payload) => isEchoOf(payload, "gui-n1")),
     ).resolves.toBeDefined();
-    // 応答の統計変化が既定周期の検出で状態通知に載る。到達の有無だけを見る。
-    await waitForArrival(() => notifiedRevision > baseline, "診断統計の変化通知");
-    expect(readDiagnosticView(backend, assignment.instanceId).stats).toEqual({
-      diagnosticEcho: 1,
-      diagnosticPing: 0,
+    // 応答の統計変化が本体の変更通知から endpoint の通知に載る。到達の有無だけを見る。
+    await waitForArrival(
+      () =>
+        emitted.some(
+          (event) =>
+            event.event === DIAGNOSTIC_RELAY_EVENT_STATE_CHANGED &&
+            isDiagnosticInstanceView(event.payload) &&
+            event.payload.stats.diagnosticEcho === 1,
+        ),
+      "診断統計の変化通知",
+    );
+    const current = await endpoint.handleRequest({
+      method: DIAGNOSTIC_RELAY_METHOD_GET_STATE,
+      params: {},
     });
+    if (!isDiagnosticInstanceView(current)) throw new Error("表示用 DTO の形状が不正である。");
+    expect(current.stats).toEqual({ diagnosticEcho: 1, diagnosticPing: 0 });
   } finally {
-    unsubscribe();
+    endpoint.dispose();
   }
+});
+
+test("診断はallowlist外（text）の候補を選ばない", async () => {
+  const backend = await startBackend();
+  backend.enableAcceptance();
+  const pairing = await receivePairing(backend);
+  expect(backend.approvePairing({ requestId: pairing.requestId }).status).toBe("APPROVED");
+  const provider = await pairing.sessionProvider;
+  providers.push(provider);
+  await provider.tryCreateSession({
+    sessionId: TEXT_SESSION_ID,
+    kind: "reliable",
+    direction: "bidirectional",
+  });
+  await waitForArrival(() => backend.getSnapshot().sessions.length === 1, "生存セッションの公開");
+  const target = backend.getSnapshot().sessions[0];
+  if (target === undefined) throw new Error("生存セッションが無い。");
+  expect(() =>
+    backend.assignPlugin({
+      pluginKind: "diagnostic",
+      localSessionId: target.localSessionId,
+    }),
+  ).toThrowError(RangeError);
+  void DIAGNOSTIC_PING_SESSION_ID;
 });

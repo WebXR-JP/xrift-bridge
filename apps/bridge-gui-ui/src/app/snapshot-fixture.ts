@@ -25,6 +25,7 @@ export function makeSnapshot(overrides?: Partial<ManagementSnapshot>): Managemen
     plugins: { kinds: [], instances: [], assignments: [] },
     pluginMounts: [],
     pluginMountFailures: [],
+    pluginView: { instanceId: null, viewGeneration: 0 },
     pluginNavigationRules: buildPluginNavigationRules([
       "views://plugin-text/index.html",
       "views://plugin-diagnostic/index.html",
