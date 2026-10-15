@@ -1,93 +1,177 @@
 /**
- * プラグイン子画面用の個体別 RPC の共有契約。
+ * 実プラグイン子画面用の中継契約。
  *
- * 管理画面と main が交換する管理 RPC（`management.ts`）とは別の型・別の接続・
- * 別のハンドラで使う。子画面は自分のインスタンスの限定情報と操作だけを使え、
- * 受付・保留・照合・承認・接続断・割当て／解除・インスタンス管理・終了といった
- * 管理操作、他個体の情報、候補一覧、保留情報はここに載せない。
- * 子から任意の `instanceId`／`localSessionId` を受け取って振り分ける口は持たず、
- * main が束縛した個体の現割当てだけを使う。実行時の依存を持たない。
+ * 子画面とプラグイン本体は、起動時の静的登録で決めた不透明な契約でだけ
+ * 通信する。アプリ本体は中継だけを担い、要求・通知の中身を解釈しない。
+ * 管理画面と main が交換する管理 RPC（`management.ts`）とは別の型・別の接続で
+ * 使い、マウントごとに独立した接続を結ぶ。全個体を呼び分ける共有
+ * dispatcher は作らない。要求相関・応答待ちは既存 Electrobun RPC を使い、
+ * 独自 RPC 基盤を追加しない。
  *
- * 種別ごとの固有契約（限定表示・snapshot・通知・RPC 型・相対 entrypoint）は各
- * プラグインパッケージが所有する（`bridge-plugin-text/gui-contract`・`bridge-plugin-diagnostic/gui-contract`）。
- * ここには全 companion で共通の手段だけを置く。
+ * 業務上の型・要求名・イベント名・実行時検証は各プラグインの
+ * `gui-contract` と endpoint が所有する。アプリは外形（`method`・`event` が
+ * 空でない文字列であること）だけを見て内容検査をしない。
+ * 実行時の依存を持たない。
  *
  * @packageDocumentation
  */
 
 /**
- * 束縛個体の共通表示。自分の識別情報・接続口・現割当てだけを持つ。
+ * 子からプラグイン本体への中継要求の共通形。
  *
- * 他個体の情報・候補一覧・保留情報は載せない。失効時は要求自体を拒否し、
- * 未割当ての表示は作らない。
+ * `params` はアプリでは `unknown` であり、検証は受け取った endpoint が行う。
+ * 対象個体・種別の指定は載せない。配送先は接続に閉じ込めたマウントから
+ * ホストが引き、payload の内容では変えない。
  */
-export interface InstanceBaseView {
-  /** 束縛されたインスタンスの識別子。再利用しない。 */
-  readonly instanceId: string;
-  /** 由来プラグインの識別子。 */
-  readonly pluginId: string;
-  /** 束縛された接続口の識別子。 */
-  readonly portId: string;
-  /** 現割当ての生存セッションのローカル識別子。 */
-  readonly localSessionId: string;
+export interface PluginRelayRequest {
+  /** 要求名。空でない文字列であること。業務名の解釈は endpoint が行う。 */
+  readonly method: string;
+  /** 要求引数。アプリでは不透明であり、検証は endpoint が行う。 */
+  readonly params: unknown;
 }
 
 /**
- * 受信した個体別表示を採用すべきか判定し、採用すべきものだけを返す。
+ * プラグイン本体から子への通知の共通形。
  *
- * 管理画面の `selectNewer` と同じ規約であり、単調増加の revision が
- * 新しいときだけ採用する。古い応答や再送、同一 revision の再取得では
- * 現在の状態を保ち、巻き戻さない。
- *
- * @param current - 現在採用中の表示状態。未取得の場合は null。
- * @param incoming - 受信した表示状態。
- * @returns 採用すべき表示状態。
+ * `payload` はアプリでは `unknown` であり、表示用 DTO の組立ては
+ * プラグイン所有の GUI アダプターが行う。アプリは同一マウント生存時のみ
+ * 素通しし、キュー・再配信・最新状態キャッシュを持たない。
  */
-export function selectNewerInstanceSnapshot<T extends { readonly revision: number }>(
-  current: T | null,
-  incoming: T,
-): T {
-  if (current === null || incoming.revision > current.revision) {
-    return incoming;
+export interface PluginRelayEvent {
+  /** イベント名。空でない文字列であること。業務名の解釈は子が行う。 */
+  readonly event: string;
+  /** 通知内容。アプリでは不透明であり、素通しする。 */
+  readonly payload: unknown;
+}
+
+/**
+ * 中継自体の失敗符号。アプリ自身の照合結果だけを表す。
+ *
+ * 業務の成否はプラグインの結果（不透明な応答値）として返し、この符号には
+ * 載せない。プラグイン endpoint が投げた `RangeError` を失効と解釈しない。
+ */
+export type PluginRelayErrorCode =
+  /** マウント失効後の到達。要求・emit の到達停止後の利用である。 */
+  | "unmounted"
+  /** endpoint 終了後の到達。終了口の実行後である。 */
+  | "endpoint-closed"
+  /** 外形の破損（`method` が空でない文字列でない等）。内容の検証ではない。 */
+  | "bad-envelope";
+
+/**
+ * 中継自体の失敗。アプリ自身の照合で付け、業務内容は載せない。
+ */
+export interface PluginRelayError {
+  /** 失敗の符号。アプリ自身の照合結果である。 */
+  readonly code: PluginRelayErrorCode;
+  /** 人間向けの短い理由。本文・payload は含めない。 */
+  readonly message: string;
+}
+
+/**
+ * 中継要求への応答。不透明な値または中継自体の失敗のいずれかである。
+ *
+ * 正常応答の `value` はアプリでは不透明であり、業務エラーもここに載せる
+ * （プラグインの結果として扱う）。`error` はアプリ自身の照合結果だけに使う。
+ */
+export type PluginRelayResult =
+  | {
+      /** 正常に応答できた場合に真。業務エラーもこちらに載せる。 */
+      readonly ok: true;
+      /** プラグイン endpoint が返した不透明な値。 */
+      readonly value: unknown;
+    }
+  | {
+      /** 中継自体が失敗した場合に偽。 */
+      readonly ok: false;
+      /** アプリ自身の照合による失敗。業務内容は含めない。 */
+      readonly error: PluginRelayError;
+    };
+
+// ADR: Electrobun の `RPCSchema<I>` は `{requests, messages}` に解決される
+// 構造型であり、`ElectrobunRPCSchema` 制約も構造適合で満たせる。そのため
+// 契約ではこの素朴な構造型で表し、`electrobun/rpc` を import しない。
+type RpcSchema<Requests, Messages> = {
+  requests: Requests;
+  messages: Messages;
+};
+
+/**
+ * マウントごとの中継接続の型。固定の中継要求一つ＋中継通知一つだけを持つ。
+ *
+ * 子は `relay` だけを呼べ、アプリ本体への専用 ready・ping・状態取得口は
+ * 持たない。ホストは結線時に束縛した個体の endpoint へ素通しし、文字列で
+ * 配送先を選ぶ口は作らない。main・子画面の両方から参照する。
+ */
+export type CompanionChannelRpc = {
+  bun: RpcSchema<
+    {
+      /** 子からプラグイン本体への中継要求。応答は不透明な値か中継失敗である。 */
+      relay: { params: PluginRelayRequest; response: PluginRelayResult };
+    },
+    // eslint-disable-next-line @typescript-eslint/no-empty-object-type
+    {}
+  >;
+  webview: RpcSchema<
+    // eslint-disable-next-line @typescript-eslint/no-empty-object-type
+    {},
+    {
+      /** プラグイン本体から子への通知。同一マウント生存時のみ届ける。 */
+      emitted: PluginRelayEvent;
+    }
+  >;
+};
+
+/**
+ * 中継要求の外形か判定する。アプリの受付で使う前段であり、内容の検証は
+ * endpoint が行う。`params` の中身は問わない。
+ *
+ * @param value - 検査する未知値。
+ * @returns `method` が空でない文字列で `params` 項目を持つ場合に真。
+ */
+export function isRelayRequestShape(value: unknown): value is PluginRelayRequest {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
   }
-  return current;
+  const table = value as Record<string, unknown>;
+  return typeof table["method"] === "string" && table["method"].length > 0 && "params" in table;
+}
+
+/**
+ * 通知の外形か判定する。アプリの素通し前段であり、内容の検証は子が行う。
+ * `payload` の中身は問わない。
+ *
+ * @param value - 検査する未知値。
+ * @returns `event` が空でない文字列で `payload` 項目を持つ場合に真。
+ */
+export function isRelayEventShape(value: unknown): value is PluginRelayEvent {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const table = value as Record<string, unknown>;
+  return typeof table["event"] === "string" && table["event"].length > 0 && "payload" in table;
 }
 
 /**
  * 実プラグイン子画面の配置・表示契約。
  *
- * マウント識別子は `plugin-<種別>-<連番>` の名前空間を使い、
- * 子画面は自分の束縛個体の
- * 限定情報と操作だけを使い、受付・保留・照合・承認・接続断・割当て／解除・
- * インスタンス管理・終了といった管理操作、他個体の情報、候補一覧、
- * 保留情報はここに載せない。実行時の依存を持たない。
+ * 割当てだけでは子を作らず、操作画面への表示要求があるときに選ばれた
+ * 一個体の子を新規生成する。マウント識別子は権限証明ではなく、main が
+ * 発行した初期 URL 完全一致＋親 Webview 一致で照合する。
+ * 実行時の依存を持たない。
  */
 
 /** 実プラグイン子画面の配置先（空ページ）。初期配置先であり、検証内容は持たない。 */
 export const PLUGIN_BLANK_PATH = "views://plugin-host/blank.html";
 
 /**
- * 配置から起算する待機の総予算（ミリ秒）。
+ * 配置受付から最初の正常な plugin 応答までの総予算（ミリ秒）。
  *
- * 生成待ちと準備完了待ちで分けず、配置を受け付けてからこの時間を過ぎても
- * 準備完了に至らなければ回収して失敗表示に回す。自動で作り直さず、
- * 再生成は明示の再試行に任せる。
+ * 要求到達だけでは plugin の停まりを見逃すため、正常応答の到達を期限と
+ * する。子が採用したこと・描画・業務準備完了の証明ではない。期限超過は
+ * 回収して失敗表示に回し、自動で作り直さない。再生成は明示の再試行に任せる。
  */
 export const PLUGIN_PENDING_TIMEOUT_MS = 15_000;
-
-/**
- * 子画面の初回取得の試行回数。
- *
- * 初回同期の到達保証であり、RPC の既定待機での取りこぼし
- * （子画面側の接続確立・主処理の混雑）に備えて bounded に再試行する。
- * 使い果たしたら子画面に残し、main 側の準備完了待ちの期限超過に任せる。
- */
-export const PLUGIN_INITIAL_FETCH_ATTEMPTS = 3;
-
-/**
- * 子画面の初回取得の再試行間隔（ミリ秒）。
- */
-export const PLUGIN_INITIAL_FETCH_RETRY_MS = 1_000;
 
 /** 実プラグイン子画面の種別。main の静的登録表にある companion の種別トークンである。 */
 export type PluginUiMountKind = string;
@@ -101,11 +185,12 @@ export type PluginUiMountPhase =
 
 /**
  * 管理画面へ渡す配置用 DTO。マウント識別子・種別・初期 URL・結線状態と
- * 対象インスタンス／割当ての要約の組である。
+ * 対象インスタンス／割当ての要約・表示期間の世代の組である。
  *
  * 初期 URL は main の静的登録表（空ページ＋識別子の断片）から作り、
  * 画面は申告せずそのまま `src` 属性に載せる。任意 URL・HTML・preload の
- * 指定口は持たない。本文は含めない。
+ * 指定口は持たない。本文は含めない。プラグイン状態の改訂番号は載せない
+ * （改訂の所有者はプラグイン本体であり、子は新しい状態のみ採用する）。
  */
 export interface PluginUiMountPlacement {
   /** 再利用しないマウント識別子。`plugin-<種別>-<連番>` の形である。 */
@@ -116,10 +201,15 @@ export interface PluginUiMountPlacement {
   readonly initialUrl: string;
   /** 結線段階。 */
   readonly phase: PluginUiMountPhase;
-  /** 子画面の初期状態取得を受けた場合に真。 */
-  readonly ready: boolean;
-  /** 対応付け単位の改訂番号。push ごとに進む。 */
-  readonly revision: number;
+  /**
+   * 表示期間を識別する世代。表示要求の世代を写す。
+   *
+   * 古い世代の配置では子を復活させない。同一表示期間の再試行は世代を
+   * 維持し、画面を離れての再表示は新しい世代・新しい mountId で読み直す。
+   */
+  readonly viewGeneration: number;
+  /** plugin の最初の正常応答を受けた場合に真。受付・要求到達とは区別する。 */
+  readonly pluginResponded: boolean;
   /** 束縛した実インスタンスの識別子。再利用しない。 */
   readonly instanceId: string;
   /** 現割当ての生存セッションのローカル識別子。 */
@@ -129,7 +219,7 @@ export interface PluginUiMountPlacement {
 }
 
 /**
- * 実プラグイン子画面の失敗表示。生成・読込み・初期 RPC の失敗と期限超過を
+ * 実プラグイン子画面の失敗表示。生成・読込み・中継の失敗と期限超過を
  * そのマウントに局所化するための情報であり、インスタンスや Session の
  * 状態、送信本文は含めない。
  */
@@ -142,6 +232,90 @@ export interface PluginUiMountFailure {
   readonly instanceId: string | null;
   /** 対象だった割当てのローカル識別子。特定できない場合は `null`。 */
   readonly localSessionId: string | null;
+  /**
+   * 対象だった表示期間の世代。特定できない場合は `null`。
+   *
+   * 古い世代の失敗表示では子を復活させない。
+   */
+  readonly viewGeneration: number | null;
+}
+
+/**
+ * Angular から main への表示要求。表示対象一個体または無しを伝える。
+ *
+ * 管理画面の配置制御であり、子とアプリ本体の直接のデータ交換ではない。
+ * 世代は表示期間の識別であり、業務の改訂番号とは別物である。子 payload
+ * にはこの世代を要求しない。
+ */
+export interface PluginViewRequest {
+  /** 表示する実インスタンスの識別子。無しの場合は `null`。 */
+  readonly instanceId: string | null;
+  /**
+   * 表示期間を識別する世代。単調増加であり、画面を離れての再表示では
+   * 新しい値を使う。同一表示期間の再試行は値を維持する。
+   */
+  readonly viewGeneration: number;
+}
+
+/**
+ * 表示要求の外形か判定する。受付の前段であり、個体の存在・割当ての確認は
+ * main が行う。
+ *
+ * @param value - 検査する未知値。
+ * @returns 世代が有限の非負整数で対象が識別子または無しの場合に真。
+ */
+export function isPluginViewRequest(value: unknown): value is PluginViewRequest {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const table = value as Record<string, unknown>;
+  const instanceId = table["instanceId"];
+  const viewGeneration = table["viewGeneration"];
+  const idOk = instanceId === null || (typeof instanceId === "string" && instanceId.length > 0);
+  const generationOk =
+    typeof viewGeneration === "number" && Number.isInteger(viewGeneration) && viewGeneration >= 0;
+  return idOk && generationOk;
+}
+
+/**
+ * 初期応答の状態。配置受付から最初の正常な plugin 応答までの見立てである。
+ *
+ * 子が採用したこと・描画・業務準備完了の証明ではなく、期限管理と代替表示の
+ * ための区分である。
+ */
+export type PluginMountFirstResponse =
+  /** 正常応答待ち。配置はあるが応答・失敗のいずれも未確定である。 */
+  | "waiting"
+  /** 最初の正常な plugin 応答を受けた。 */
+  | "answered"
+  /** 回収済み。対応する失敗表示がある。 */
+  | "failed";
+
+/**
+ * 配置の初期応答の状態を求める。
+ *
+ * 同一世代の失敗表示がある場合は `failed`、配置が最初の正常応答を
+ * 受けていれば `answered`、いずれでもなければ `waiting` とする。
+ * 古い世代の失敗表示では `failed` にしない。
+ *
+ * @param mount - 判定する配置。
+ * @param failures - 現在の失敗表示の一覧。
+ * @returns 初期応答の状態。
+ */
+export function firstResponseOf(
+  mount: PluginUiMountPlacement,
+  failures: readonly PluginUiMountFailure[],
+): PluginMountFirstResponse {
+  if (mount.pluginResponded) {
+    return "answered";
+  }
+  const failed = failures.some(
+    (failure) =>
+      failure.viewGeneration !== null &&
+      failure.viewGeneration === mount.viewGeneration &&
+      (failure.instanceId === null || failure.instanceId === mount.instanceId),
+  );
+  return failed ? "failed" : "waiting";
 }
 
 /**

@@ -1,80 +1,102 @@
 /**
  * 登録単位・registrar の公開型。
  *
- * ③b の登録フロー（registrar 注入・composition root）の口の型を置く。
- * `GuiPluginRegistration` が1件分の登録単位であり、`GuiPluginRegistrar` が
- * backend へ注入する登録関数の受け口である。実装（`PluginInstanceManager`・
- * `PluginCompanionRegistry` 本体）はホストが所有し、ここには置かない。
+ * 登録単位は管理記述子・companion 宣言・endpoint 工場の三つの組であり、
+ * 起動時の静的登録で endpoint 工場を登録し、マウント時に個体へ束縛した
+ * endpoint を生成する。実装（管理層・登録表本体）はホストが所有し、
+ * ここには置かない。
  *
  * @packageDocumentation
  */
-import type { InstanceBaseView } from "bridge-gui-contract/plugin-instance";
-import type { GuiPluginAccess, GuiPluginManagementDescriptor } from "./management.ts";
-import type { PluginCompanion } from "./companion.ts";
+import type { BoundPluginRef, GuiPluginManagementDescriptor } from "./management.ts";
+import type {
+  PluginCompanionDeclaration,
+  PluginEmissionPort,
+  PluginEndpoint,
+  PluginEndpointFactory,
+} from "./companion.ts";
 
 /**
- * プラグイン1件分の登録単位。管理記述子と companion 組み立ての組である。
+ * プラグイン1件分の登録単位。管理記述子・companion 宣言・endpoint 工場の組である。
  *
- * companion は backend を capture した factory で作り、backend を引数で
- * 受け取らない。共有の具象 companion インスタンス・既定引数・共有 singleton
- * は持たない。
+ * companion 宣言は表示名と相対 entry だけを持ち、解決済み view パスは
+ * 持たない。endpoint 工場は backend を capture せず、引数の限定口だけを
+ * 使う。共有の具象 endpoint インスタンス・既定引数・共有 singleton は
+ * 持たない。型消去は endpoint 工場の閉包内に限定する。
  *
  * @typeParam S - 状態の型。
  * @typeParam O - プラグイン固有の操作口の型。
- * @typeParam V - 限定表示の型。
- * @typeParam A - 公開する固有操作の構築結果の型。
  */
-export interface GuiPluginRegistration<S, O, V extends InstanceBaseView, A> {
-  /** 生成元・割当て方針・監視方式・表示射影・固有操作の宣言。 */
-  readonly management: GuiPluginManagementDescriptor<S, O, V, A>;
+export interface GuiPluginRegistration<S, O> {
+  /** 生成元・割当て方針の宣言。 */
+  readonly management: GuiPluginManagementDescriptor<S, O>;
+  /** 表示名・相対 entry の宣言。 */
+  readonly companion: PluginCompanionDeclaration;
   /**
-   * companion を組み立てる。管理層が返す種別の公開参照口を capture する。
+   * 束縛個体用の endpoint を組み立てる。
    *
-   * @param access - 管理層が返す種別の公開参照口。
-   * @returns 登録する companion の記述子。
+   * @param ref - ホストが選んだ一個体に限定した参照口。
+   * @param emission - その表示期間の子にだけ送る口。
+   * @returns 束縛個体用の endpoint。
    */
-  readonly createCompanion: (access: GuiPluginAccess<V, A>) => PluginCompanion;
+  readonly createEndpoint: PluginEndpointFactory<S, O>;
 }
 
 /**
- * 管理層への記述子登録口の最小面。③b の registrar 注入で使う。
+ * 管理層への記述子登録口の最小面。registrar 注入で使う。
  */
 export interface GuiPluginManagementRegistrar {
   /**
-   * 管理記述子を登録し、種別ごとの公開参照口を返す。
+   * 管理記述子を登録する。
    *
    * @typeParam S - 状態の型。
    * @typeParam O - プラグイン固有の操作口の型。
-   * @typeParam V - 限定表示の型。
-   * @typeParam A - 公開する固有操作の構築結果の型。
    * @param descriptor - companion が宣言する管理記述子。
-   * @returns 種別の公開参照口。表示型・操作型を保つ。
+   * @throws 記述子の重複・形式外の場合。そのまま投げる。
    */
-  register<S, O, V extends InstanceBaseView, A>(
-    descriptor: GuiPluginManagementDescriptor<S, O, V, A>,
-  ): GuiPluginAccess<V, A>;
+  register<S, O>(descriptor: GuiPluginManagementDescriptor<S, O>): void;
 }
 
 /**
- * companion 登録表への登録口の最小面。③b の registrar 注入で使う。
+ * companion 登録表への登録口の最小面。registrar 注入で使う。
  */
 export interface GuiPluginCompanionRegistrar {
   /**
-   * companion を登録する。
+   * companion 宣言を登録する。view パスの解決はホストが行う。
    *
-   * @param companion - 登録する companion の記述子。
+   * @param declaration - 登録する companion の宣言。
+   * @throws 宣言の重複・形式外の場合。そのまま投げる。
    */
-  register(companion: PluginCompanion): void;
+  register(declaration: PluginCompanionDeclaration): void;
+}
+
+/**
+ * endpoint 工場の登録口の最小面。registrar 注入で使う。
+ */
+export interface GuiPluginEndpointRegistrar {
+  /**
+   * endpoint 工場を登録する。マウント時に個体へ束縛した endpoint を生成する。
+   *
+   * @typeParam S - 状態の型。
+   * @typeParam O - プラグイン固有の操作口の型。
+   * @param kind - companion の種別トークン。記述子・宣言と一致すること。
+   * @param factory - 束縛個体用の endpoint 工場。
+   * @throws 種別不一致・重複の場合。そのまま投げる。
+   */
+  register<S, O>(
+    kind: string,
+    factory: (ref: BoundPluginRef<S, O>, emission: PluginEmissionPort) => PluginEndpoint,
+  ): void;
 }
 
 /**
  * backend へ注入する登録関数の受け口。生 backend・管理層全体ではなく、
  * 登録に要る口だけを持つ。
  *
- * 1件の `registerPlugin` 呼び出しが「管理記述子を登録して公開参照口を得る」
- * と「その参照口を受ける companion factory を登録する」の両方を行い、
- * 記述子の種別と companion の種別の一致は呼び出し側（backend）が検査する。
- * 共有の具象 companion インスタンス・既定引数・共有 singleton は持たない。
+ * 1件の `registerPlugin` 呼び出しが「管理記述子・companion 宣言・endpoint
+ * 工場」の三つを登録する。記述子・宣言・工場の種別の一致は呼び出し側
+ * （backend）が検査する。共有の具象 endpoint インスタンス・既定引数・
+ * 共有 singleton は持たない。
  */
 export interface GuiPluginRegistrar {
   /**
@@ -82,19 +104,15 @@ export interface GuiPluginRegistrar {
    *
    * @typeParam S - 状態の型。
    * @typeParam O - プラグイン固有の操作口の型。
-   * @typeParam V - 限定表示の型。
-   * @typeParam A - 公開する固有操作の構築結果の型。
-   * @param registration - 管理記述子と companion 組み立ての組。
+   * @param registration - 管理記述子・companion 宣言・endpoint 工場の組。
    * @throws 記述子の重複・形式外・種別不一致の場合。そのまま投げる。
    */
-  registerPlugin<S, O, V extends InstanceBaseView, A>(
-    registration: GuiPluginRegistration<S, O, V, A>,
-  ): void;
+  registerPlugin<S, O>(registration: GuiPluginRegistration<S, O>): void;
 }
 
 /**
  * プラグインの登録関数。同梱の選択と登録順の宣言であり、登録済み
  * インスタンスや registry singleton を持たない。呼ぶたびに新しい
- * companion・公開参照口を作るため、複数 backend で使い回せる。
+ * 記述子・宣言・工場閉包を作るため、複数 backend で使い回せる。
  */
 export type GuiPluginRegisterFunction = (registrar: GuiPluginRegistrar) => void;

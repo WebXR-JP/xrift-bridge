@@ -43,6 +43,7 @@ export const DEV_OPS = [
   "assignPlugin",
   "unassignPlugin",
   "retryPluginMount",
+  "setPluginView",
 ] as const;
 
 /** 開発接続口で呼び出せる操作名。 */
@@ -335,7 +336,8 @@ export function summarizeBusinessResult(op: DevOpName, result: unknown): DevBusi
       };
     }
     case "disconnectConnection":
-    case "retryPluginMount": {
+    case "retryPluginMount":
+    case "setPluginView": {
       return { kind: "ack" };
     }
     case "assignPlugin": {

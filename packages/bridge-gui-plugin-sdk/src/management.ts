@@ -1,27 +1,21 @@
 /**
  * プラグイン実装者が参照する管理記述子の公開契約。
  *
- * ホスト汎用管理層が駆動する記述子・候補 DTO・公開参照口・監視方式の
- * 型だけを置く。具体の送受信・表示内容は companion が宣言する記述子が
- * 駆動し、この層に種別分岐と汎用の任意 payload ディスパッチ表は持たない。
+ * ホスト汎用管理層が駆動する記述子・候補 DTO・束縛個体限定の参照口の
+ * 型だけを置く。表示内容の射影・監視方式・固有操作の汎用表は持たない。
+ * 状態の解釈・表示用 DTO の組立て・変化の購読はプラグイン本体側の
+ * endpoint factory と GUI アダプターが行い、ホストは関与しない。
  *
  * ホスト内部の実装依存口（`PluginInstanceManager` 実装・
  * `PluginManagerSessions`・`PluginManagerClock`・
  * `PluginInstanceManagerDependencies`・`PluginManagerIssue`・
  * `PluginReleaseResult` 等）はここに置かない。具象プラグインの import・
  * 既定登録の副作用・Electrobun/Bun/Node 実体・ホストソースパス参照を
- * 持たず、`bridge-app-core/core` と `bridge-gui-contract/plugin-instance`
- * の型だけを参照する。
+ * 持たず、`bridge-app-core/core` の型だけを参照する。
  *
  * @packageDocumentation
  */
-import type {
-  AssignmentInfo,
-  PluginDefinition,
-  PluginInstanceHandle,
-  SessionCapability,
-} from "bridge-app-core/core";
-import type { InstanceBaseView } from "bridge-gui-contract/plugin-instance";
+import type { AssignmentInfo, PluginDefinition, SessionCapability } from "bridge-app-core/core";
 
 /**
  * 個体の束縛情報。所有の公開形であり、種別・由来・割当ての三識別子を持つ。
@@ -130,141 +124,68 @@ export interface PluginAssignmentPolicy {
   }): PluginAssignmentTarget;
 }
 
-/** 購読・周期監視の解除口。 */
-export type Stop = () => void;
-
 /**
- * 個体の監視方式。companion が宣言する。
+ * ホストが選んだ一個体に限定した参照口。endpoint 工場へ渡す。
  *
- * - `none`: 監視しない。
- * - `subscribe`: 個体の変化通知に載る。`start` は成功で解除口を返し、
- *   失敗なら登録資源を残さず throw する。
- * - `poll`: 周期的に指紋を比べて変化を検出する。初回値は開始時に取得し、
- *   失敗は割当て失敗として補償する。確定後の取得失敗は個体を解除せず
- *   問題報告に留め、次周期へ進む。
+ * 状態を読む・その個体の操作口を利用する・束縛メタデータを読む、の三つだけ
+ * を持つ。対象識別子を引数に取る到達口・管理 backend・全個体一覧は渡さない。
+ * 各利用時に所有段階・現割当てを照合する。変化の購読は本体が公開する手段
+ * （操作口・状態が運ぶ購読口など）をアダプターが直接使い、ホストは関与しない。
  *
- * @typeParam S - 状態の型。
+ * 型消去は endpoint 工場の閉包内に限定し、ホストは状態の型・内容を解釈しない。
+ *
+ * @typeParam S - プラグイン本体の状態の型。
  * @typeParam O - プラグイン固有の操作口の型。
  */
-export type GuiPluginObservation<S, O> =
-  | { readonly mode: "none" }
-  | {
-      readonly mode: "subscribe";
-      /**
-       * 変化通知の購読を始める。
-       *
-       * 開始時の同期 callback では未確定個体を公開しないよう、呼び出し側は
-       * 確定前の通知を捨てる。失敗なら登録資源を残さず throw すること。
-       *
-       * @param handle - 監視対象の個体参照。
-       * @param changed - 状態が変わったときの通知。例外を投げないこと。
-       * @returns 購読解除口。
-       */
-      start(handle: PluginInstanceHandle<S, O>, changed: () => void): Stop;
-    }
-  | {
-      readonly mode: "poll";
-      /** 指紋照合の間隔（ミリ秒）。正の有限値であること。 */
-      readonly intervalMs: number;
-      /**
-       * 状態の指紋を作る。等しければ通知しない。
-       *
-       * @param state - 個体の現在状態。
-       * @returns 変化検出用の指紋文字列。
-       */
-      fingerprint(state: S): string;
-    };
-
-/**
- * プラグイン固有操作への限定到達口。main 側アダプターだけが使う。
- *
- * raw operations を保存せず、利用の都度この口を通す。操作名から任意
- * payload への汎用ディスパッチ表は作らない。操作口不足は `TypeError`、
- * 不明・種別外・失効は `RangeError` で示す。
- *
- * @typeParam O - プラグイン固有の操作口の型。
- */
-export interface PluginOperationAccess<O> {
+export interface BoundPluginRef<S, O> {
+  /**
+   * 束縛メタデータを読む。
+   *
+   * @returns ホストが選んだ個体の束縛情報。
+   * @throws `RangeError` — 所有外・失効・現割当て不一致の場合（ホスト自身の照合）。
+   */
+  getBinding(): PluginBindingInfo;
+  /**
+   * 個体の現在状態を読む。読み取りは改訂を進めない。
+   *
+   * 改訂番号の所有者はプラグイン本体であり、状態変更時に進める。
+   * GUI アダプターは引き継ぐだけで、子は新しい状態のみ採用する。
+   *
+   * @returns 表示に使える現在の状態の写し。
+   * @throws `RangeError` — 所有外・失効・現割当て不一致の場合（ホスト自身の照合）。
+   */
+  readState(): S;
   /**
    * 所有中・確定済み・現割当て一致の個体の操作口を使う。
    *
-   * @param instanceId - 操作対象の個体識別子。
+   * raw operations を保存せず、利用の都度この口を通す。操作名から任意
+   * payload への汎用ディスパッチ表は作らず、反射的呼出しはしない。
+   *
    * @param use - 操作口と束縛情報を使う処理。
    * @returns `use` の戻り値。
    * @throws `TypeError` — 個体が操作口を提供しない場合。
-   * @throws `RangeError` — 不明・種別外・失効・現割当て不一致の場合。
+   * @throws `RangeError` — 所有外・失効・現割当て不一致の場合（ホスト自身の照合）。
    */
-  withOperations<R>(instanceId: string, use: (operations: O, binding: PluginBindingInfo) => R): R;
+  withOperations<R>(use: (operations: O, binding: PluginBindingInfo) => R): R;
 }
 
 /**
- * companion が宣言する管理記述子。生成元・割当て方針・監視方式・表示射影・
- * 固有操作の構築を束ね、manager はこれに従って駆動する。
+ * companion が宣言する管理記述子。生成元・割当て方針だけを束ね、manager は
+ * これに従って駆動する。
+ *
+ * 表示内容の射影・監視方式・固有操作の汎用表は持たない。状態の解釈と通知は
+ * endpoint 工場が組み立てる GUI アダプターの責務である。
  *
  * @typeParam S - 状態の型。
  * @typeParam O - プラグイン固有の操作口の型。
- * @typeParam V - 限定表示の型。
- * @typeParam A - 公開する固有操作の構築結果の型。
  */
-export interface GuiPluginManagementDescriptor<S, O, V extends InstanceBaseView, A> {
+export interface GuiPluginManagementDescriptor<S, O> {
   /** companion の種別トークン。小文字始まりの英数字であること。 */
   readonly kind: string;
   /** 個体の生成元。 */
   readonly definition: PluginDefinition<S, O>;
-  /** 割当て方針。 */
+  /** 割当て方針（選択関数と上限）。 */
   readonly assignment: PluginAssignmentPolicy;
-  /** 監視方式。 */
-  readonly observation: GuiPluginObservation<S, O>;
-  /**
-   * 限定表示を作る。他個体・管理情報は載せない。
-   *
-   * @param input - 束縛情報と個体の現在状態。
-   * @returns 子画面へ渡せる限定表示。
-   */
-  projectView(input: { readonly binding: PluginBindingInfo; readonly state: S }): V;
-  /**
-   * 公開する固有操作を組み立てる。到達は受け取った限定口だけを使う。
-   *
-   * @param access - プラグイン固有操作への限定到達口。
-   * @returns 公開する固有操作。
-   */
-  buildOperations(access: PluginOperationAccess<O>): A;
-}
-
-/**
- * 種別ごとの公開参照口。`register` の戻り値で表示型・操作型を保持し、
- * 呼び側が型引数を主張する口は作らない。
- *
- * @typeParam V - 限定表示の型。
- * @typeParam A - 公開する固有操作の型。
- */
-export interface GuiPluginAccess<V extends InstanceBaseView, A> {
-  /** companion の種別トークン。 */
-  readonly kind: string;
-  /**
-   * 確定済みで現割当て一致の束縛だけを返す。
-   *
-   * @returns 束縛情報の一覧。
-   */
-  listBindings(): readonly PluginBindingInfo[];
-  /**
-   * 束縛を1件返す。所有中・確定済み・現割当て一致でなければ拒否する。
-   *
-   * @param instanceId - 照合する個体識別子。
-   * @returns 束縛情報。
-   * @throws `RangeError` — 不明・種別外・失効・現割当て不一致の場合。
-   */
-  requireBinding(instanceId: string): PluginBindingInfo;
-  /**
-   * 限定表示を読む。読み取りに回収の副作用を付けない。
-   *
-   * @param instanceId - 照合する個体識別子。
-   * @returns 子画面へ渡せる限定表示。
-   * @throws `RangeError` — 不明・種別外・失効・現割当て不一致の場合。
-   */
-  readView(instanceId: string): V;
-  /** 記述子が組み立てた固有操作。 */
-  readonly operations: A;
 }
 
 /**

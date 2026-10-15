@@ -48,6 +48,7 @@ test("許可操作は固定一覧に載るものだけである", () => {
   expect(isDevOpName("assignPlugin")).toBe(true);
   expect(isDevOpName("unassignPlugin")).toBe(true);
   expect(isDevOpName("retryPluginMount")).toBe(true);
+  expect(isDevOpName("setPluginView")).toBe(true);
 });
 
 test("終了・旧管理操作・任意名は許可操作に含めない", () => {
@@ -175,6 +176,7 @@ test("業務要約に秘密（本文・payload）が載らない", () => {
       portId: "diagnostic",
     }),
     summarizeBusinessResult("retryPluginMount", { ok: true, text: secret }),
+    summarizeBusinessResult("setPluginView", { ok: true, text: secret }),
   ] as const;
   for (const summary of cases) {
     expect(JSON.stringify(summary)).not.toContain(secret);

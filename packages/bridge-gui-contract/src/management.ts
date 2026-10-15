@@ -12,7 +12,11 @@ import type {
   ConnectionPhase,
   RejectionResult,
 } from "bridge-server";
-import type { PluginUiMountFailure, PluginUiMountPlacement } from "./plugin-instance.ts";
+import type {
+  PluginUiMountFailure,
+  PluginUiMountPlacement,
+  PluginViewRequest,
+} from "./plugin-instance.ts";
 
 /** GUI バックエンドの起動状態。 */
 export type BackendStatus =
@@ -240,6 +244,14 @@ export interface ManagementSnapshot {
    * 作り直さない。許可範囲は空ページ＋登録済み全プラグイン scope である。
    */
   readonly pluginNavigationRules: readonly string[];
+  /**
+   * 現在の表示要求（表示対象一個体または無し＋表示期間の世代）。
+   *
+   * 管理画面はこの世代だけを正とし、古い世代の配置・応答・失敗表示では
+   * 子を復活させない。管理画面遷移で世代を失効させる。業務の改訂番号とは
+   * 別物であり、子 payload には載せない。
+   */
+  readonly pluginView: PluginViewRequest;
 }
 
 /** main→Webview の状態通知。最新の全状態を送る唯一の通知である。 */
@@ -404,16 +416,24 @@ export type ManagementRpc = {
        *
        * 指定した実インスタンスの失敗表示だけを消し、その個体が現割当てに
        * あれば配置を作り直す。他個体の失敗・既存の配置・割当て・送信には
-       * 触らない。受付であり準備完了を保証しない。
+       * 触らない。受付であり準備完了を保証しない。同一表示期間の再試行は
+       * 世代を維持し、自動ループはしない。
        */
       retryPluginMount: { params: { instanceId: string }; response: OperationAck };
+      /**
+       * 実プラグイン子画面の表示要求。表示対象一個体または無しを伝える。
+       *
+       * 管理画面の配置制御であり、子とアプリ本体の直接のデータ交換では
+       * ない。世代は表示期間の識別であり、業務の改訂番号とは別物である。
+       * 受付であり、古い世代は snapshot への反映を行わない。画面は
+       * snapshot の `pluginView` の世代だけを正とする。管理画面遷移では
+       * 無し・新しい世代を送り、旧世代を失効させる。
+       */
+      setPluginView: { params: PluginViewRequest; response: OperationAck };
       /** アプリ終了を要求する。後始末完了後に終了する。 */
       quit: { params: {}; response: OperationAck };
     },
-    {
-      /** Webview の準備完了通知。main は受信を記録する。 */
-      viewReady: { title: string };
-    }
+    {/** Webview からの通知口。子専用の ready・ping・状態取得は持たない。 */}
   >;
   webview: RpcSchema<
     {
