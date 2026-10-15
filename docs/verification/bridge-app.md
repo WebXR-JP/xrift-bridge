@@ -362,3 +362,57 @@ MVP第1段（セッション公開＋診断移設）の実施結果を記録す�
 - 通常操作での追加：プラグイン一覧の診断の追加操作から接続先セッションを選び起動して割り当てると、診断子画面が表示され ready 到達を人間が確認する。利用者のクリック起点の追加では、子画面の初期化失敗は発生しない。当該試行での観測であり、失敗しないことの一般化はしない。
 - ready 後の更新継続（非前面）：診断子画面の ready 到達後、XRift の窓を前面から外した状態で main から改訂 3・4 の push を起こすと、子側が改訂 3・4 の更新を記録し、窓に戻ったとき子画面の改訂番号が 4 であることを人間が確認する。一度 ready になった子は非前面でも更新を処理し、古い表示のままにならない。当該条件・当該試行での観測である。
 - 残る既知制約：初期化が進まず 15 秒の総予算超過で回収される事象があることは事実だが、非前面・遮蔽では再現せず、再現条件は未特定である。バックグラウンドでの新規マウントは保証しない。失敗時は窓をクリックしてから対象個体の再試行を行う（理由文言は復旧手順を示す）。
+
+## 子画面初期化失敗の切り分け観測（2026-10-15 実施済み）
+
+既存の節は書き換えない。本節は「移行前後で共通の既知挙動」「子 Webview の既知挙動への追記」「子画面の人間確認」への追記であり、重複した節は作らない。当該条件・当該試行での観測であり、一般化しない。設計判断は設計文書を正本とし、形状・型・値はコードを正本とする。
+
+- 環境・方法：dev 包装（`pnpm --filter bridge-gui-main gui:run:console`：開発口＋ngDebugProbe 有効）＋ `BRIDGE_GUI_DEV_ORIGINS=http://localhost:5173`、診断ワールドは dev（`http://localhost:5173`）。人間が GUI を操作し、AI が開発口（`POST /dev/op`：`getSnapshot`・`assignPlugin`・`unassignPlugin`・`retryPluginMount`）で観測・操作する。ログは main の標準出力であり、ngDebugProbe により main view と子 Webview の console が `[webview:<id>] [console.log] …` として出る。
+- 生ログ：`records/child-view-init-fail-2026-10-15.log`（一時計測なしのビルドでの失敗時）・`records/child-view-init-ok-2026-10-15.log`（一時計測入りのビルドでの成功時）。
+
+### 失敗の観測（一時計測なしのビルド、同一プロセス内で 3 件連続）
+
+- 初回 text（viewId=2、11:59:07）・初回 udp（viewId=3、11:59:12）・再試行 udp（viewId=4、12:02:24）の 3 件が「子画面の初期化が時間内に完了しませんでした。ウィンドウが操作対象になっていないと初期化が進まない場合があります。…」で回収された。
+- 3 件すべてで native が正しい URL を読込んでいる（`DEBUG loadURLInWebView: webview N loading URL: views://plugin-<種別>/index.html#mount=<mountId>`）。
+- 子側の console 出力は 0 行である（`[webview:2]`〜`[webview:4]` が存在せず、main の `[webview:1]` のみ）。
+- 子から main への初回取得は到達せず、ready 到達は 0 件である。一方 main は結線済みと認識して個体へ push を送っていた。
+- 撤去時に native が `webviewTagRemove: BrowserView not found for id 2/3/4` を出した。
+- 初回 2 件で native の `WARNING initWebview: width is NaN/Inf/invalid for webview 2, using 100`（height も）が出た。再試行（viewId=4）では出ていない。
+- 再試行は窓が最前面（frontmost が XRift の bun プロセス）かつ `dom.focus=true` の状態で実行し、それでも失敗した。
+
+### 成功の観測（一時計測入りのビルド、同一プロセス）
+
+- マウント 8 件すべて ready 到達、回収 0 件である。内訳は開発口から 3 件（plugin-text-2、plugin-diagnostic-3、plugin-diagnostic-4。diagnostic の 2 件は約 60ms 差で同時）と GUI から 5 件（plugin-udp-1、plugin-text-5、plugin-text-6、plugin-text-7、plugin-udp-8）である。plugin-text-7（12:36:15）と plugin-udp-8（12:36:19）は約 4 秒差の連続追加であり、双方成功した（人間操作）。
+- ready 到達は結線から約 55〜79ms である。
+- 子ビューのイベント列：`will-navigate(views://plugin-host/blank.html#mount=…)` → `will-navigate(views://plugin-<種別>/index.html#mount=…)` → `did-commit-navigation` → `did-navigate` → `dom-ready` → 初回取得 → ready。
+- 結線時点で native 実体あり（`nativePresent=true`、`allowedProtocols={views:true,appData:false}`）、frame は `{0,0,0,0}` である。
+- `WARNING initWebview: width/height is NaN/Inf/invalid` は webview 2〜9 の 8 件すべてで出ており、そのすべてで成功した。
+- 子 Webview の console 転送は子にも効いた（`[webview:N]` が出た）。
+
+### 棄却した説明（維持する知見）
+
+- NaN フレームが失敗の十分条件である：棄却する（成功時も同一警告が出る。結線時の frame は `0x0` である）。
+- 窓が前面でないことが引き金である：棄却する（前面・`focus=true` でも失敗した試行がある）。設計文書の「native Webview の非表示・非前面条件下で子 JavaScript の実行と初期化の進行は保証しない」は変えない（前面なら成功するとは主張しない）。
+- 子への console 転送が効いていない：棄却する（成功時に子の console が main に出る）。よって失敗時の「子の出力ゼロ」は子 JavaScript が動かなかったことを示すと解釈できる。
+- native に URL が渡っていない：棄却する（失敗 3 件すべてで `loadURLInWebView` が出ている）。
+
+### 未確定（残す論点）
+
+- 「一時計測なしのビルドで 3/3 失敗、一時計測入りのビルドで 8/8 成功」の差が、ビルド内容依存なのか間欠なのかは未確定である。一時計測はログ出力・子ビューイベント購読・native 情報の読取りのみであり、`BrowserView.on` は JS 側 emitter への登録であって動作を変えない（コード上の確認）。
+- 失敗時に子 Webview がどこまで進んだか（native 生成の可否・`views://` 要求の成否・ナビゲーションの到達）は、当該ビルドに計測が無かったため未確認である。失敗を再現できたビルドで計測を入れて観測するのが次の手段である。
+
+### 再現・復旧の運用知見
+
+- 診断ワールド dev（`http://localhost:5173`）から接続するには `BRIDGE_GUI_DEV_ORIGINS=http://localhost:5173` が要る。無いと `{"event":"upgrade_rejected","reason":"origin_rejected"}` になり、ワールド側は「承認前に接続が閉じた」（`CONNECTION_CLOSED`）として見える。
+- 解除（`unassignPlugin`）は対象セッション自体を終わらせる（4 個体を解除したら `sessions: 4 → 0`）。ワールド側が再登録するまで新規割当ては 400（`要求が不正である。`）になる。復帰はワールド画面の再読み込み（再接続・再承認）で行う。
+
+### 併せて観測した UI 症状（未解決のまま残す）
+
+- 症状（人間の報告・2026-10-15）：同ビルドで 2 つ同時の追加は正常動作した。その後プラグイン一覧に戻ると再追加ができない（診断も UDP も）。「＋（追加）を押しても何も変化しない」。
+- 観測：押下しても main 側のログ・状態変化が出ない（アプリ層に到達した形跡がない）。段階観測では `plugin-list` と `panel-plugins` が `disabled: true`（この `disabled` は「無効化された入力要素を含む」の意味であり、パネル全体の停止を意味しない）、`plugin-list` の矩形は 314,140 589x434 である。
+- コード上の前提（形状の正本はコード）：`+` は `isFull(kind)` で無効化され、`maxInstances: null` の診断・UDP では無効化されない（テキストは `maxInstances: 1` であり、既に 1 個あると `+` が無効になる）。`onToggleAdd` は RPC を送らない（行の一時状態のみ）ため、クリックが届いてもログは出ない。候補は「使用中でない生存セッション」の写しであり、空なら「割り当て可能なセッションは無い」＋閉じるが出る。
+- 未確認：行が展開しているか、候補が空か、クリックが要素に届いているか。既存の段階観測は固定要素キーのみであり一覧の内部状態を見られない。以前の記録（統制した状態で再試行すると設計どおり動作し再現しなかった「未再現の UI 症状」）と同型の症状が、今回は再現した。
+
+### 一時計測の扱い
+
+- 本観測で使った一時計測（main 3 ファイル＋udp 子画面 2 ファイル）は恒久修正ではない。計測点は「結線時の native 情報（実体の有無・許可プロトコル・frame・URL）」「子ビューのナビゲーション／`dom-ready` イベント」「子 HTML 実行標識と `error`／`unhandledrejection`／リソース読込み失敗の捕捉」「子モジュール到達・Electroview 生成完了・初回 RPC 発行直前」「main の初期取得到達と応答生成」である。動作（タイムアウト値・URL・可視制御・RPC 順序）は変えていない。
