@@ -152,8 +152,8 @@ class FakeView implements PluginUiChildView {
   readonly sandbox: boolean;
   /** preload 指定。 */
   readonly preload: string | null;
-  /** 作成時の遷移規則。欠落は `in` で区別する。 */
-  readonly navigationRules: string | null;
+  /** 作成時の遷移規則。欠落は `in` で区別する。実表現は `string[]` 配列である。 */
+  readonly navigationRules: unknown;
 
   /**
    * @param hostWebviewId - 親 Webview の識別子。
@@ -167,7 +167,7 @@ class FakeView implements PluginUiChildView {
       renderer?: string;
       sandbox?: boolean;
       preload?: string | null;
-      navigationRules?: string | null;
+      navigationRules?: unknown;
     } = {},
   ) {
     this.hostWebviewId = hostWebviewId;
@@ -176,9 +176,7 @@ class FakeView implements PluginUiChildView {
     this.sandbox = overrides.sandbox ?? false;
     this.preload = overrides.preload ?? null;
     this.navigationRules =
-      "navigationRules" in overrides
-        ? (overrides.navigationRules ?? null)
-        : JSON.stringify(EXPECTED_RULES);
+      "navigationRules" in overrides ? (overrides.navigationRules ?? null) : [...EXPECTED_RULES];
   }
 
   loadPluginUrl(url: string): void {
@@ -618,7 +616,11 @@ test("遷移規則の照合は順序付き完全一致で内部空白は許さ�
     "views://plugin-alpha/index.html",
     "views://plugin-beta/index.html",
   ]);
-  const accepted: readonly string[] = [
+  // 実表現の配列を中心に受け付け、JSON 文字列形も互換として受け付ける。
+  const accepted: readonly unknown[] = [
+    [...expected],
+    expected.map((rule) => `  ${rule}  `),
+    expected.map((rule) => `\t${rule}\n`),
     JSON.stringify(expected),
     JSON.stringify(expected.map((rule) => `  ${rule}  `)),
     JSON.stringify(expected.map((rule) => `\t${rule}\n`)),
@@ -626,12 +628,21 @@ test("遷移規則の照合は順序付き完全一致で内部空白は許さ�
   for (const actual of accepted) {
     expect(matchPluginNavigationRules(actual, expected)).toBe(true);
   }
-  const rejected: readonly (string | null)[] = [
+  const rejected: readonly unknown[] = [
     null,
+    undefined,
+    42,
     "",
     "{not-json",
     "null",
     "42",
+    JSON.stringify({ allow: "*" }),
+    expected.slice(0, -1),
+    [...expected, "views://evil/*"],
+    [...expected].reverse(),
+    expected.map(() => expected[0] ?? ""),
+    [42],
+    [expected[0], [expected[1]]],
     JSON.stringify(expected.slice(0, -1)),
     JSON.stringify([...expected, "views://evil/*"]),
     JSON.stringify([...expected].reverse()),
@@ -639,6 +650,7 @@ test("遷移規則の照合は順序付き完全一致で内部空白は許さ�
     JSON.stringify([42]),
     JSON.stringify([expected[0], [expected[1]]]),
     // 前後の空白だけを許すため、内部の空白差は不一致である。
+    expected.map((rule) => rule.replace("://", ":// ")),
     JSON.stringify(expected.map((rule) => rule.replace("://", ":// "))),
   ];
   for (const actual of rejected) {
@@ -652,10 +664,10 @@ test("静的登録の外から来た規則は endpoint 工場を1度も呼ばず
   expect(fixture.coordinator.syncNow()).toBe(true);
   const placement = fixture.coordinator.listPlacements()[0];
   if (placement === undefined) throw new Error("配置が無い。");
-  // 子が「自分が見ている scope だけ」を規則として申告した形を再現する。
+  // 子が「自分が見ている scope だけ」を規則として申告した形を再現する（実表現の配列）。
   const childClaim = buildPluginNavigationRules(["views://plugin-alpha/index.html"]);
   const sneaky = new FakeView(7, placement.initialUrl, {
-    navigationRules: JSON.stringify(childClaim),
+    navigationRules: [...childClaim],
   });
   fixture.views.push(sneaky);
   expect(fixture.coordinator.handleTagCreated(sneaky)).toBe(true);

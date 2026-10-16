@@ -149,8 +149,8 @@ interface FakeViewOverrides {
   readonly sandbox?: boolean;
   /** preload 指定。付けた生成を拒否側で試す。 */
   readonly preload?: string | null;
-  /** 作成時の遷移規則。期待規則との照合の拒否側で試す。 */
-  readonly navigationRules?: string | null;
+  /** 作成時の遷移規則。期待規則との照合の拒否側で試す。実表現は配列である。 */
+  readonly navigationRules?: unknown;
 }
 
 /**
@@ -182,8 +182,8 @@ class FakeView implements PluginUiChildView {
   readonly sandbox: boolean;
   /** preload 指定。 */
   readonly preload: string | null;
-  /** 作成時の遷移規則。 */
-  readonly navigationRules: string | null;
+  /** 作成時の遷移規則。実表現は `string[]` 配列である。 */
+  readonly navigationRules: unknown;
 
   /**
    * @param hostWebviewId - 親 Webview の識別子。
@@ -200,12 +200,12 @@ class FakeView implements PluginUiChildView {
     this.renderer = overrides.renderer ?? "native";
     this.sandbox = overrides.sandbox ?? false;
     this.preload = overrides.preload ?? null;
-    // 省略時は静的登録の期待規則と一致する正規値を載せる。明示の `null`
-    // （欠落の再現）は `??` で潰さないよう `in` で区別する。
+    // 省略時は静的登録の期待規則と一致する正規値（実表現の配列）を載せる。
+    // 明示の `null`（欠落の再現）は `??` で潰さないよう `in` で区別する。
     this.navigationRules =
       "navigationRules" in overrides
         ? (overrides.navigationRules ?? null)
-        : JSON.stringify(EXPECTED_NAVIGATION_RULES);
+        : [...EXPECTED_NAVIGATION_RULES];
   }
 
   loadPluginUrl(url: string): void {
@@ -729,7 +729,7 @@ test("main の汎用層は plugin 固有名・固有型を参照せず params/pa
 });
 
 test("正規の遷移規則は結線でき不一致・欠落・不正は endpoint 生成前に回収する", () => {
-  // 正規値は結線できる（対照）。
+  // 正規値は実表現の配列で結線できる（対照）。JSON 文字列形も互換として結線できる。
   {
     const fixture = setupBoundary();
     const mountId = show(fixture, fixture.alpha1, 1);
@@ -737,19 +737,34 @@ test("正規の遷移規則は結線でき不一致・欠落・不正は endpoin
     expect(fixture.relays.get(mountId)).not.toBeUndefined();
     expect(fixture.views[0]?.loaded).toHaveLength(1);
   }
-  const cases: readonly { navigationRules: string | null }[] = [
+  {
+    const fixture = setupBoundary();
+    fixture.setView(fixture.alpha1, 1);
+    expect(fixture.coordinator.syncNow()).toBe(true);
+    const placement = fixture.coordinator.listPlacements()[0];
+    if (placement === undefined) throw new Error("配置が無い。");
+    const view = new FakeView(7, placement.initialUrl, {
+      navigationRules: JSON.stringify(EXPECTED_NAVIGATION_RULES),
+    });
+    fixture.views.push(view);
+    expect(fixture.coordinator.handleTagCreated(view)).toBe(true);
+    expect(view.removed).toBe(false);
+    expect(view.loaded).toHaveLength(1);
+    expect(fixture.coordinator.size).toBe(1);
+    expect(fixture.endpointsFor(fixture.alpha1)).toHaveLength(1);
+  }
+  const cases: readonly { navigationRules: unknown }[] = [
     { navigationRules: null },
     { navigationRules: "{not-json" },
     { navigationRules: JSON.stringify({ allow: "*" }) },
-    {
-      navigationRules: JSON.stringify([...EXPECTED_NAVIGATION_RULES, "views://evil/*"]),
-    },
-    {
-      navigationRules: JSON.stringify(EXPECTED_NAVIGATION_RULES.slice(0, -1)),
-    },
-    {
-      navigationRules: JSON.stringify([...EXPECTED_NAVIGATION_RULES].reverse()),
-    },
+    { navigationRules: [...EXPECTED_NAVIGATION_RULES, "views://evil/*"] },
+    { navigationRules: EXPECTED_NAVIGATION_RULES.slice(0, -1) },
+    { navigationRules: [...EXPECTED_NAVIGATION_RULES].reverse() },
+    { navigationRules: [42] },
+    { navigationRules: ["views://plugin-alpha/*", 42] },
+    { navigationRules: JSON.stringify([...EXPECTED_NAVIGATION_RULES, "views://evil/*"]) },
+    { navigationRules: JSON.stringify(EXPECTED_NAVIGATION_RULES.slice(0, -1)) },
+    { navigationRules: JSON.stringify([...EXPECTED_NAVIGATION_RULES].reverse()) },
     { navigationRules: JSON.stringify([42]) },
   ];
   for (const entry of cases) {
@@ -784,7 +799,7 @@ test("遷移規則の前後空白差は許容して結線する", () => {
   const placement = fixture.coordinator.listPlacements()[0];
   if (placement === undefined) throw new Error("配置が無い。");
   const padded = new FakeView(7, placement.initialUrl, {
-    navigationRules: JSON.stringify(EXPECTED_NAVIGATION_RULES.map((rule) => `  ${rule}  `)),
+    navigationRules: EXPECTED_NAVIGATION_RULES.map((rule) => `  ${rule}  `),
   });
   fixture.views.push(padded);
   expect(fixture.coordinator.handleTagCreated(padded)).toBe(true);

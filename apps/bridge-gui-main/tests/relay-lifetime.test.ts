@@ -136,12 +136,12 @@ class FakeView implements PluginUiChildView {
   /**
    * @param hostWebviewId - 親 Webview の識別子。
    * @param currentUrl - 発行済みの初期 URL。
-   * @param navigationRules - 作成時の遷移規則。静的登録の期待規則と一致させる。
+   * @param navigationRules - 作成時の遷移規則。静的登録の期待規則と一致させる。実表現は配列である。
    */
   constructor(
     readonly hostWebviewId: number | undefined,
     readonly currentUrl: string | null,
-    readonly navigationRules: string | null,
+    readonly navigationRules: unknown,
   ) {}
 
   get renderer(): string {
@@ -171,8 +171,8 @@ interface MountFixture {
   readonly relays: Map<string, PluginRelayHandler>;
   readonly pushes: Map<string, PluginRelayEvent[]>;
   readonly views: FakeView[];
-  /** 子タグに載せる遷移規則。backend の snapshot から取った期待値である。 */
-  readonly navigationRules: string;
+  /** 子タグに載せる遷移規則。backend の snapshot から取った期待値（実表現の配列）である。 */
+  readonly navigationRules: readonly string[];
 }
 
 /**
@@ -220,7 +220,7 @@ function setupMounts(backend: GuiBackend): MountFixture {
     relays,
     pushes,
     views: [],
-    navigationRules: JSON.stringify(backend.getSnapshot().pluginNavigationRules),
+    navigationRules: [...backend.getSnapshot().pluginNavigationRules],
   };
 }
 

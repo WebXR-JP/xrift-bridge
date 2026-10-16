@@ -101,8 +101,10 @@ export class ElectrobunPluginUiChildView implements PluginUiChildView {
     return this.inner.preload;
   }
 
-  get navigationRules(): string | null {
-    return this.inner.navigationRules;
+  get navigationRules(): unknown {
+    // ADR: SDK の型宣言（`string | null`）が実行時実体（`string[]`）と
+    // 食い違うため、配列のまま素通しする。照合側で実表現として扱う。
+    return this.inner.navigationRules as unknown;
   }
 
   get currentUrl(): string | null {

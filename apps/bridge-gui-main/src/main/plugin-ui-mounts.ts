@@ -109,7 +109,12 @@ export interface PluginUiChildView {
   /** preload 指定。付けた生成は受け付けない。 */
   readonly preload: string | null;
   /** 作成時の遷移規則。記録用に読む。 */
-  readonly navigationRules: string | null;
+  // ADR: Electrobun の型宣言は `string | null` だが、実行時の実体は
+  // `string[]` 配列である（preload の `getInitialNavigationRules()` が属性の
+  // JSON 文字列を `JSON.parse` して配列のまま `webviewTagInit` へ渡し、
+  // `BrowserView.navigationRules` に配列として保持されるため）。実機表現に
+  // 合わせて `unknown` で受け、照合は `matchPluginNavigationRules` で行う。
+  readonly navigationRules: unknown;
   /** 生成時の URL。発行済み初期 URL と完全一致で照合する。 */
   readonly currentUrl: string | null;
   /**
@@ -195,33 +200,42 @@ interface PluginUiMountRecord {
  * 子タグの遷移規則が期待規則と一致するか判定する。
  *
  * 期待値は backend と同じ静的登録済み view パス集合から作り、子の属性や
- * 申告からは作らない。比較は JSON として解釈した文字列配列の順序付き
+ * 申告からは作らない。実行時の実表現は `string[]` 配列であり（Electrobun の
+ * 型宣言 `string | null` と食い違う。preload が属性の JSON 文字列を
+ * `JSON.parse` して配列のまま渡すため）、`webviewTagSetNavigationRules`
+ * 経由の JSON 文字列形も互換として受け付ける。比較は文字列配列の順序付き
  * 完全一致であり、集合比較・ソート比較にしない（規則は後勝ちのため順序が
- * 意味を持つ）。要素前後の空白差だけは許す。追加・欠落・並替え・不正 JSON・
- * 欠落は不一致とする。
+ * 意味を持つ）。要素前後の空白差だけは許す。追加・欠落・並替え・要素の
+ * 非文字列・欠落・不正 JSON は不一致とする。
  *
- * @param actual - 子タグの遷移規則（JSON 文字列）。欠けている場合は `null`。
+ * @param actual - 子タグの遷移規則。実表現は `string[]` 配列であり、
+ * JSON 文字列形も受け付ける。欠けている場合は `null`。
  * @param expected - 静的登録から作った期待規則。
  * @returns 順序付き完全一致の場合に真。
  */
-export function matchPluginNavigationRules(
-  actual: string | null,
-  expected: readonly string[],
-): boolean {
-  if (actual === null) {
+export function matchPluginNavigationRules(actual: unknown, expected: readonly string[]): boolean {
+  let rules: readonly unknown[];
+  if (Array.isArray(actual)) {
+    rules = actual;
+  } else if (typeof actual === "string") {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(actual) as unknown;
+    } catch {
+      return false;
+    }
+    if (!Array.isArray(parsed)) {
+      return false;
+    }
+    rules = parsed;
+  } else {
     return false;
   }
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(actual) as unknown;
-  } catch {
-    return false;
-  }
-  if (!Array.isArray(parsed) || parsed.length !== expected.length) {
+  if (rules.length !== expected.length) {
     return false;
   }
   for (let index = 0; index < expected.length; index += 1) {
-    const item = parsed[index];
+    const item = rules[index];
     const want = expected[index];
     if (typeof item !== "string" || want === undefined || item.trim() !== want.trim()) {
       return false;

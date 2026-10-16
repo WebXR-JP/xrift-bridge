@@ -48,8 +48,8 @@ class FakeView implements PluginUiChildView {
     readonly renderer = "native",
     readonly sandbox = false,
     readonly preload: string | null = null,
-    // 省略時は静的登録の期待規則と一致する正規値を載せる。
-    readonly navigationRules: string | null = JSON.stringify(EXPECTED_NAVIGATION_RULES),
+    // 省略時は静的登録の期待規則と一致する正規値（実表現の配列）を載せる。
+    readonly navigationRules: unknown = [...EXPECTED_NAVIGATION_RULES],
   ) {}
   loadPluginUrl(url: string): void {
     if (this.loadFails) {
