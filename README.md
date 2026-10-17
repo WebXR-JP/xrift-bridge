@@ -116,11 +116,44 @@ pnpm exec vp run diagnostic-world#dev
 - `.github/workflows/release.yml`: `v*` タグまたは手動実行で macOS arm64 / Windows x64 / Linux x64 を native runner で包装する。タグ時は GitHub Release に成果物を添付し、手動実行時は Actions artifacts のみとする。道具立ては `mise.toml` を mise-action で読む。
 - 包装は未署名であり、Windows / macOS の署名証明書は未設定である。初回の Windows / Linux 実行は未確認である（workflow 内のコメントに未検証点を残している）。
 
-workflow の手元実行には `act`（`mise.toml` 管理）を使う。Docker 互換のデーモンが別途要り、Apple Silicon では x64 イメージのエミュレーションで遅くなる。実 CI の代わりにはならず完全一致の保証もない。token が要るときは `-s GITHUB_TOKEN=...` で渡し、token や `.secrets` はコミットしない。
+workflow の手元実行には `act`（`mise.toml` 管理）を使う。Linux の `check` はコンテナで、macOS の release build は macOS 上で act を動かしてホスト実行できる。実行例と結果は [docs/verification/act.md](docs/verification/act.md) に置く。
+
+### Linux の ci.yml（コンテナ）
+
+Docker 互換のデーモンが要る。Docker Desktop が無い場合は、既存の Lima で docker 用 VM を用意できる。
 
 ```sh
-mise exec -- act workflow_dispatch -W .github/workflows/ci.yml -j check -P ubuntu-24.04=catthehacker/ubuntu:act-24.04 --container-architecture linux/amd64
+limactl start --name=docker --mount-writable template:docker
+export DOCKER_HOST="unix://$HOME/.lima/docker/sock/docker.sock"
 ```
+
+```sh
+mise exec -- act workflow_dispatch \
+  -W .github/workflows/ci.yml \
+  -j check \
+  -P ubuntu-24.04=catthehacker/ubuntu:act-24.04 \
+  --container-daemon-socket -
+```
+
+`--container-daemon-socket -` は、Lima や colima のように Docker のソケットが転送されている場合に要る。付けないと act がホスト側のソケットパスをコンテナへ bind mount しようとし、デーモン側にそのパスが無いため失敗する。`catthehacker/ubuntu:act-24.04` は multi-arch であり、Apple Silicon では arm64 で動く。GitHub の runner は x64 なので、エミュレーションが使える環境では `--container-architecture linux/amd64` を足す。
+
+### macOS の release build（ホスト実行）
+
+macOS 上で `-self-hosted` を指定すると、Docker を使わずホスト上でジョブを実行できる。self-hosted runner を GitHub に登録する必要はない。
+
+```sh
+mkdir -p /tmp/act-artifacts
+mise exec -- act workflow_dispatch \
+  -W .github/workflows/release.yml \
+  -j build \
+  --matrix os:macos-14 \
+  -P macos-14=-self-hosted \
+  --artifact-server-path /tmp/act-artifacts
+```
+
+`--matrix os:macos-14` で macOS の entry だけを選び、`-P macos-14=-self-hosted` でその `runs-on` をホスト実行に置き換える。`--artifact-server-path` を付けると `actions/upload-artifact` まで通る。Windows も同じ方式を Windows ホスト上で使えるが、今回は未実施である。
+
+act はコンテナ実行とホスト実行のどちらも実験的な扱いであり、実 CI の代わりにはならない。macOS のホスト実行は GitHub の macOS runner イメージと同一ではなく、完全一致の保証もない。token が要るときは `-s GITHUB_TOKEN=...` で渡し、token や `.secrets` はコミットしない。
 
 ```sh
 git tag v0.1.0

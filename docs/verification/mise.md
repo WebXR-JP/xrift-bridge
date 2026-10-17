@@ -27,5 +27,5 @@
 
 ## 未確認事項
 
-- act による実ジョブ実行（Docker 未起動のため未実施）。
+- act による `ci.yml` の `check` ジョブと `release.yml` の macOS build は [act.md](act.md) に記録した（Linux は Lima の docker VM 上の arm64 コンテナ、macOS は `-self-hosted` によるホスト実行）。Windows runner と GitHub Actions 上は未確認。
 - GitHub Actions 上の CI、および release workflow の各 native runner での包装・artifact 受け渡し・Release 公開。ローカル検証の成功とは分けて、初回実行で確認する。
