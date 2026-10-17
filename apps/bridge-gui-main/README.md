@@ -14,7 +14,7 @@ XRift Bridge の管理画面。Electrobun 2.x＋Bun main を前提とする。
   `~/.bun/bin/bun`（1.3.14）は使わない）
 - Cottontail 0.7.1（`hutch.config.ts` の pragma に残るが、段1以降の main 実行時は使わない。
   段0〜1の前半で Webview→main の RPC request が届かない不成立を確認した版）
-- pnpm 12.10.1／Node v22.22.3（動作確認時の版）
+- pnpm 12.10.1／Node v22.22.3（動作確認時の版。現在の開発用ツールの選択版はルートの `mise.toml` を参照）
 - 古い Bun 前提の scaffold とは混ぜない。`electrobun.config.ts` が設定ファイル名である。
 
 ## 前提操作

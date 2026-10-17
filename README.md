@@ -25,12 +25,25 @@ v0 台ではプロトコルと公開 API に破壊的変更を加えることが
 
 ## 前提
 
-- Node.js >= 22.18.0 (`engines`)、pnpm 12.10.1 (`devEngines`)
-- `hutch` 0.27.1（`apps/bridge-gui-main/hutch.config.ts` と各プラグインの `hutch.config.ts` の pin）。`PATH` に要る
-- Hutch の導入例。macOS / Linux は `curl -fsSL https://hutch.blackboard.sh/hutch/install.sh | sh`、Windows は公式 PowerShell インストーラを使う。`~/.hutch/bin`（Windows は `%USERPROFILE%\.hutch\bin`）を PATH に追加する
-- GUI の動作確認は macOS (Apple Silicon) のみ。Intel Mac は対象外（Electrobun に macOS x64 提供がないため）。release ワークフローでは Windows / Linux 向けの包装も行うが、実行時の確認はこれからである（`design/bridge-app.md`）
+開発用ツールの選択版は `mise.toml` が正本である（Node 22.23.3・pnpm 12.10.1・act 0.2.89）。mise 自体の導入は公式ページ（https://mise.jdx.dev/）を見る。Node・pnpm を別々に用意する必要はない。
+
+```sh
+mise trust
+mise install
+mise exec -- pnpm install
+mise exec -- pnpm --filter bridge-gui-main gui:prepare
+mise exec -- pnpm ready
+```
+
+`hutch` 0.27.1 は mise 管理外であり別途用意する（`apps/bridge-gui-main/hutch.config.ts` と各プラグインの `hutch.config.ts` の pin）。macOS / Linux は `curl -fsSL https://hutch.blackboard.sh/hutch/install.sh | sh`、Windows は公式 PowerShell インストーラを使う。`~/.hutch/bin`（Windows は `%USERPROFILE%\.hutch\bin`）を PATH に追加する。
+
+シェルの常駐設定（`mise activate`）は任意である。設定済みなら以下の例のように素の `pnpm`・`vp` が使え、未設定なら各命令の先頭に `mise exec --` を付ける。
+
+GUI の動作確認は macOS (Apple Silicon) のみ。Intel Mac は対象外（Electrobun に macOS x64 提供がないため）。release ワークフローでは Windows / Linux 向けの包装も行うが、実行時の確認はこれからである（`design/bridge-app.md`）
 
 ## セットアップと検証
+
+以下は `mise activate` 済みを想定する。未設定なら各行の先頭に `mise exec --` を付ける（前提の標準手順を見る）。
 
 ```sh
 pnpm install
@@ -99,9 +112,15 @@ pnpm exec vp run diagnostic-world#dev
 
 ## GitHub Actions
 
-- `.github/workflows/ci.yml`: PR・`main` への push・手動実行で、ubuntu 24.04 上で install → Hutch → `gui:prepare` → build → `stage:ui` → check → test → test:types を回す。
-- `.github/workflows/release.yml`: `v*` タグまたは手動実行で macOS arm64 / Windows x64 / Linux x64 を native runner で包装する。タグ時は GitHub Release に成果物を添付し、手動実行時は Actions artifacts のみとする。
+- `.github/workflows/ci.yml`: PR・`main` への push・手動実行で、ubuntu 24.04 上で mise（`mise.toml` の Node・pnpm を mise-action で用意）→ install → Hutch → `gui:prepare` → build → `stage:ui` → check → test → test:types を回す。
+- `.github/workflows/release.yml`: `v*` タグまたは手動実行で macOS arm64 / Windows x64 / Linux x64 を native runner で包装する。タグ時は GitHub Release に成果物を添付し、手動実行時は Actions artifacts のみとする。道具立ては `mise.toml` を mise-action で読む。
 - 包装は未署名であり、Windows / macOS の署名証明書は未設定である。初回の Windows / Linux 実行は未確認である（workflow 内のコメントに未検証点を残している）。
+
+workflow の手元実行には `act`（`mise.toml` 管理）を使う。Docker 互換のデーモンが別途要り、Apple Silicon では x64 イメージのエミュレーションで遅くなる。実 CI の代わりにはならず完全一致の保証もない。token が要るときは `-s GITHUB_TOKEN=...` で渡し、token や `.secrets` はコミットしない。
+
+```sh
+mise exec -- act workflow_dispatch -W .github/workflows/ci.yml -j check -P ubuntu-24.04=catthehacker/ubuntu:act-24.04 --container-architecture linux/amd64
+```
 
 ```sh
 git tag v0.1.0

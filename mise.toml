@@ -1,0 +1,13 @@
+# ADR: 開発用ツールの選択版はここで管理し、CIの mise-action も同じ設定を読む（SSOT）。
+# node は engines.node(>=22.18.0) の下限ではなく、22系の検証済み完全版を固定する。
+# hutch と vp はここで管理しない（hutch は独自配布のインストーラ、vp は devDependency の
+# `pnpm exec vp` を使う）。
+# ADR: 完全版固定で足りるため mise.lock は管理しない。個人のグローバル設定で
+# lockfile が生成されないよう明示的に無効化する。
+[tools]
+"core:node" = "22.23.3"
+"aqua:pnpm/pnpm" = "12.10.1"
+"aqua:nektos/act" = "0.2.89"
+
+[settings]
+lockfile = false

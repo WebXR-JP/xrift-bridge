@@ -40,16 +40,30 @@ jobs:
           restore-keys: |
             hutch-${{ runner.os }}-
 
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
+      # ADR: ツールの選択版は mise.toml を正とし、ローカルとCIで共有する。
+      # act はローカルでのworkflow実行用のためCIでは入れない。
+      - name: Setup toolchain
+        uses: jdx/mise-action@v5.2.0
         with:
-          version: 12.10.1
+          version: "2026.10.11"
+          install_args: "core:node aqua:pnpm/pnpm"
+          cache: true
 
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
+      # ADR: store だけを共有し、node_modules は含めない。
+      # 完全一致を優先し、設定・lockfile 更新時は同一 OS・arch の store を再利用する。
+      # 復元後も frozen install を実行する。
+      - name: Get pnpm store path
+        id: pnpm-store
+        shell: bash
+        run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+      - name: Restore pnpm store
+        uses: actions/cache@v4
         with:
-          node-version: 22.x
-          cache: pnpm
+          path: ${{ steps.pnpm-store.outputs.path }}
+          key: pnpm-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('mise.toml', 'pnpm-lock.yaml') }}
+          restore-keys: |
+            pnpm-${{ runner.os }}-${{ runner.arch }}-
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

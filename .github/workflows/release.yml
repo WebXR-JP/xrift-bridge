@@ -49,27 +49,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # ADR: `~/.hutch` の cache。復元が Hutch 導入より前になるよう、
-      # 導入手順より前に置く（cache hit 時に toolchain の再取得を省く。
-      # 手順書の列挙順とは意図的に前後させている）。
-      - name: Restore Hutch store
-        uses: actions/cache@v4
+      # ADR: 公開成果物を作る workflow では共有キャッシュを復元・保存しない。
+      # mise-action の release 向け推奨に従い、mise・pnpm store・Hutch を対象とする。
+      # 配布時の取得時間より、キャッシュ経由の入力を減らすことを優先する。
+      # 初回 CI 成功だけを理由にキャッシュを追加せず、必要時は計測結果で再判断する。
+      # ツールの選択版は mise.toml を正とする。act は CI では入れない。
+      - name: Setup toolchain
+        uses: jdx/mise-action@v5.2.0
         with:
-          path: ~/.hutch
-          key: hutch-${{ runner.os }}-${{ hashFiles('apps/bridge-gui-main/hutch.config.ts', 'packages/plugins/*/hutch.config.ts') }}
-          restore-keys: |
-            hutch-${{ runner.os }}-
-
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v4
-        with:
-          version: 12.10.1
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 22.x
-          cache: pnpm
+          version: "2026.10.11"
+          install_args: "core:node aqua:pnpm/pnpm"
+          cache: false
 
       # ADR: Linux の build 依存は Electrobun 公式 docs「Installation」
       # （Ubuntu/Debian 向け "Install build tools and dependencies"）の一式である。
