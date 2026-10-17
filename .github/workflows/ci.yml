@@ -1,0 +1,89 @@
+# CI（PR・main push の検証）
+#
+# 前提の手順はクリーン状態の必須手順（`pnpm install` →
+# `pnpm --filter bridge-gui-main gui:prepare` → `vp run -r build`）に従う。
+# `gui:prepare` と plugin の `build` は `hutch` を要求するため、
+# Hutch の導入を `gui:prepare` より前に行う。
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ADR: `~/.hutch`（Hutch 本体・Electrobun・toolchain の取得物）を保持する。
+      # key に `hutch.config.ts` の hash を含めるため、pin（Hutch・Electrobun の版）
+      # 変更時は別物として取り直す。復元がインストーラより前でも動くよう、
+      # 導入手順より前に置く（cache hit 時も install.sh は冪等に再実行する）。
+      - name: Restore Hutch store
+        uses: actions/cache@v4
+        with:
+          path: ~/.hutch
+          key: hutch-${{ runner.os }}-${{ hashFiles('apps/bridge-gui-main/hutch.config.ts', 'packages/plugins/*/hutch.config.ts') }}
+          restore-keys: |
+            hutch-${{ runner.os }}-
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12.10.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # `GITHUB_PATH` への追記は次の手順から有効になるため、同手順内の
+      # `hutch --version` 確認用に `export PATH` も併せて行う。
+      # 使用版は `hutch.config.ts` 先頭の pragma（0.27.1）が決める。ここでの
+      # インストールは launcher の導入だけであり、project 外の版表示は固定しない。
+      - name: Install Hutch
+        run: |
+          curl -fsSL https://hutch.blackboard.sh/hutch/install.sh | sh
+          echo "$HOME/.hutch/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.hutch/bin:$PATH"
+          hutch --version
+
+      - name: Prepare GUI devkits
+        run: pnpm --filter bridge-gui-main gui:prepare
+
+      - name: Build
+        run: pnpm exec vp run -r build
+
+      # ADR: `vp run -r build` の `bridge-gui-main` は型検査と plugin staging までで、
+      # Angular 生成物 → `src/mainview-dist/` の実経路は踏まない。包装なしで
+      # `stage:ui` と Hutch の copy 元の存在だけを検証する（Hutch 包装自体は重い）。
+      - name: Stage Angular UI
+        run: |
+          pnpm --filter bridge-gui-main stage:ui prod
+          test -f apps/bridge-gui-main/src/mainview-dist/prod/index.html
+
+      - name: Check
+        run: pnpm exec vp check
+
+      - name: Test
+        run: pnpm exec vp run -r test
+
+      - name: Test types
+        run: pnpm exec vp run -r test:types

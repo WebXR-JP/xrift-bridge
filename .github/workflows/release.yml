@@ -1,0 +1,180 @@
+# Desktop Release（デスクトップ配布物の build と GitHub Release 添付）
+#
+# ADR: Electrobun は cross-compile しない（build を実行した OS 向けにしか出力しない）。
+# 根拠は Electrobun 公式 docs「Cross-Platform Development」
+# （"Hutch builds for the operating system and architecture on which it is running.
+# Produce and test each release on a native runner."）であるため、
+# OS ごとに native runner で build する matrix が要る。
+# macOS は arm64 のみ対応する（`macos-14` runner は arm64。
+# Electrobun 2.0.2 は macOS x64 の core 成果物を配布しない）。
+# Windows は x64 のみ対応する（Windows ARM64 は Electrobun beta と
+# Hutch canary toolchain が要るため対象外）。
+# 署名・公証は行わない（証明書なし）。未署名であることは README 側で明記する前提であり、
+# 署名 secrets は追加しない。
+name: Desktop Release
+
+on:
+  push:
+    tags:
+      - v*
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# ADR: artifact の upload/download は同一 workflow run の runtime token を使い、
+# `GITHUB_TOKEN` の `actions` 権限を要求しない（他 run・他 repo からの取得時を除く）。
+# そのため top-level は `contents: read` のままでよい。
+
+# ADR: release を中断しないよう、同一 ref でも cancel-in-progress しない。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            artifact: macos-arm64
+          - os: windows-latest
+            artifact: windows-x64
+          - os: ubuntu-24.04
+            artifact: linux-x64
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # ADR: `~/.hutch` の cache。復元が Hutch 導入より前になるよう、
+      # 導入手順より前に置く（cache hit 時に toolchain の再取得を省く。
+      # 手順書の列挙順とは意図的に前後させている）。
+      - name: Restore Hutch store
+        uses: actions/cache@v4
+        with:
+          path: ~/.hutch
+          key: hutch-${{ runner.os }}-${{ hashFiles('apps/bridge-gui-main/hutch.config.ts', 'packages/plugins/*/hutch.config.ts') }}
+          restore-keys: |
+            hutch-${{ runner.os }}-
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 12.10.1
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: pnpm
+
+      # ADR: Linux の build 依存は Electrobun 公式 docs「Installation」
+      # （Ubuntu/Debian 向け "Install build tools and dependencies"）の一式である。
+      # 実行時の runtime packages（`libgtk-3-0` 等）ではなく開発用の `-dev` 群が要る。
+      # `libssl-dev` は当該 docs の一式に含まれないため追加しない。
+      # 依存の十分性は推測を含むため、不足時は build log で見直すこと。
+      - name: Install Linux build dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential cmake pkg-config libgtk-3-dev libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev
+
+      # ADR: Hutch 導入は OS ごとに公式手順を使い分ける。
+      # Unix は `curl ... install.sh | sh`、Windows は公式 PowerShell インストーラ
+      # （Electrobun 公式 docs「Quick Start」・「Hutch」の導入手順）である。
+      # Windows の PATH 追記が正しいか・Linux 依存が十分かは未検証であり、
+      # 初回実行で確認すること。
+      # `GITHUB_PATH` への追記は次の手順から有効になるため、同手順内の
+      # `hutch --version` 確認用に当該 shell の PATH 設定も併せて行う。
+      # 使用版は `hutch.config.ts` 先頭の pragma（0.27.1）が決める。ここでの
+      # インストールは launcher の導入だけであり、project 外の版表示は固定しない。
+      - name: Install Hutch (Unix)
+        if: runner.os != 'Windows'
+        run: |
+          curl -fsSL https://hutch.blackboard.sh/hutch/install.sh | sh
+          echo "$HOME/.hutch/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.hutch/bin:$PATH"
+          hutch --version
+
+      - name: Install Hutch (Windows)
+        if: runner.os == 'Windows'
+        # ADR: PowerShell 5.1 の `Out-File -Encoding utf8` は BOM 付きになり、
+        # `$GITHUB_PATH` の行頭へ BOM が混入する。pwsh の `utf8NoBOM` を使う。
+        shell: pwsh
+        run: |
+          & ([scriptblock]::Create((irm https://hutch.blackboard.sh/hutch/install.ps1)))
+          "$env:USERPROFILE\.hutch\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8NoBOM -Append
+          $env:PATH = "$env:USERPROFILE\.hutch\bin;$env:PATH"
+          hutch --version
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Prepare GUI devkits
+        run: pnpm --filter bridge-gui-main gui:prepare
+
+      - name: Build workspace
+        run: pnpm exec vp run -r build
+
+      - name: Build desktop app
+        run: pnpm --filter bridge-gui-main gui:build
+
+      # 成果物の有無を build log に残す（upload 前の気づき用）。
+      # Windows 既定 shell（PowerShell）では `ls -R` が使えないため `bash` で実行する。
+      # 失敗時にも一覧を残すため `if: always()` を付ける。
+      - name: List artifacts
+        if: always()
+        shell: bash
+        run: |
+          if [ -d apps/bridge-gui-main/artifacts ]; then
+            ls -lahR apps/bridge-gui-main/artifacts
+          else
+            echo "artifacts directory not found"
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xrift-bridge-${{ matrix.artifact }}
+          path: apps/bridge-gui-main/artifacts/
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          pattern: xrift-bridge-*
+          merge-multiple: true
+          path: dist
+
+      # ADR: Electrobun の成果物名は OS/arch を含み、`download-artifact` の
+      # `merge-multiple` で同名衝突しない想定である。取り違えや欠落を
+      # 黙って Release へ進めないよう、平坦化後の一覧と非空を確かめる。
+      - name: Inspect downloaded artifacts
+        run: |
+          ls -lahR dist
+          test -n "$(find dist -type f -print -quit)"
+
+      # ADR: 既存 Release がある状態での再実行時は `upload --clobber` に分岐する
+      # （`gh release view` の成否で判定）。初回は `--generate-notes` で作成する。
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # checkout していないため、gh がリポジトリを推測できない。明示する。
+          GH_REPO: ${{ github.repository }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* --generate-notes --title "$GITHUB_REF_NAME"
+          fi

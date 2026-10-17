@@ -1,4 +1,4 @@
-# bridge-gui-main（Electrobun 実現性スパイク・段0〜2）
+# bridge-gui-main（XRift Bridge 管理画面）
 
 XRift Bridge の管理画面。Electrobun 2.x＋Bun main を前提とする。
 管理画面（mainview）の正本は Angular 実装（`apps/bridge-gui-ui`）である。
@@ -68,7 +68,10 @@ AOT 生成物は UI パッケージ自身の `dist/`（`dist/dev/browser`・`dis
 dev と prod を別ディレクトリに分け、混在させない。生成物のため無視）に作り、
 `gui:run`・`gui:build` が選んだ側を `src/mainview-dist/dev`・`prod` へ写してから
 Hutch の `copy` で `views/mainview/` に載せる（ディレクトリごと。将来 chunks／
-assets が増えた場合も写し経由で同梱される）。再帰 build には Angular の
+assets が増えた場合も写し経由で同梱される）。写しは `stage:ui`（`node --experimental-strip-types`
+で走る Node 実装。`rm -rf` 等の POSIX 専用記述を使わない。Windows での実行確認は未了）が行い、
+生成物が無ければ失敗する。`gui:build:dev` は dev の写し済み staging を前提とする
+（UI を変更した場合は `pnpm --filter bridge-gui-ui ng:build:dev` の後に `pnpm --filter bridge-gui-main stage:ui dev` で写すこと）。再帰 build には Angular の
 production AOT を含める（`tsc --noEmit` だけではテンプレートを検証できない）。
 GUI から UI への `workspace:*` ビルド依存を明示し、再帰 build で UI が先行する。
 コピー元は環境変数 `BRIDGE_GUI_UI_DIR` で選ぶ（未指定時は prod の写しを既定。

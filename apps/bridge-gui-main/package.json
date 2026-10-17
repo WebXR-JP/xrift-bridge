@@ -9,12 +9,13 @@
     "test": "vp test",
     "test:types": "tsc --noEmit -p tsconfig.json",
     "check": "vp check",
-    "gui:prepare": "vp run -F 'bridge-plugin-text...' -F 'bridge-plugin-diagnostic...' -F 'bridge-plugin-udp...' build && hutch electrobun prepare",
+    "gui:prepare": "vp run -F \"bridge-plugin-text...\" -F \"bridge-plugin-diagnostic...\" -F \"bridge-plugin-udp...\" build && hutch electrobun prepare",
     "stage:plugins": "node --experimental-strip-types scripts/stage-bundled-plugins.ts",
-    "gui:build:dev": "pnpm stage:plugins && hutch electrobun build --env=dev",
-    "gui:run": "pnpm --filter bridge-gui-ui ng:build:dev && rm -rf src/mainview-dist/dev && mkdir -p src/mainview-dist && cp -R ../bridge-gui-ui/dist/dev/browser src/mainview-dist/dev && pnpm gui:prepare && pnpm stage:plugins && BRIDGE_GUI_UI_DIR=src/mainview-dist/dev hutch electrobun build --env=dev && hutch electrobun run",
-    "gui:run:console": "pnpm --filter bridge-gui-ui ng:build:dev && rm -rf src/mainview-dist/dev && mkdir -p src/mainview-dist && cp -R ../bridge-gui-ui/dist/dev/browser src/mainview-dist/dev && pnpm gui:prepare && pnpm stage:plugins && BRIDGE_GUI_UI_DIR=src/mainview-dist/dev hutch electrobun build --env=dev && BRIDGE_GUI_NG_DEBUG=1 BRIDGE_GUI_DEV_CONSOLE=1 hutch electrobun run",
-    "gui:build": "pnpm --filter bridge-gui-ui ng:build:prod && rm -rf src/mainview-dist/prod && mkdir -p src/mainview-dist && cp -R ../bridge-gui-ui/dist/prod/browser src/mainview-dist/prod && pnpm gui:prepare && pnpm stage:plugins && BRIDGE_GUI_UI_DIR=src/mainview-dist/prod hutch run build"
+    "stage:ui": "node --experimental-strip-types scripts/stage-ui.ts",
+    "gui:build:dev": "pnpm stage:plugins && cross-env BRIDGE_GUI_UI_DIR=src/mainview-dist/dev hutch electrobun build --env=dev",
+    "gui:run": "pnpm --filter bridge-gui-ui ng:build:dev && pnpm stage:ui dev && pnpm gui:prepare && pnpm stage:plugins && cross-env BRIDGE_GUI_UI_DIR=src/mainview-dist/dev hutch electrobun build --env=dev && hutch electrobun run",
+    "gui:run:console": "pnpm --filter bridge-gui-ui ng:build:dev && pnpm stage:ui dev && pnpm gui:prepare && pnpm stage:plugins && cross-env BRIDGE_GUI_UI_DIR=src/mainview-dist/dev hutch electrobun build --env=dev && cross-env BRIDGE_GUI_NG_DEBUG=1 BRIDGE_GUI_DEV_CONSOLE=1 hutch electrobun run",
+    "gui:build": "pnpm --filter bridge-gui-ui ng:build:prod && pnpm stage:ui prod && pnpm gui:prepare && pnpm stage:plugins && cross-env BRIDGE_GUI_UI_DIR=src/mainview-dist/prod hutch run build"
   },
   "dependencies": {
     "bridge-app-core": "workspace:*",
@@ -30,6 +31,7 @@
   "devDependencies": {
     "@types/bun": "catalog:",
     "@types/node": "catalog:",
+    "cross-env": "catalog:",
     "typescript": "catalog:",
     "vite-plus": "catalog:",
     "world-client": "workspace:*"
