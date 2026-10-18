@@ -56,7 +56,7 @@ const { snapshot: textSnapshot } = useTextReceiver({ connection, snapshot });
 - `react`・`three`・`@react-three/fiber`・`@xrift/world-components` を peer に持つ。ワールドの `XRiftProvider` 配下で使う。
 - 接続先は loopback（`ws://127.0.0.1:<port>/v1`）に限る。ブリッジ側で受付を有効にし、表示された比較コードを承認すると認可が成立する。
 - テキスト受信は `bridge-plugin-text` の契約（`{ op: "show", id, text }` → `{ op: "shown", id }`）に合わせる。PC 側は GUI のテキストプラグインから送る。
-- `bridge-plugin-text` の `./contract` はビルド済みの `dist` を参照する。クリーンな状態では先に `pnpm --filter bridge-gui-main gui:prepare` か `pnpm exec vp run -r build` を行う（ルート `README.md`）。
+- `bridge-plugin-text` の `./contract` はビルド済みの `dist` を参照する。クリーンな状態では先に `pnpm --filter bridge-gui-main gui:prepare` か `pnpm exec vp run -r build` を行う（ルート `DEVELOPMENT.md`）。
 
 ## 開発
 

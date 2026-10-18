@@ -1,6 +1,6 @@
 # act によるローカル実行記録（2026-10-17 実施）
 
-`ci.yml` の `check` ジョブと `release.yml` の macOS build を act で実行した記録である。workflow 定義の正本は `.github/workflows/`、手順の正本は `README.md` とし、ここでは複製しない。
+`ci.yml` の `check` ジョブと `release.yml` の macOS build を act で実行した記録である。workflow 定義の正本は `.github/workflows/`、手順の正本は `DEVELOPMENT.md` とし、ここでは複製しない。
 
 ## 環境
 

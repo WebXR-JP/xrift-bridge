@@ -111,7 +111,7 @@ stable 配布物の確認（段5）と初期計測（段6）の結果である�
 ### 段5: stable 配布物の確認
 
 - 生成: `pnpm --filter bridge-gui-main gui:build`（`hutch` 経由、`--env=stable`）で生成した。
-  注意として `hutch` は `PATH` に無く `~/.hutch/bin` を足す必要があった（手順は README に残す）。
+  注意として `hutch` は `PATH` に無く `~/.hutch/bin` を足す必要があった（手順は `../../DEVELOPMENT.md` に残す）。
   包装時に `macOS icon source not found: .../icon.iconset` の警告が出る（icon 未用意。動作には影響なし）。
 - 成果物（2026-10-11 09:41 生成）:
   - `apps/bridge-gui-main/artifacts/macos-arm64-XRiftBridge.dmg`: 21296346 B（20800 KiB）。
@@ -139,7 +139,7 @@ stable 配布物の確認（段5）と初期計測（段6）の結果である�
     記録し、往復の成立を確認した（例は `records/seg6-dev-boot-t1.log`）。
 - 承認・診断 echo/ping の配布物経路: 未確認。保留の承認操作に GUI が要り、本環境に窓が無いためである。
   backend 直結の統合検証（`tests/backend.test.ts`。実 WS・既存 `ws`・yamux）は緑であり、
-  配布物と同一の `GuiBackend` を駆動している。手順は README に残し、人間確認待ちとする。
+  配布物と同一の `GuiBackend` を駆動している。手順は `../../DEVELOPMENT.md` に残し、人間確認待ちとする。
 - 終了: 実 launcher プロセスへの SIGTERM で、後始末記録（`終了要求を受け付け`＋`shutdown`）・
   `3100` 解放・アプリ固有プロセスの残存なしを確認した（計測の全試行で毎回）。
   注意として launcher は起動直後に再実行して init 配下へ移る場合があり、起動シェルの `$!` が
@@ -268,7 +268,7 @@ MVP第1段（セッション公開＋診断移設）の実施結果を記録す�
 
 - 目的: 実ワールドの表示板への文面表示、切断・再接続時の再承認・再割当ての必要性、表示板の文面消去を目視で確認する。
 - 手順:
-  1. クリーン状態では先に `pnpm --filter bridge-gui-main gui:prepare` を行ってから、`vp run -r build` で上流をビルドする（詳細は README を参照）。
+  1. クリーン状態では先に `pnpm --filter bridge-gui-main gui:prepare` を行ってから、`vp run -r build` で上流をビルドする（詳細は `../../DEVELOPMENT.md` を参照）。
   2. 開発用 Origin を許可して画面を起動する（`BRIDGE_GUI_DEV_ORIGINS=http://localhost:5173 pnpm --filter bridge-gui-main gui:run`）。
   3. 別端末で `vp run diagnostic-world#dev` を起動し、閲覧器で `http://localhost:5173` を開く。
   4. ワールドの操作盤から接続を開始し、表示された照合符号を画面の保留表示と目視照合して承認する。

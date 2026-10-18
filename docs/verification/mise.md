@@ -1,6 +1,6 @@
 # mise 導入の検証記録（2026-10-17 実施）
 
-ツール選択版を `mise.toml` に寄せた変更の検証記録である。版の正本は `mise.toml`、手順の正本は `README.md`、CI 定義の正本は `.github/workflows/` とし、ここでは複製しない。
+ツール選択版を `mise.toml` に寄せた変更の検証記録である。版の正本は `mise.toml`、手順の正本は `DEVELOPMENT.md`、CI 定義の正本は `.github/workflows/` とし、ここでは複製しない。
 
 ## 環境・対象
 
