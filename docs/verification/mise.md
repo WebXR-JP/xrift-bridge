@@ -25,7 +25,7 @@
 - リポジトリ外では `mise exec` が `mise.toml` を読まず別版（確認時は pnpm 11.5.1）になる。検証はリポジトリ直下で行う。
 - 素の `node` は PATH 順に依存し、この検証環境では v24.22.0 を選ぶ。一方 `pnpm` は mise の shim を経由するため、`pnpm exec node` は v22.23.3 を選ぶ。`vp` も起動経路によって環境が変わる。これらは環境依存なので、再現用コマンドはリポジトリ直下で `mise exec --` を付け、workspace の `vp` は `mise exec -- pnpm exec vp ...` で起動する。
 
-## 未確認事項
+## 検証状況と未確認事項
 
-- act による `ci.yml` の `check` ジョブと `release.yml` の macOS build は [act.md](act.md) に記録した（Linux は Lima の docker VM 上の arm64 コンテナ、macOS は `-self-hosted` によるホスト実行）。Windows runner と GitHub Actions 上は未確認。
-- GitHub Actions 上の CI、および release workflow の各 native runner での包装・artifact 受け渡し・Release 公開。ローカル検証の成功とは分けて、初回実行で確認する。
+- act による `ci.yml` の `check` ジョブと `release.yml` の macOS build は [act.md](act.md) に記録した（Linux は Lima の docker VM 上の arm64 コンテナ、macOS は `-self-hosted` によるホスト実行）。Windows runner は未確認。
+- GitHub Actions 上の CI と `release.yml` の3OS build（`workflow_dispatch`）は [github-actions.md](github-actions.md) に記録した。タグ実行による Release 作成は未確認である。

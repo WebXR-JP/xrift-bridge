@@ -86,7 +86,13 @@ BRIDGE_GUI_DEV_ORIGINS=http://localhost:5173 pnpm --filter bridge-gui-main gui:r
 pnpm --filter bridge-gui-main gui:build
 ```
 
-成果物は `apps/bridge-gui-main/artifacts/` に出る（git 管理外）。macOS は dmg・app の tar.zst・update.json、Windows は Setup exe・tar.zst・update.json、Linux は AppImage・tar.zst・update.json という構成である（Electrobun の命名に従う）。
+成果物は `apps/bridge-gui-main/artifacts/` に出る（git 管理外）。代表的なファイル名は次のとおりである。
+
+- macOS: `macos-arm64-XRiftBridge.dmg`、`stable-macos-arm64-XRiftBridge.app.tar.zst`、`stable-macos-arm64-update.json`
+- Windows: `win-x64-XRiftBridge-Setup.zip`、`stable-win-x64-XRiftBridge.tar.zst`、`stable-win-x64-update.json`
+- Linux: `linux-x64-XRiftBridge-Setup.tar.gz`、`stable-linux-x64-XRiftBridge.tar.zst`、`stable-linux-x64-update.json`
+
+Windows の Setup ZIP には `XRift Bridge-Setup.exe` が入る。Linux の Setup は installer を含む tar.gz である。
 
 包装は未署名・未公証の検証用配布物であり、本番向けの品質保証はしない。macOS の Gatekeeper 警告を避ける操作（例: `xattr -cr "apps/bridge-gui-main/build/stable-macos-arm64/XRift Bridge.app"`）は内部テスト用に限る。
 
@@ -115,7 +121,7 @@ pnpm exec vp run diagnostic-world#dev
 
 - `.github/workflows/ci.yml`: PR・`main` への push・手動実行で、ubuntu 24.04 上で mise（`mise.toml` の Node・pnpm を mise-action で用意）→ install → Hutch → `gui:prepare` → build → `stage:ui` → check → test → test:types を回す。
 - `.github/workflows/release.yml`: `v*` タグまたは手動実行で macOS arm64 / Windows x64 / Linux x64 を native runner で包装する。タグ時は GitHub Release に成果物を添付し、手動実行時は Actions artifacts のみとする。道具立ては `mise.toml` を mise-action で読む。
-- 包装は未署名であり、Windows / macOS の署名証明書は未設定である。初回の Windows / Linux 実行は未確認である（workflow 内のコメントに未検証点を残している）。
+- 包装は未署名であり、Windows / macOS の署名証明書は未設定である。Windows / Linux を含む3OSの包装は 2026-10-18 の手動実行で成功した。タグ実行による Release 作成はまだ確認していない（[docs/verification/github-actions.md](docs/verification/github-actions.md)）。
 
 workflow の手元実行には `act`（`mise.toml` 管理）を使う。Linux の `check` はコンテナで、macOS の release build は macOS 上で act を動かしてホスト実行できる。実行例と結果は [docs/verification/act.md](docs/verification/act.md) に置く。
 

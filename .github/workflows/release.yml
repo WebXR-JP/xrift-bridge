@@ -75,8 +75,9 @@ jobs:
       # ADR: Hutch 導入は OS ごとに公式手順を使い分ける。
       # Unix は `curl ... install.sh | sh`、Windows は公式 PowerShell インストーラ
       # （Electrobun 公式 docs「Quick Start」・「Hutch」の導入手順）である。
-      # Windows の PATH 追記が正しいか・Linux 依存が十分かは未検証であり、
-      # 初回実行で確認すること。
+      # Windows の PATH 追記と Linux の apt 依存は、2026-10-18 の手動実行で
+      # 3OS とも成功した（docs/verification/github-actions.md）。タグ実行での
+      # Release 作成は別途確認する。
       # `GITHUB_PATH` への追記は次の手順から有効になるため、同手順内の
       # `hutch --version` 確認用に当該 shell の PATH 設定も併せて行う。
       # 使用版は `hutch.config.ts` 先頭の pragma（0.27.1）が決める。ここでの
