@@ -11,3 +11,10 @@
 
 [settings]
 lockfile = false
+
+# ADR: ローカル開発ワールド（http://localhost:5173）から GUI へ接続するための許可
+# Origin である。GUI 側の許可 Origin の既定は https://app.xrift.net のみであり、
+# 追加はこの明示設定に限る（`apps/bridge-gui-main/src/main/index.ts`）。
+# 接続先の宣言（xrift.json の permissions.allowedDomains）とは別物である。
+[env]
+BRIDGE_GUI_DEV_ORIGINS = "http://localhost:5173"

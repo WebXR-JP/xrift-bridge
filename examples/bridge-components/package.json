@@ -1,0 +1,49 @@
+{
+  "name": "bridge-components",
+  "version": "0.0.0",
+  "private": true,
+  "description": "XRift ワールド向けのサンプルコンポーネント。ローカルブリッジへの接続とテキスト受信を例示する。",
+  "license": "MIT",
+  "files": [
+    "dist"
+  ],
+  "type": "module",
+  "exports": {
+    ".": "./dist/index.mjs",
+    "./package.json": "./package.json"
+  },
+  "scripts": {
+    "build": "vp pack",
+    "dev": "vp pack --watch",
+    "test": "vp test",
+    "test:types": "tsc --noEmit -p tsconfig.json",
+    "check": "vp check",
+    "prepublishOnly": "vp run build"
+  },
+  "dependencies": {
+    "bridge-plugin-text": "workspace:*",
+    "world-client": "workspace:*"
+  },
+  "devDependencies": {
+    "@pmndrs/uikit": "^1.0.64",
+    "@react-three/drei": "^10.7.7",
+    "@react-three/fiber": "^9.5.0",
+    "@react-three/rapier": "^2.2.0",
+    "@react-three/uikit": "^1.0.64",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "@types/three": "^0.183.1",
+    "@xrift/world-components": "^0.53.0",
+    "react": "~19.2.4",
+    "react-dom": "~19.2.4",
+    "three": "^0.183.1",
+    "typescript": "catalog:",
+    "vite-plus": "catalog:"
+  },
+  "peerDependencies": {
+    "@react-three/fiber": ">=9.0.0",
+    "@xrift/world-components": ">=0.53.0",
+    "react": ">=19.0.0",
+    "three": ">=0.183.0"
+  }
+}

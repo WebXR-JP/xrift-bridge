@@ -3,6 +3,7 @@ packages:
   - packages/*
   - packages/plugins/*
   - tools/*
+  - examples/*
 
 catalogMode: prefer
 

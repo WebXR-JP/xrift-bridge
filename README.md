@@ -19,6 +19,7 @@ v0 台ではプロトコルと公開 API に破壊的変更を加えることが
 | `apps/bridge-gui-main`             | デスクトップ GUI (Electrobun)。管理画面の実体は Angular 生成物を取り込む                          |
 | `apps/bridge-gui-ui`               | 管理画面の Angular 実装                                                                           |
 | `apps/diagnostic-world`            | 接続を診断するワールド (開発検証用)                                                               |
+| `examples/bridge-components`       | ワールド向けサンプルコンポーネント（接続とテキスト受信の例）                                      |
 | `apps/website`                     | テンプレート由来の Vite+ サイト。ルートの `pnpm dev` がこれを起動するため、製品の起動には使わない |
 
 子画面は各プラグインで事前ビルドし、GUI が staging (`apps/bridge-gui-main/src/plugin-view-dist/<種別>/`) 経由で取り込む。詳しい設計判断は `design/` を見る。
@@ -170,4 +171,5 @@ MIT。`LICENSE` を見る。
 - [design/bridge-connection.md](design/bridge-connection.md): 輸送手段と接続認可
 - [design/protocol.md](design/protocol.md): 配送・流れ制御・終了の契約
 - [docs/verification/](docs/verification/): 検証記録（[bridge-app.md](docs/verification/bridge-app.md)、[pairing-approval-runbook.md](docs/verification/pairing-approval-runbook.md) など）
+- ワールド向けサンプル: [examples/bridge-components](examples/bridge-components/README.md)
 - 各パッケージの使い方: [bridge-gui-main](apps/bridge-gui-main/README.md)、[bridge-cli](apps/bridge-cli/README.md)、[diagnostic-world](apps/diagnostic-world/README.md)、[world-client](packages/world-client/README.md)

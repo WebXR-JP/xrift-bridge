@@ -19,6 +19,7 @@
     "@react-three/rapier": "^2.2.0",
     "@react-three/uikit": "^1.0.64",
     "@xrift/world-components": "^0.53.0",
+    "bridge-components": "workspace:*",
     "bridge-plugin-diagnostic": "workspace:*",
     "bridge-plugin-text": "workspace:*",
     "bridge-plugin-udp": "workspace:*",
