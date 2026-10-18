@@ -65,7 +65,7 @@ mise exec -- act workflow_dispatch \
 - Linux の実行は arm64 コンテナであり、GitHub の `ubuntu-24.04` runner（x64）と native 依存の解決が同一ではない。x64 での再現は未実施（この Lima VM では `--platform linux/amd64` が `exec format error` になる）。
 - Windows runner は Windows ホスト上で `-P windows-latest=-self-hosted` を使う形になるが、今回は未実施である。
 - macOS のホスト実行は GitHub の macOS runner イメージと同一ではない。Xcode・CMake などの版はホスト依存であり、完全一致の保証はない。
-- GitHub 上の `release.yml` build は `workflow_dispatch` で3OSとも成功した（[github-actions.md](github-actions.md)）。タグ実行による `release` ジョブ（artifact の集約、`gh release create`、GitHub Release への添付）は未検証である。
+- GitHub 上の `release.yml` build は `workflow_dispatch` で3OSとも成功し、`v0.1.0` タグ実行で `release` ジョブと GitHub Release 作成まで成功した（[github-actions.md](github-actions.md)）。
 - ローカル成功は実 CI の代わりにならない。実 CI の結果は [github-actions.md](github-actions.md) を見る。
 
 ## 後片付け

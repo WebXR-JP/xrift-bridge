@@ -28,4 +28,4 @@
 ## 検証状況と未確認事項
 
 - act による `ci.yml` の `check` ジョブと `release.yml` の macOS build は [act.md](act.md) に記録した（Linux は Lima の docker VM 上の arm64 コンテナ、macOS は `-self-hosted` によるホスト実行）。Windows runner は未確認。
-- GitHub Actions 上の CI と `release.yml` の3OS build（`workflow_dispatch`）は [github-actions.md](github-actions.md) に記録した。タグ実行による Release 作成は未確認である。
+- GitHub Actions 上の CI と `release.yml` の3OS build（`workflow_dispatch`）は [github-actions.md](github-actions.md) に記録した。`v0.1.0` タグ実行による Release 作成まで成功している。

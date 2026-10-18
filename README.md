@@ -121,7 +121,7 @@ pnpm exec vp run diagnostic-world#dev
 
 - `.github/workflows/ci.yml`: PR・`main` への push・手動実行で、ubuntu 24.04 上で mise（`mise.toml` の Node・pnpm を mise-action で用意）→ install → Hutch → `gui:prepare` → build → `stage:ui` → check → test → test:types を回す。
 - `.github/workflows/release.yml`: `v*` タグまたは手動実行で macOS arm64 / Windows x64 / Linux x64 を native runner で包装する。タグ時は GitHub Release に成果物を添付し、手動実行時は Actions artifacts のみとする。道具立ては `mise.toml` を mise-action で読む。
-- 包装は未署名であり、Windows / macOS の署名証明書は未設定である。Windows / Linux を含む3OSの包装は 2026-10-18 の手動実行で成功した。タグ実行による Release 作成はまだ確認していない（[docs/verification/github-actions.md](docs/verification/github-actions.md)）。
+- 包装は未署名であり、Windows / macOS の署名証明書は未設定である。Windows / Linux を含む3OSの包装と、`v0.1.0` タグでの GitHub Release 作成は成功した（[docs/verification/github-actions.md](docs/verification/github-actions.md)）。
 
 workflow の手元実行には `act`（`mise.toml` 管理）を使う。Linux の `check` はコンテナで、macOS の release build は macOS 上で act を動かしてホスト実行できる。実行例と結果は [docs/verification/act.md](docs/verification/act.md) に置く。
 
