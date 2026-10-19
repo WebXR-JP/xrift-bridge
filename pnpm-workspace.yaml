@@ -47,6 +47,16 @@ catalog:
   # builder 検証済みの組み合わせから外さない。`bridge-gui-ui` の dev 依存に限る。
   vitest: 5.0.1
   ws: 8.22.0
+  # ADR: 製品向けローカル業務操作 MCP（stable 包装を含む main プロセス内待受け）に
+  # 使う外部依存。Hutch の stable 包装に取り込まれ、開発用の node_modules に
+  # 依存せずに起動したアプリで往復できることをスパイクで確かめる。
+  # 採用可否の判断材料であり、版は固定する（v0 台は版間の互換を考えない）。
+  "@modelcontextprotocol/sdk": 1.32.1
+  # ADR: 製品向け MCP の工具の入力検証と広告 schema を同じ定義に一本化するための
+  # zod。`bridge-gui-main` の runtime 依存として `catalog:` 参照する。
+  # 版は lock 済みの既存解決（4.6.5）に固定する。契約パッケージには入れない
+  # （実行時依存を持てない）。
+  zod: 4.6.5
 overrides:
   vite@*: "catalog:"
 peerDependencyRules:

@@ -82,4 +82,15 @@
   <section data-panel="log" [class.hidden]="selectedKey() !== 'log'">
     <app-event-log [entries]="eventLog()" />
   </section>
+
+  <section data-panel="local-mcp" [class.hidden]="selectedKey() !== 'local-mcp'">
+    <app-local-mcp-panel
+      [status]="localMcpStatus()"
+      [error]="localMcpError()"
+      [enablePending]="localMcpEnablePending()"
+      [disablePending]="localMcpDisablePending()"
+      (enableRequested)="onEnableLocalMcp()"
+      (disableRequested)="onDisableLocalMcp()"
+    />
+  </section>
 </app-shell>

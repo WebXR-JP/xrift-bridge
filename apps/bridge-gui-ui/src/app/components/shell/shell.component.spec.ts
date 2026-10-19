@@ -18,6 +18,7 @@ function countsOf(
     sessions: 1,
     plugins: null,
     operations: null,
+    "local-mcp": null,
     log: null,
     ...overrides,
   };
@@ -58,17 +59,18 @@ async function prepareShell(options?: {
 }
 
 describe("シェルのナビとヘッダ", () => {
-  it("5画面のナビ項目と選択中の題・副題を出す", async () => {
+  it("6画面のナビ項目と選択中の題・副題を出す", async () => {
     const fixture = await prepareShell();
     const root = fixture.nativeElement as HTMLElement;
     const navButtons = root.querySelectorAll("nav button[data-nav-key]");
-    expect(navButtons.length).toBe(5);
+    expect(navButtons.length).toBe(6);
     const labels = [...navButtons].map((button) => button.textContent ?? "");
     expect(labels[0]).toContain("接続");
     expect(labels[1]).toContain("セッション一覧");
     expect(labels[2]).toContain("プラグイン一覧");
     expect(labels[3]).toContain("プラグイン操作");
-    expect(labels[4]).toContain("受信記録");
+    expect(labels[4]).toContain("ローカル MCP");
+    expect(labels[5]).toContain("受信記録");
     expect(root.querySelector("header h1")?.textContent).toContain("接続");
     expect(root.querySelector("header p")?.textContent).toContain(
       "接続の受け入れと確立、現在の状態。",
@@ -84,6 +86,7 @@ describe("シェルのナビとヘッダ", () => {
     expect(byKey("sessions")).toContain("1 件");
     expect(byKey("plugins")).not.toContain("件");
     expect(byKey("operations")).not.toContain("件");
+    expect(byKey("local-mcp")).not.toContain("件");
     expect(byKey("log")).not.toContain("件");
   });
 

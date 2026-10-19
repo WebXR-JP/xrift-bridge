@@ -360,6 +360,53 @@ export interface OperationAck {
   readonly ok: true;
 }
 
+/**
+ * 製品向け MCP の公開状態（資格情報を含まない）。
+ *
+ * 有効／無効・待受ポート・接続先 URL・開始失敗の有無・停止の未完了・改訂番号を
+ * 持つ。URL に資格情報は含めない。資格情報は存在しない（無認証で開く）。
+ */
+export interface LocalMcpStatus {
+  /** 有効（待受中）の場合に真。 */
+  readonly enabled: boolean;
+  /** 待ち受け中のポート。有効でない間は `null`。 */
+  readonly port: number | null;
+  /** 接続先 URL。有効でない間は `null`。資格情報を含まない。 */
+  readonly url: string | null;
+  /** 直近の開始失敗がある場合に真（起動継続の可視化用）。成功時は偽に戻る。 */
+  readonly startFailed: boolean;
+  /**
+   * 停止が未完了の場合に真。
+   *
+   * 操作受付の失効と停止完了（ソケット解放）を区別するための項目である。
+   * 真の間は操作を受け付けないが、待受けの解放は終わっていない。未完了の
+   * 間は停止を再試行でき、未終了の待受けがある間は新規に開かない。
+   */
+  readonly cleanupPending: boolean;
+  /**
+   * main が所有する単調な改訂番号。
+   *
+   * 状態を変えるたびに1つ以上進む。読み取り（状態取得）は版を進めない。
+   * push（`localMcpChanged`）と状態取得の応答は同じ版付けを載せる。
+   */
+  readonly revision: number;
+}
+
+// ADR: 公開状態の改訂番号の意味。UI が push と応答の到着順で状態を巻き戻さない
+// ための規約の土台である。番号は公開状態の版であり、状態（有効／無効・待受・
+// 開始失敗・未完了）の変化点を指す。同じ値は同じ内容の公開状態を指し、新しい
+// 値は古い表示・push より後の状態を指す。到着順が交差しても大きい版を正とし、
+// 同じ版の重複は捨ててよい。要求の応答の版より古い push で上書きしない。同じ
+// 要求の応答の識別には使わず、応答と push の新旧比較だけに使う。管理 RPC の
+// 既存要求（`getSnapshot`・`enableAcceptance` 等）の意味は変えない。
+//
+// ADR: 公開状態の確定と公開の段階。内容と版はひとつの単位として確定して公開し、
+// 中間状態を外に出さない。停止は二段階で公開する。停止要求を受け付けた時点で
+// 「無効・未完了」を確定して公開し、待受けの解放の確認が取れた時点で
+// 「無効・完了」へ進める。個体の受付失効だけでは停止完了としない。未終了の再試行の
+// 間は未完了を示し続け、一覧を空にしてから待つ中間状態を作らない。待受け参照の
+// 消去は状態の確定と同じ同期区間に置く。
+
 // ADR: Electrobun の `RPCSchema<I>` は `{requests, messages}` に解決される
 // 構造型であり、`ElectrobunRPCSchema` 制約（`{bun, webview}`）も構造適合で
 // 満たせる。そのため契約ではこの素朴な構造型で表し、`electrobun/rpc` を
@@ -438,6 +485,23 @@ export type ManagementRpc = {
       setPluginView: { params: PluginViewRequest; response: SetPluginViewResult };
       /** アプリ終了を要求する。後始末完了後に終了する。 */
       quit: { params: {}; response: OperationAck };
+      /** 製品向け MCP の公開状態を取得する（資格情報を含まない）。 */
+      getLocalMcpStatus: { params: {}; response: LocalMcpStatus };
+      /**
+       * 製品向け MCP を有効化する。待受けを開く。
+       *
+       * 既に有効な場合も待受けを作り直す。
+       * MCP には有効化・権限変更・アプリ終了を公開しない。
+       */
+      enableLocalMcp: { params: {}; response: LocalMcpStatus };
+      /**
+       * 製品向け MCP を停止する。操作受付を失効し、待受けを止める。
+       *
+       * 停止の完了（ソケット解放）を確認した公開状態を返す。解放が未完了の
+       * 場合は未完了を示す状態を返し、再試行できる。実行済み副作用の巻き戻しは
+       * 保証しない。
+       */
+      disableLocalMcp: { params: {}; response: LocalMcpStatus };
     },
     {/** Webview からの通知口。子専用の ready・ping・状態取得は持たない。 */}
   >;
@@ -460,6 +524,8 @@ export type ManagementRpc = {
     {
       /** main からの状態 push。 */
       stateChanged: StateChangedMessage;
+      /** main からの製品向け MCP の公開状態の push（資格情報を含まない）。 */
+      localMcpChanged: LocalMcpStatus;
     }
   >;
 };

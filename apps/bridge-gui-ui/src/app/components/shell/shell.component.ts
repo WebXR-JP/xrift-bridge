@@ -12,6 +12,7 @@ import { NgIcon, provideIcons } from "@ng-icons/core";
 import {
   lucideAppWindow,
   lucideHexagon,
+  lucideNetwork,
   lucidePlug,
   lucidePower,
   lucidePuzzle,
@@ -43,6 +44,7 @@ export interface ShellStatus {
     provideIcons({
       lucideAppWindow,
       lucideHexagon,
+      lucideNetwork,
       lucidePlug,
       lucidePower,
       lucidePuzzle,

@@ -12,6 +12,7 @@ import { Injectable } from "@angular/core";
 import { Electroview } from "electrobun/view";
 import type {
   AdmissionState,
+  LocalMcpStatus,
   ManagementRpc,
   ManagementSnapshot,
   NgDebugProbeResult,
@@ -27,6 +28,9 @@ import type { ApprovalResult, RejectionResult } from "bridge-server";
 
 /** `stateChanged` push の受信処理。採用判断は呼び出し側が行う。 */
 export type StateChangedHandler = (message: StateChangedMessage) => void;
+
+/** 製品向け MCP の公開状態 push の受信処理。 */
+export type LocalMcpChangedHandler = (status: LocalMcpStatus) => void;
 
 @Injectable({ providedIn: "root" })
 export class ManagementRpcClient {
@@ -44,6 +48,9 @@ export class ManagementRpcClient {
 
   private readonly stateHandlers = new Set<StateChangedHandler>();
 
+  /** 製品向け MCP の公開状態 push の受信口。 */
+  private readonly localMcpHandlers = new Set<LocalMcpChangedHandler>();
+
   private readonly rpc = Electroview.defineRPC<ManagementRpc>({
     handlers: {
       requests: {
@@ -54,6 +61,11 @@ export class ManagementRpcClient {
         stateChanged: (message) => {
           for (const handler of this.stateHandlers) {
             handler(message);
+          }
+        },
+        localMcpChanged: (status) => {
+          for (const handler of this.localMcpHandlers) {
+            handler(status);
           }
         },
       },
@@ -96,6 +108,19 @@ export class ManagementRpcClient {
     this.stateHandlers.add(handler);
     return () => {
       this.stateHandlers.delete(handler);
+    };
+  }
+
+  /**
+   * 製品向け MCP の公開状態 push の購読を登録する。
+   *
+   * @param handler - 受信した公開状態を受ける処理。
+   * @returns 購読を解除する関数。
+   */
+  onLocalMcpChanged(handler: LocalMcpChangedHandler): () => void {
+    this.localMcpHandlers.add(handler);
+    return () => {
+      this.localMcpHandlers.delete(handler);
     };
   }
 
@@ -193,6 +218,33 @@ export class ManagementRpcClient {
     portId: string,
   ): Promise<UnassignPluginResult> {
     return this.rpc.request.unassignPlugin({ instanceId, localSessionId, portId });
+  }
+
+  /**
+   * 製品向け MCP の公開状態を取得する（URL のみで接続する）。
+   *
+   * @returns 現在の公開状態。
+   */
+  getLocalMcpStatus(): Promise<LocalMcpStatus> {
+    return this.rpc.request.getLocalMcpStatus({});
+  }
+
+  /**
+   * 製品向け MCP を有効化する。待受けを開く／作り直す。
+   *
+   * @returns 有効化後の公開状態。
+   */
+  enableLocalMcp(): Promise<LocalMcpStatus> {
+    return this.rpc.request.enableLocalMcp({});
+  }
+
+  /**
+   * 製品向け MCP を停止する。個体の受付を失効し、待受けを止める。
+   *
+   * @returns 停止後の公開状態（解放の確認結果を含む）。
+   */
+  disableLocalMcp(): Promise<LocalMcpStatus> {
+    return this.rpc.request.disableLocalMcp({});
   }
 
   /**

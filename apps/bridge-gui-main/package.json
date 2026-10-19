@@ -18,6 +18,7 @@
     "gui:build": "pnpm --filter bridge-gui-ui ng:build:prod && pnpm stage:ui prod && pnpm gui:prepare && pnpm stage:plugins && cross-env BRIDGE_GUI_UI_DIR=src/mainview-dist/prod hutch run build"
   },
   "dependencies": {
+    "@modelcontextprotocol/sdk": "catalog:",
     "bridge-app-core": "workspace:*",
     "bridge-gui-contract": "workspace:*",
     "bridge-gui-plugin-sdk": "workspace:*",
@@ -26,7 +27,8 @@
     "bridge-plugin-text": "workspace:*",
     "bridge-plugin-udp": "workspace:*",
     "bridge-protocol": "workspace:*",
-    "bridge-server": "workspace:*"
+    "bridge-server": "workspace:*",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@types/bun": "catalog:",

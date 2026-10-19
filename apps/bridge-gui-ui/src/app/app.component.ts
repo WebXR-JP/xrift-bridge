@@ -10,6 +10,7 @@ import type { OnInit } from "@angular/core";
 import { AcceptanceToggleComponent } from "./components/acceptance-toggle/acceptance-toggle.component.ts";
 import { ConnectionListComponent } from "./components/connection-list/connection-list.component.ts";
 import { EventLogComponent } from "./components/event-log/event-log.component.ts";
+import { LocalMcpPanelComponent } from "./components/local-mcp-panel/local-mcp-panel.component.ts";
 import { ManagementService } from "./Services/management.service.ts";
 import { PendingListComponent } from "./components/pending-list/pending-list.component.ts";
 import { PluginListComponent } from "./components/plugin-list/plugin-list.component.ts";
@@ -34,6 +35,7 @@ import type { ViewKey } from "./view-config.ts";
     AcceptanceToggleComponent,
     ConnectionListComponent,
     EventLogComponent,
+    LocalMcpPanelComponent,
     PendingListComponent,
     PluginListComponent,
     PluginOperationsComponent,
@@ -88,6 +90,26 @@ export class AppComponent implements OnInit {
     return this.management.eventLog;
   }
 
+  /** 製品向け MCP の公開状態。 */
+  get localMcpStatus() {
+    return this.management.localMcpStatus;
+  }
+
+  /** 製品向け MCP の操作の失敗表示。 */
+  get localMcpError() {
+    return this.management.localMcpError;
+  }
+
+  /** 製品向け MCP の有効化の実行中旗。 */
+  get localMcpEnablePending() {
+    return this.management.localMcpEnablePending;
+  }
+
+  /** 製品向け MCP の停止の実行中旗。 */
+  get localMcpDisablePending() {
+    return this.management.localMcpDisablePending;
+  }
+
   /** プラグイン操作の失敗表示。本文は含めない（失敗理由だけである）。 */
   get pluginError() {
     return this.management.pluginError;
@@ -122,13 +144,21 @@ export class AppComponent implements OnInit {
   get viewCounts(): Readonly<Record<ViewKey, number | null>> {
     const current = this.management.snapshot();
     if (current === null) {
-      return { connections: null, sessions: null, plugins: null, operations: null, log: null };
+      return {
+        connections: null,
+        sessions: null,
+        plugins: null,
+        operations: null,
+        "local-mcp": null,
+        log: null,
+      };
     }
     return {
       connections: current.connections.length,
       sessions: current.sessions.length,
       plugins: null,
       operations: null,
+      "local-mcp": null,
       log: null,
     };
   }
@@ -231,6 +261,8 @@ export class AppComponent implements OnInit {
       this.management.registerPluginHost(this.pluginHost.nativeElement);
     }
     await this.management.fetchInitial();
+    // 製品向け MCP の公開状態も初回に読む。以後は push と操作後の読直しで追う。
+    await this.management.fetchLocalMcpStatus();
   }
 
   /** 受付を有効化する（人間の操作用）。 */
@@ -308,6 +340,16 @@ export class AppComponent implements OnInit {
   /** アプリを終了する（人間の操作用）。 */
   async onQuit(): Promise<void> {
     await this.management.quit();
+  }
+
+  /** 製品向け MCP を有効化する（人間の操作用）。 */
+  async onEnableLocalMcp(): Promise<void> {
+    await this.management.enableLocalMcp();
+  }
+
+  /** 製品向け MCP を停止する（人間の操作用）。 */
+  async onDisableLocalMcp(): Promise<void> {
+    await this.management.disableLocalMcp();
   }
 
   /** 選択中個体の子画面の再試行を要求する（人間の操作用）。対象個体だけに作用する。 */

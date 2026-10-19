@@ -1,6 +1,14 @@
 import { expect, test } from "vite-plus/test";
 import { selectNewer } from "bridge-gui-contract/management";
 import {
+  isLocalExecutableOp,
+  isLocalHumanOnlyOp,
+  isLocalKnownOp,
+  localHumanApprovalNotice,
+  summarizeLocalResult,
+  summarizeLocalStatus,
+} from "bridge-gui-contract/local-ops";
+import {
   buildPluginBlankUrl,
   buildPluginNavigationRules,
   buildPluginViewUrl,
@@ -21,6 +29,15 @@ import {
 
 test("management の公開値が関数として取り出せる", () => {
   expect(typeof selectNewer).toBe("function");
+});
+
+test("local-ops の公開表面が欠けていない", () => {
+  expect(typeof isLocalExecutableOp).toBe("function");
+  expect(typeof isLocalHumanOnlyOp).toBe("function");
+  expect(typeof isLocalKnownOp).toBe("function");
+  expect(typeof localHumanApprovalNotice).toBe("function");
+  expect(typeof summarizeLocalStatus).toBe("function");
+  expect(typeof summarizeLocalResult).toBe("function");
 });
 
 test("plugin-instance の公開表面が欠けておらず規則生成が公開される", () => {

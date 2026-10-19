@@ -12,6 +12,7 @@ import {
   startDevConsole,
   type DevConsole,
 } from "./dev-console.ts";
+import { LocalMcpController } from "./mcp.ts";
 import { createManagementRpc } from "./rpc.ts";
 import type { PluginUiOperations } from "./rpc.ts";
 import { ElectrobunPluginUiChildView, createPluginUiChannelFactory } from "./instance-rpc.ts";
@@ -66,6 +67,11 @@ let shutdownTask: Promise<void> | null = null;
 // 満たすときだけ起動し、終了処理で必ず閉じる。stable は環境変数を
 // 設定しても開かない。
 let devConsole: DevConsole | null = null;
+// 製品向けローカル業務操作 MCP の実行単位の寿命。起動時の環境変数と
+// 管理画面の設定操作を同じゲートの二つの入口として扱い、有効状態を
+// 次回起動へ保存しない。開発用の接続口とはゲート・待受けを混ぜない（製品向けに
+// 資格情報は持たない）。
+let mcpController: LocalMcpController | null = null;
 // 実プラグイン子画面の対応付け。窓の生成後に結び付け、終了処理で破棄する。
 let pluginUi: PluginUiCoordinator | null = null;
 // 後始末が終わり、終了・閉鎖の再要求を許可できるか。
@@ -87,6 +93,10 @@ function shutdown(): Promise<void> {
         if (devConsole !== null) {
           await devConsole.close();
           devConsole = null;
+        }
+        // 製品向け MCP を閉じ、新規の業務操作を止める。個体の受付は失効する。
+        if (mcpController !== null) {
+          await mcpController.close();
         }
         // 子画面の対応付けを先に破棄し、BrowserView・購読を残さない。
         // 実プラグイン子画面も対応付けの削除と表示の破棄を行い残さない。
@@ -140,7 +150,7 @@ Electrobun.events.on("before-quit", (raw: unknown) => {
   quitAfterShutdown();
 });
 
-void backendPromise.then((ready) => {
+void backendPromise.then(async (ready) => {
   if (ready.startupError !== null) {
     console.log(`[bridge-gui] バックエンドの起動に失敗した: ${String(ready.startupError)}`);
   } else {
@@ -168,6 +178,19 @@ void backendPromise.then((ready) => {
       pluginUi?.retryFailed(instanceId) ?? failPluginUi(),
   };
 
+  // 製品向けローカル業務操作 MCP の寿命。起動時の環境変数と管理画面の
+  // 設定操作を同じゲートの二つの入口として扱い、有効状態を次回起動へ
+  // 保存しない。画面から停止した後は、環境変数を理由に同一実行内で
+  // 自動再開しない。待受けを開けない場合も通常の GUI と backend は
+  // 起動を継続し、開始失敗は公開状態に載せて管理画面から分かるようにする。
+  mcpController = new LocalMcpController(ready);
+  const mcp = mcpController;
+  // 起動時の env 入口。完了を待ってから窓を作り、開始の記録を残す。
+  await mcp.startFromEnv();
+  if (mcp.getStatus().enabled) {
+    console.log("[bridge-gui] MCPを開始した");
+  }
+
   const rpc = createManagementRpc(
     ready,
     {
@@ -185,7 +208,12 @@ void backendPromise.then((ready) => {
       },
     },
     pluginUiOps,
+    mcp,
   );
+  // 製品向け MCP の公開状態の変化を Webview へ送る。接続先 URL を含む公開状態そのものであり、資格情報は含まない。
+  mcp.onChanged((state) => {
+    rpc.send.localMcpChanged(state);
+  });
 
   // 開発専用の AI 操作・観測口。有効条件（三つ）を満たすときだけ
   // loopback に開き、終了処理で閉じる。許可操作は既存操作への委譲であり、

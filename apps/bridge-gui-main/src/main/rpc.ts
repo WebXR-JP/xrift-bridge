@@ -1,5 +1,5 @@
 import { BrowserView } from "electrobun/main";
-import type { ManagementRpc, OperationAck } from "bridge-gui-contract/management";
+import type { LocalMcpStatus, ManagementRpc, OperationAck } from "bridge-gui-contract/management";
 import type {
   PluginUiMountFailure,
   PluginUiMountPlacement,
@@ -47,6 +47,27 @@ export interface PluginUiOperations {
 }
 
 /**
+ * 製品向け MCP の管理操作口。寿命の所有は controller が担い、RPC 層は
+ * 公開操作の受付と委譲だけを行う。URL に資格情報は含めない。
+ */
+export interface LocalMcpOperations {
+  /** 現在の公開状態を取得する（資格情報を含まない）。 */
+  getStatus(): LocalMcpStatus;
+  /**
+   * 有効化する。待受けを開く／作り直す。
+   *
+   * @returns 有効化後の公開状態。
+   */
+  enable(): Promise<LocalMcpStatus>;
+  /**
+   * 停止する。個体の受付を失効し、待受けを止める。
+   *
+   * @returns 停止後の公開状態（解放の確認結果を含む）。
+   */
+  disable(): Promise<LocalMcpStatus>;
+}
+
+/**
  * main 側 RPC 定義。表示データ（DTO）と限定操作だけを公開する。
  *
  * Webview へ関数や生オブジェクトを渡さない。引数・ID・終了中状態の検証は
@@ -57,12 +78,14 @@ export interface PluginUiOperations {
  * @param backend - 表示状態の提供元と限定操作の実行先。
  * @param hooks - Webview 通知に対する後処理。
  * @param pluginUi - 実プラグイン子画面の配置操作口。
+ * @param mcp - 製品向け MCP の管理操作口。
  * @returns `BrowserWindow` に渡す RPC 接続。
  */
 export function createManagementRpc(
   backend: GuiBackend,
   hooks: ManagementRpcHooks,
   pluginUi: PluginUiOperations,
+  mcp: LocalMcpOperations,
 ) {
   return BrowserView.defineRPC<ManagementRpc>({
     handlers: {
@@ -91,6 +114,24 @@ export function createManagementRpc(
           backend.unassignPlugin({ instanceId, localSessionId, portId }),
         retryPluginMount: ({ instanceId }) => pluginUi.retryPluginUiMount(instanceId),
         setPluginView: (params) => backend.setPluginView(params),
+        // 製品向け MCP の管理操作。URL に資格情報は含めない。
+        // 「停止した」と記録するのは解放を確認したあとだけにする（ACK と記録の
+        // 意味を合わせる）。解放が未完了の場合は未完了を示す状態を返す。
+        getLocalMcpStatus: () => mcp.getStatus(),
+        enableLocalMcp: async () => {
+          const status = await mcp.enable();
+          console.log("[bridge-gui] 製品向け MCP を有効化した");
+          return status;
+        },
+        disableLocalMcp: async () => {
+          const status = await mcp.disable();
+          if (!status.enabled && !status.cleanupPending) {
+            console.log("[bridge-gui] 製品向け MCP を停止した");
+          } else {
+            console.log("[bridge-gui] 製品向け MCP の停止が未完了である");
+          }
+          return status;
+        },
         quit: () => {
           hooks.onQuitRequested();
           return { ok: true as const };

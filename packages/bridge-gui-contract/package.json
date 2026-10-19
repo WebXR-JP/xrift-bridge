@@ -9,6 +9,7 @@
   "type": "module",
   "exports": {
     "./dev-console": "./dist/dev-console.mjs",
+    "./local-ops": "./dist/local-ops.mjs",
     "./management": "./dist/management.mjs",
     "./plugin-instance": "./dist/plugin-instance.mjs",
     "./package.json": "./package.json"

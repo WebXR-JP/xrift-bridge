@@ -23,6 +23,10 @@ function prepareServiceStub() {
     pairingFetchFailed: signal([] as readonly string[]),
     eventLog: signal([] as readonly EventLogEntry[]),
     pluginError: signal(""),
+    localMcpStatus: signal(null),
+    localMcpError: signal(""),
+    localMcpEnablePending: signal(false),
+    localMcpDisablePending: signal(false),
     pluginViewStateFor: vi.fn((_instanceId: string | null): PluginViewState => ({
       kind: "preparing",
     })),
@@ -42,6 +46,9 @@ function prepareServiceStub() {
     quit: vi.fn(async () => {}),
     retryPluginMount: vi.fn(async (_instanceId: string) => {}),
     reloadSnapshot: vi.fn(async () => {}),
+    fetchLocalMcpStatus: vi.fn(async () => {}),
+    enableLocalMcp: vi.fn(async () => {}),
+    disableLocalMcp: vi.fn(async () => {}),
   };
 }
 
@@ -62,8 +69,11 @@ describe("入れ物の起動", () => {
   it("初回取得だけを行い自動走行しない", async () => {
     const { stub } = await prepareRoot();
     expect(stub.fetchInitial).toHaveBeenCalledTimes(1);
+    expect(stub.fetchLocalMcpStatus).toHaveBeenCalledTimes(1);
     expect(stub.enableAcceptance).not.toHaveBeenCalled();
     expect(stub.disableAcceptance).not.toHaveBeenCalled();
+    expect(stub.enableLocalMcp).not.toHaveBeenCalled();
+    expect(stub.disableLocalMcp).not.toHaveBeenCalled();
   });
 
   it("状態要約と受付操作を描画する", async () => {
@@ -124,11 +134,11 @@ function selectView(fixture: ComponentFixture<AppComponent>, key: string): void 
 }
 
 describe("画面選択とパネル切替", () => {
-  it("5つのナビ項目があり初期は接続を選ぶ", async () => {
+  it("6つのナビ項目があり初期は接続を選ぶ", async () => {
     const { fixture } = await prepareRoot();
     const root = fixture.nativeElement as HTMLElement;
     const navButtons = root.querySelectorAll("nav button[data-nav-key]");
-    expect(navButtons.length).toBe(5);
+    expect(navButtons.length).toBe(6);
     expect(
       root.querySelector('nav button[data-nav-key="connections"]')?.getAttribute("aria-current"),
     ).toBe("page");
@@ -145,6 +155,7 @@ describe("画面選択とパネル切替", () => {
     expect(panelOf(fixture, "connections").classList.contains("hidden")).toBe(true);
     expect(panelOf(fixture, "plugins").classList.contains("hidden")).toBe(true);
     expect(panelOf(fixture, "operations").classList.contains("hidden")).toBe(true);
+    expect(panelOf(fixture, "local-mcp").classList.contains("hidden")).toBe(true);
     expect(panelOf(fixture, "log").classList.contains("hidden")).toBe(true);
     expect(root.querySelector("header h1")?.textContent).toContain("セッション一覧");
     // 常時マウントのため、非表示パネルの部品も破棄されない。
@@ -194,7 +205,7 @@ describe("画面選択とパネル切替", () => {
 
   it("パネル切替が業務RPCを送らない", async () => {
     const { fixture, stub } = await prepareRoot();
-    for (const key of ["sessions", "plugins", "operations", "log", "connections"]) {
+    for (const key of ["sessions", "plugins", "operations", "local-mcp", "log", "connections"]) {
       selectView(fixture, key);
     }
     await fixture.whenStable();
@@ -210,6 +221,19 @@ describe("画面選択とパネル切替", () => {
     expect(stub.quit).not.toHaveBeenCalled();
     expect(stub.retryPluginMount).not.toHaveBeenCalled();
     expect(stub.reloadSnapshot).not.toHaveBeenCalled();
+    expect(stub.enableLocalMcp).not.toHaveBeenCalled();
+    expect(stub.disableLocalMcp).not.toHaveBeenCalled();
+  });
+
+  it("ローカル MCP パネルが常時マウントされ選択で表示される", async () => {
+    const { fixture } = await prepareRoot();
+    expect(panelOf(fixture, "local-mcp").classList.contains("hidden")).toBe(true);
+    expect(panelOf(fixture, "local-mcp").querySelector("app-local-mcp-panel")).not.toBe(null);
+    selectView(fixture, "local-mcp");
+    expect(panelOf(fixture, "local-mcp").classList.contains("hidden")).toBe(false);
+    expect(fixture.nativeElement.querySelector("header h1")?.textContent).toContain(
+      "ローカル業務操作 MCP",
+    );
   });
 });
 

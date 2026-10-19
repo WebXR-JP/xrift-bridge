@@ -1,0 +1,102 @@
+<!-- 製品向けローカル業務操作 MCP（状態・操作・URL の複写）。未取得の間は状態を断定しない。 -->
+<section class="flex flex-col gap-3" aria-label="ローカル業務操作 MCP">
+  <h2 class="text-[15px] font-bold text-[var(--foreground)]">ローカル業務操作 MCP</h2>
+
+  <div class="flex items-center justify-between gap-4">
+    <span class="flex items-center gap-2 text-[14px] font-medium text-[var(--foreground)]">
+      @if (status() === null) {
+        <span>—</span>
+      } @else if (status()?.startFailed === true) {
+        <span
+          class="inline-block h-2 w-2 rounded-full"
+          style="background: var(--destructive)"
+        ></span>
+        <span>開始に失敗した</span>
+      } @else if (enabled) {
+        <span class="inline-block h-2 w-2 rounded-full" style="background: var(--success)"></span>
+        <span>有効</span>
+      } @else {
+        <span
+          class="inline-block h-2 w-2 rounded-full"
+          style="background: var(--destructive)"
+        ></span>
+        <span>無効</span>
+      }
+    </span>
+    <span class="flex shrink-0 items-center gap-2">
+      <button
+        hlmBtn
+        variant="default"
+        type="button"
+        [disabled]="!canEnable"
+        (click)="enableRequested.emit()"
+      >
+        有効化する
+      </button>
+      <button
+        hlmBtn
+        variant="outline"
+        type="button"
+        [disabled]="!canDisable"
+        (click)="disableRequested.emit()"
+      >
+        停止する
+      </button>
+    </span>
+  </div>
+
+  @if (status() !== null && status()?.startFailed === true) {
+    <p class="text-[14px] text-[var(--destructive)]">
+      待受けを開けなかった。管理画面は起動を続けている。もう一度有効化するか、起動記録を確認する。
+    </p>
+  }
+
+  @if (pendingCleanup) {
+    <p class="text-[14px] text-[var(--destructive)]">停止が未完了である。もう一度停止する。</p>
+  }
+
+  @if (status()?.url !== null && status()?.url !== undefined) {
+    <div class="flex min-w-0 flex-col gap-1">
+      <label class="text-[12px] text-[var(--muted-foreground)]" for="local-mcp-url"
+        >接続先 URL</label
+      >
+      <span class="flex items-center gap-2">
+        <input
+          #urlInput
+          id="local-mcp-url"
+          hlmInput
+          class="min-w-0 flex-1"
+          type="text"
+          readonly
+          [value]="status()?.url"
+        />
+        <button
+          hlmBtn
+          variant="outline"
+          type="button"
+          (click)="copyText(status()?.url ?? '', urlInput)"
+        >
+          @if (copiedKey()) {
+            コピーしました
+          } @else {
+            コピー
+          }
+        </button>
+      </span>
+    </div>
+  }
+
+  @if (error() !== "") {
+    <p class="text-[14px] text-[var(--destructive)]">{{ error() }}</p>
+  }
+
+  <p class="text-[13px] leading-6 text-[var(--muted-foreground)]">
+    既定は無効であり、有効化は実行単位である。保存しないため、次回起動では無効に戻る
+    （起動時に有効化する入口を渡した場合を除く）。停止後は自動で再開しない。 URL
+    のみで接続でき、到達したローカルプロセスが固定の許可操作を利用できる。
+  </p>
+  <p class="text-[13px] leading-6 text-[var(--muted-foreground)]">
+    同じ PC のローカルプロセスは利用者を問わず接続できる。ポートは解放後に再利用され得るため、 古い
+    URL が別の実行に一致し得る。
+  </p>
+</section>

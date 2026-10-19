@@ -6,7 +6,7 @@
  */
 
 /** 画面の識別子。Router ではなく App のローカル signal で保持する。 */
-export type ViewKey = "connections" | "sessions" | "plugins" | "operations" | "log";
+export type ViewKey = "connections" | "sessions" | "plugins" | "operations" | "local-mcp" | "log";
 
 /** 1画面の静的定義。 */
 export interface ViewDefinition {
@@ -51,6 +51,13 @@ export const VIEW_DEFINITIONS: readonly ViewDefinition[] = [
     iconName: "lucideAppWindow",
     title: "プラグイン操作",
     subtitle: "起動中のプラグインを切り替えて操作する。",
+  },
+  {
+    key: "local-mcp",
+    navLabel: "ローカル MCP",
+    iconName: "lucideNetwork",
+    title: "ローカル業務操作 MCP",
+    subtitle: "製品向け MCP の有効化・停止と接続設定の写し。",
   },
   {
     key: "log",

@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vite-plus/test";
 import type {
+  LocalMcpStatus,
   ManagementSnapshot,
   OwnedPluginInstanceSummary,
 } from "bridge-gui-contract/management";
@@ -20,11 +21,16 @@ function makePairingView(requestId: string): PairingViewResult {
 /** 試験用の接続口の代役。push 処理の受付けと送受信の記録だけを行う。 */
 function prepareRpcStub() {
   let pushHandler: StateChangedHandler | null = null;
+  let mcpPushHandler: ((status: LocalMcpStatus) => void) | null = null;
   const client = {
     setProbeHandler: vi.fn(),
     setDevObserveHandler: vi.fn(),
     onStateChanged: vi.fn((handler: StateChangedHandler): (() => void) => {
       pushHandler = handler;
+      return () => {};
+    }),
+    onLocalMcpChanged: vi.fn((handler: (status: LocalMcpStatus) => void): (() => void) => {
+      mcpPushHandler = handler;
       return () => {};
     }),
     getSnapshot: vi.fn(async () => makeSnapshot({ revision: 3 })),
@@ -57,8 +63,36 @@ function prepareRpcStub() {
       }),
     ),
     retryPluginMount: vi.fn(async (_instanceId: string) => ({ ok: true as const })),
+    getLocalMcpStatus: vi.fn(async (): Promise<LocalMcpStatus> => ({
+      enabled: false,
+      port: null,
+      url: null,
+      startFailed: false,
+      cleanupPending: false,
+      revision: 0,
+    })),
+    enableLocalMcp: vi.fn(async (): Promise<LocalMcpStatus> => ({
+      enabled: true,
+      port: 4321,
+      url: "http://127.0.0.1:4321/mcp",
+      startFailed: false,
+      cleanupPending: false,
+      revision: 1,
+    })),
+    disableLocalMcp: vi.fn(async (): Promise<LocalMcpStatus> => ({
+      enabled: false,
+      port: null,
+      url: null,
+      startFailed: false,
+      cleanupPending: false,
+      revision: 2,
+    })),
   };
-  return { client, pushHandler: (): StateChangedHandler | null => pushHandler };
+  return {
+    client,
+    pushHandler: (): StateChangedHandler | null => pushHandler,
+    mcpPushHandler: (): ((status: LocalMcpStatus) => void) | null => mcpPushHandler,
+  };
 }
 
 // ADR: `as` は実行時の検証にならないため、主張する型が成立する根拠を残す。
@@ -1507,5 +1541,335 @@ describe("表示要求の基準世代と採用・stale", () => {
       instanceId: "i2",
       baseViewGeneration: 0,
     });
+  });
+});
+
+describe("製品向け MCP の公開状態", () => {
+  /** 試験用の公開状態。 */
+  function statusOf(overrides?: Partial<LocalMcpStatus>): LocalMcpStatus {
+    return {
+      enabled: true,
+      port: 4321,
+      url: "http://127.0.0.1:4321/mcp",
+      startFailed: false,
+      cleanupPending: false,
+      revision: 0,
+      ...overrides,
+    };
+  }
+
+  /** 受信記録の全文を取り出す。秘密の混入検査にも使う。 */
+  function logText(service: Pick<ManagementService, "eventLog">): string {
+    return service
+      .eventLog()
+      .map((entry) => entry.message)
+      .join("\n");
+  }
+
+  it("初回に公開状態を読み未取得を残さない", async () => {
+    const { service, stub } = prepareService();
+    expect(service.localMcpStatus()).toBe(null);
+    stub.client.getLocalMcpStatus.mockResolvedValueOnce(statusOf({ enabled: false }));
+    await service.fetchLocalMcpStatus();
+    expect(stub.client.getLocalMcpStatus).toHaveBeenCalledTimes(1);
+    expect(service.localMcpStatus()).toEqual(statusOf({ enabled: false }));
+  });
+
+  it("push で追従する", async () => {
+    const { service, stub } = prepareService();
+    stub.mcpPushHandler()?.(statusOf());
+    expect(service.localMcpStatus()?.enabled).toBe(true);
+    stub.mcpPushHandler()?.(statusOf({ enabled: true, revision: 1 }));
+    expect(service.localMcpStatus()?.port).toBe(4321);
+    stub.mcpPushHandler()?.(statusOf({ enabled: false, port: null, url: null, revision: 2 }));
+    expect(service.localMcpStatus()?.enabled).toBe(false);
+  });
+
+  it("有効化で公開状態を採用する", async () => {
+    const { service, stub } = prepareService();
+    await service.enableLocalMcp();
+    expect(stub.client.enableLocalMcp).toHaveBeenCalledTimes(1);
+    expect(service.localMcpStatus()?.enabled).toBe(true);
+    expect(service.localMcpError()).toBe("");
+  });
+
+  it("停止は公開状態を返し解放を確認したあとだけ停止を記録する", async () => {
+    const { service, stub } = prepareService();
+    await service.enableLocalMcp();
+    stub.client.disableLocalMcp.mockResolvedValueOnce(
+      statusOf({ enabled: false, port: null, url: null, revision: 2 }),
+    );
+    await service.disableLocalMcp();
+    expect(stub.client.disableLocalMcp).toHaveBeenCalledTimes(1);
+    expect(service.localMcpStatus()?.enabled).toBe(false);
+    expect(service.localMcpError()).toBe("");
+    expect(logText(service)).toContain("製品向け MCP を停止した");
+  });
+
+  it("停止の未完了は未完了を示し再試行を促す", async () => {
+    const { service, stub } = prepareService();
+    await service.enableLocalMcp();
+    stub.client.disableLocalMcp.mockResolvedValueOnce(
+      statusOf({ enabled: false, port: null, url: null, cleanupPending: true, revision: 2 }),
+    );
+    await service.disableLocalMcp();
+    expect(service.localMcpStatus()?.cleanupPending).toBe(true);
+    // 「停止した」とは記録せず、未完了を示す。
+    expect(logText(service)).not.toContain("製品向け MCP を停止した");
+    expect(logText(service)).toContain("停止が未完了である");
+    expect(service.localMcpError()).toContain("もう一度停止する");
+  });
+
+  it("停止通知の後に届く古い取得応答を採用しない", async () => {
+    const { service, stub } = prepareService();
+    let release!: (value: LocalMcpStatus) => void;
+    const gate = new Promise<LocalMcpStatus>((resolve) => {
+      release = resolve;
+    });
+    stub.client.getLocalMcpStatus.mockImplementationOnce(() => gate);
+    // 取得を開始し、完了前に停止通知が届く。
+    const fetching = service.fetchLocalMcpStatus();
+    stub.mcpPushHandler()?.(statusOf({ enabled: false, port: null, url: null, revision: 5 }));
+    expect(service.localMcpStatus()?.enabled).toBe(false);
+    release(statusOf({ enabled: true, revision: 1 }));
+    await fetching;
+    // 遅延した応答は捨てる。
+    expect(service.localMcpStatus()).toEqual(
+      statusOf({ enabled: false, port: null, url: null, revision: 5 }),
+    );
+  });
+
+  it("停止をまたぐ旧応答は再有効化後に採用しない", async () => {
+    const { service, stub } = prepareService();
+    let releaseFirst!: (value: LocalMcpStatus) => void;
+    const gate = new Promise<LocalMcpStatus>((resolve) => {
+      releaseFirst = resolve;
+    });
+    stub.client.getLocalMcpStatus.mockImplementationOnce(() => gate);
+    const pending = service.fetchLocalMcpStatus();
+    stub.client.getLocalMcpStatus.mockResolvedValueOnce(statusOf({ enabled: false, revision: 4 }));
+    await service.disableLocalMcp();
+    // 再有効化の一環で新しい公開状態を取得する。
+    stub.client.enableLocalMcp.mockResolvedValueOnce(statusOf({ enabled: true, revision: 6 }));
+    await service.enableLocalMcp();
+    expect(service.localMcpStatus()?.revision).toBe(6);
+    // 遅延した旧応答が届いても採用しない。
+    releaseFirst(statusOf({ enabled: true, revision: 1 }));
+    await pending;
+    expect(service.localMcpStatus()?.revision).toBe(6);
+  });
+
+  it("開始失敗は公開状態に載り再有効化で消える", async () => {
+    const { service, stub } = prepareService();
+    // 開始失敗は例外ではなく公開状態（無効・開始失敗あり）の正常応答で届く。
+    stub.client.enableLocalMcp.mockResolvedValueOnce(
+      statusOf({ enabled: false, port: null, url: null, startFailed: true, revision: 1 }),
+    );
+    await service.enableLocalMcp();
+    // 成功とは記録せず、失敗表示を残す。
+    expect(service.localMcpStatus()?.startFailed).toBe(true);
+    expect(service.localMcpError()).toContain("操作に失敗した");
+    expect(logText(service)).not.toContain("製品向け MCP を有効化した");
+    expect(logText(service)).toContain("有効化に失敗した");
+    // 成功時は開始失敗が消える（新しい版として届く）。
+    stub.client.enableLocalMcp.mockResolvedValueOnce(statusOf({ enabled: true, revision: 2 }));
+    await service.enableLocalMcp();
+    expect(service.localMcpStatus()?.startFailed).toBe(false);
+    expect(service.localMcpError()).toBe("");
+    expect(logText(service)).toContain("製品向け MCP を有効化した");
+  });
+
+  it("開始失敗の正常応答では有効化したと記録せず失敗表示を残す（応答先着）", async () => {
+    const { service, stub } = prepareService();
+    stub.client.enableLocalMcp.mockResolvedValueOnce(
+      statusOf({ enabled: false, port: null, url: null, startFailed: true, revision: 1 }),
+    );
+    await service.enableLocalMcp();
+    expect(service.localMcpStatus()?.enabled).toBe(false);
+    expect(service.localMcpStatus()?.startFailed).toBe(true);
+    expect(logText(service)).not.toContain("製品向け MCP を有効化した");
+    expect(logText(service)).toContain("有効化に失敗した");
+    expect(service.localMcpError()).toContain("操作に失敗した");
+  });
+
+  it("開始失敗の正常応答では有効化したと記録せず失敗表示を残す（push先着）", async () => {
+    const { service, stub } = prepareService();
+    let release!: (value: LocalMcpStatus) => void;
+    const gate = new Promise<LocalMcpStatus>((resolve) => {
+      release = resolve;
+    });
+    stub.client.enableLocalMcp.mockReturnValueOnce(gate);
+    const pending = service.enableLocalMcp();
+    // main は状態を公開してから応答を返すため、開始失敗の push が先に着く。
+    stub.mcpPushHandler()?.(
+      statusOf({ enabled: false, port: null, url: null, startFailed: true, revision: 1 }),
+    );
+    release(statusOf({ enabled: false, port: null, url: null, startFailed: true, revision: 1 }));
+    await pending;
+    expect(service.localMcpStatus()?.startFailed).toBe(true);
+    expect(logText(service)).not.toContain("製品向け MCP を有効化した");
+    expect(logText(service)).toContain("有効化に失敗した");
+    expect(service.localMcpError()).toContain("操作に失敗した");
+  });
+
+  it("古い版の push を捨て同じ版の push を捨てる", async () => {
+    const { service, stub } = prepareService();
+    stub.mcpPushHandler()?.(statusOf({ enabled: true, revision: 2 }));
+    expect(service.localMcpStatus()?.revision).toBe(2);
+    // 古い版は捨てる。
+    stub.mcpPushHandler()?.(statusOf({ enabled: false, port: null, url: null, revision: 1 }));
+    expect(service.localMcpStatus()).toEqual(statusOf({ enabled: true, revision: 2 }));
+    // 同じ版は捨てる（内容が違っても上書きしない）。
+    stub.mcpPushHandler()?.(statusOf({ enabled: false, port: null, url: null, revision: 2 }));
+    expect(service.localMcpStatus()).toEqual(statusOf({ enabled: true, revision: 2 }));
+    // 新しい版だけ採用する。
+    stub.mcpPushHandler()?.(statusOf({ enabled: false, port: null, url: null, revision: 3 }));
+    expect(service.localMcpStatus()?.revision).toBe(3);
+    expect(service.localMcpStatus()?.enabled).toBe(false);
+  });
+
+  it("push が先に着いても有効化の完了を反映する", async () => {
+    const { service, stub } = prepareService();
+    let release!: (value: LocalMcpStatus) => void;
+    const gate = new Promise<LocalMcpStatus>((resolve) => {
+      release = resolve;
+    });
+    stub.client.enableLocalMcp.mockReturnValueOnce(gate);
+    const pending = service.enableLocalMcp();
+    // main は状態を公開してから応答を返すため push が先に着く。
+    stub.mcpPushHandler()?.(statusOf({ enabled: true, revision: 1 }));
+    expect(service.localMcpStatus()?.url).toBe("http://127.0.0.1:4321/mcp");
+    release(statusOf({ enabled: true, revision: 1 }));
+    await pending;
+    // 同じ版の応答は状態を巻き戻さないが、完了表示は反映する。
+    expect(service.localMcpStatus()?.enabled).toBe(true);
+    expect(service.localMcpStatus()?.url).toBe("http://127.0.0.1:4321/mcp");
+    expect(service.localMcpError()).toBe("");
+    expect(logText(service)).toContain("製品向け MCP を有効化した");
+  });
+
+  it("push が先に着いても停止の完了を反映する", async () => {
+    const { service, stub } = prepareService();
+    let release!: (value: LocalMcpStatus) => void;
+    const gate = new Promise<LocalMcpStatus>((resolve) => {
+      release = resolve;
+    });
+    stub.client.disableLocalMcp.mockReturnValueOnce(gate);
+    const pending = service.disableLocalMcp();
+    stub.mcpPushHandler()?.(statusOf({ enabled: false, port: null, url: null, revision: 4 }));
+    release(statusOf({ enabled: false, port: null, url: null, revision: 4 }));
+    await pending;
+    expect(service.localMcpStatus()?.enabled).toBe(false);
+    expect(service.localMcpError()).toBe("");
+    expect(logText(service)).toContain("製品向け MCP を停止した");
+    expect(logText(service)).not.toContain("未完了");
+  });
+
+  it("push が先に着いても停止の未完了を反映し停止したとは記録しない", async () => {
+    const { service, stub } = prepareService();
+    let release!: (value: LocalMcpStatus) => void;
+    const gate = new Promise<LocalMcpStatus>((resolve) => {
+      release = resolve;
+    });
+    stub.client.disableLocalMcp.mockReturnValueOnce(gate);
+    const pending = service.disableLocalMcp();
+    stub.mcpPushHandler()?.(
+      statusOf({ enabled: false, port: null, url: null, cleanupPending: true, revision: 4 }),
+    );
+    release(statusOf({ enabled: false, port: null, url: null, cleanupPending: true, revision: 4 }));
+    await pending;
+    expect(service.localMcpStatus()?.cleanupPending).toBe(true);
+    expect(service.localMcpError()).toContain("もう一度停止する");
+    expect(logText(service)).toContain("停止が未完了である");
+    expect(logText(service)).not.toContain("製品向け MCP を停止した");
+  });
+
+  it("push が先に着いても有効化の失敗を反映する", async () => {
+    const { service, stub } = prepareService();
+    let release!: (value: unknown) => void;
+    const gate = new Promise<LocalMcpStatus>((_resolve, reject) => {
+      release = reject as (value: unknown) => void;
+    });
+    stub.client.enableLocalMcp.mockReturnValueOnce(gate);
+    const pending = service.enableLocalMcp();
+    stub.mcpPushHandler()?.(statusOf({ enabled: false, revision: 3 }));
+    release(new Error("束縛できない"));
+    await pending;
+    expect(service.localMcpStatus()?.revision).toBe(3);
+    expect(service.localMcpError()).toContain("操作に失敗した");
+    expect(logText(service)).toContain("有効化に失敗した");
+  });
+
+  it("新しい操作が始まったら古い操作の失敗で上書きしない", async () => {
+    const { service, stub } = prepareService();
+    let releaseEnable!: (value: unknown) => void;
+    const enableGate = new Promise<LocalMcpStatus>((_resolve, reject) => {
+      releaseEnable = reject as (value: unknown) => void;
+    });
+    stub.client.enableLocalMcp.mockReturnValueOnce(enableGate);
+    const first = service.enableLocalMcp();
+    // 新しい停止操作が始まり成功する。
+    stub.client.disableLocalMcp.mockResolvedValueOnce(
+      statusOf({ enabled: false, port: null, url: null, revision: 5 }),
+    );
+    await service.disableLocalMcp();
+    expect(service.localMcpError()).toBe("");
+    // 古い有効化の失敗が遅れて届いても上書きしない。
+    releaseEnable(new Error("束縛できない"));
+    await first;
+    expect(service.localMcpStatus()?.revision).toBe(5);
+    expect(service.localMcpError()).toBe("");
+    expect(logText(service)).not.toContain("有効化に失敗した");
+  });
+
+  it("古い版の操作応答で新しい公開状態を巻き戻さない", async () => {
+    const { service, stub } = prepareService();
+    stub.client.enableLocalMcp.mockResolvedValueOnce(statusOf({ enabled: true, revision: 1 }));
+    stub.mcpPushHandler()?.(statusOf({ enabled: false, port: null, url: null, revision: 5 }));
+    await service.enableLocalMcp();
+    // 完了表示は自分の操作として反映するが、版は新しい方を保つ。
+    expect(service.localMcpStatus()?.revision).toBe(5);
+    expect(service.localMcpStatus()?.enabled).toBe(false);
+    expect(service.localMcpError()).toBe("");
+  });
+
+  it("三連続操作では実行中は送らず応答後に新しい停止を送り古い応答で上書きしない", async () => {
+    const { service, stub } = prepareService();
+    // 停止Aの応答を保留する。
+    let releaseFirst!: (value: LocalMcpStatus) => void;
+    const firstGate = new Promise<LocalMcpStatus>((resolve) => {
+      releaseFirst = resolve;
+    });
+    stub.client.disableLocalMcp.mockReturnValueOnce(firstGate);
+    const first = service.disableLocalMcp();
+    // 実行中は停止の実行中旗が立ち、二重押下は送らない。
+    expect(service.localMcpDisablePending()).toBe(true);
+    await service.disableLocalMcp();
+    expect(stub.client.disableLocalMcp).toHaveBeenCalledTimes(1);
+    // 停止完了の push が届く。
+    stub.mcpPushHandler()?.(statusOf({ enabled: false, port: null, url: null, revision: 4 }));
+    // 有効化Bは種類が異なるため実行でき、完了する。
+    stub.client.enableLocalMcp.mockResolvedValueOnce(statusOf({ enabled: true, revision: 5 }));
+    await service.enableLocalMcp();
+    expect(service.localMcpStatus()?.enabled).toBe(true);
+    expect(service.localMcpError()).toBe("");
+    // 応答前に新しい停止を押しても実行中のため送らない。
+    await service.disableLocalMcp();
+    expect(stub.client.disableLocalMcp).toHaveBeenCalledTimes(1);
+    expect(service.localMcpDisablePending()).toBe(true);
+    // 停止Aの古い応答が返っても新しい表示（有効）を上書きしない。
+    releaseFirst(statusOf({ enabled: false, port: null, url: null, revision: 4 }));
+    await first;
+    expect(service.localMcpDisablePending()).toBe(false);
+    expect(service.localMcpStatus()).toEqual(statusOf({ enabled: true, revision: 5 }));
+    expect(logText(service)).not.toContain("製品向け MCP を停止した");
+    // 応答後は新しい停止Cを送れる。
+    stub.client.disableLocalMcp.mockResolvedValueOnce(
+      statusOf({ enabled: false, port: null, url: null, revision: 6 }),
+    );
+    await service.disableLocalMcp();
+    expect(stub.client.disableLocalMcp).toHaveBeenCalledTimes(2);
+    expect(service.localMcpStatus()?.enabled).toBe(false);
+    expect(logText(service)).toContain("製品向け MCP を停止した");
   });
 });

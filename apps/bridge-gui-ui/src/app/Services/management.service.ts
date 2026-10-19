@@ -14,6 +14,7 @@
  */
 import { Injectable, isDevMode, signal } from "@angular/core";
 import type {
+  LocalMcpStatus,
   ManagementSnapshot,
   NgDebugProbeResult,
   NgDevObserveResult,
@@ -126,6 +127,35 @@ export class ManagementService {
   private readonly pairingFetchingIds = signal<readonly string[]>([]);
   private readonly pairingFetchFailedIds = signal<readonly string[]>([]);
 
+  // ADR: 製品向け MCP の公開状態の採用は main が所有する単調な改訂番号だけで
+  // 行い、push と状態取得・操作応答のすべてで同じ規則を使う。新しい版だけを
+  // 採用し、古い版と 同じ版は捨てる。到着順が交差しても大きい版を正とし、
+  // 同じ要求の応答の識別には使わない。要求ごとの自前世代で同じ操作の応答を
+  // 捨てない。操作の完了・失敗の表示は版の採用とは別に、当該操作の識別で
+  // 行う。失敗表示は新しい公開状態の到達では消さず、当該操作の成功でのみ
+  // 消す。有効化の成功は応答の成否ではなく採用した状態の内容（有効であること）
+  // で決め、開始失敗の状態（無効・開始失敗あり）は失敗として扱う。有効化の成功は操作失敗の表示を消し、停止の完了（未完了でない応答）
+  // は停止の未完了・失敗の表示を消す。停止の未完了・操作の失敗は再試行まで
+  // 残す。main は状態を公開してから操作応答を返すため、push が先に着くのが
+  // 通常であり、先着の push で版が進んでいても当該操作の完了・失敗は反映する。
+  private mcpOpSeq = 0;
+  private readonly mcpState = signal<LocalMcpStatus | null>(null);
+  private readonly mcpError = signal("");
+  // ADR: 実行中の操作はボタンに無効として見せるため、操作ごとの実行中旗を
+  // signal で持つ。二重押下の抑止（`inflight`）とは別に、描画の判定
+  // （`canEnable`・`canDisable`）に使う。応答の成功・失敗・古さによらず
+  // 実行終了で戻す。種類の異なる操作（有効化と停止）は互いを止めない。
+  private readonly mcpEnablePending = signal(false);
+  private readonly mcpDisablePending = signal(false);
+  /** 製品向け MCP の公開状態。未取得の間は null である。 */
+  readonly localMcpStatus = this.mcpState.asReadonly();
+  /** 製品向け MCP の操作の失敗・未完了表示。本文は含めない（理由だけである）。 */
+  readonly localMcpError = this.mcpError.asReadonly();
+  /** 製品向け MCP の有効化の実行中旗。実行中は有効化ボタンを無効にする。 */
+  readonly localMcpEnablePending = this.mcpEnablePending.asReadonly();
+  /** 製品向け MCP の停止の実行中旗。実行中は停止ボタンを無効にする。 */
+  readonly localMcpDisablePending = this.mcpDisablePending.asReadonly();
+
   /** 現在採用中の表示状態。未取得の間は null である。 */
   readonly snapshot = this.current.asReadonly();
 
@@ -204,6 +234,11 @@ export class ManagementService {
       // push の到達自体を記録する。採用規約で無視される場合も到達は残る。
       this.pushRevision.set(revision);
       this.adopt(snapshot, "stateChanged");
+    });
+    // 製品向け MCP の公開状態の push は、そのまま採用口へ渡す。新しい改訂番号
+    // だけ採用し、同じ版と古い版は捨てる（到着順優先にしない）。
+    this.rpc.onLocalMcpChanged((status) => {
+      this.adoptLocalMcpStatus(status);
     });
   }
 
@@ -302,6 +337,44 @@ export class ManagementService {
   /** 操作の実行記録を外す。成功・失敗のいずれでも呼ぶ。 */
   private endOperation(key: string): void {
     this.inflight.delete(key);
+  }
+
+  /**
+   * 製品向け MCP の公開状態を改訂番号の規則で採用する。唯一の採用口であり、
+   * push と状態取得・操作応答のすべてがここを通る。
+   *
+   * @param incoming - 受信した公開状態。
+   * @returns 採用した場合に真。古い版・同じ版では偽である。
+   */
+  private adoptLocalMcpStatus(incoming: LocalMcpStatus): boolean {
+    const current = this.mcpState();
+    if (current === null || incoming.revision > current.revision) {
+      this.mcpState.set(incoming);
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * 操作の識別子を発行する。有効化・停止の完了・失敗の表示だけに使い、
+   * 版の採用には使わない。新しい操作が始まると古い操作の結果は捨てる。
+   *
+   * @returns 発行した操作識別子。
+   */
+  private nextMcpOperation(): number {
+    this.mcpOpSeq += 1;
+    return this.mcpOpSeq;
+  }
+
+  /**
+   * 当該操作の結果を反映してよいか判定する。新しい操作が始まっていたら偽であり、
+   * 古い操作の完了・失敗で表示を上書きしない。
+   *
+   * @param operation - 開始時に発行した操作識別子。
+   * @returns 反映してよい場合に真。
+   */
+  private isCurrentMcpOperation(operation: number): boolean {
+    return operation === this.mcpOpSeq;
   }
 
   /**
@@ -1073,6 +1146,110 @@ export class ManagementService {
       this.appendLog("アプリの終了要求に失敗した");
     } finally {
       this.endOperation("quit");
+    }
+  }
+
+  /**
+   * 製品向け MCP の公開状態を取得する。起動時の取得と表示の読直しに使う。
+   */
+  async fetchLocalMcpStatus(): Promise<void> {
+    try {
+      const status = await this.rpc.getLocalMcpStatus();
+      this.adoptLocalMcpStatus(status);
+    } catch {
+      // 失敗理由は定型文だけにし、例外内容は載せない。
+      console.log("[bridge-gui-ng] 製品向け MCP の状態取得に失敗した");
+      this.appendLog("製品向け MCP の状態取得に失敗した");
+    }
+  }
+
+  /**
+   * 製品向け MCP を有効化する（人間の操作用）。待受けを開く／作り直す。
+   *
+   * 公開状態の URL に有効化直後の接続先が含まれるため、別の取得要求は要らない。
+   */
+  async enableLocalMcp(): Promise<void> {
+    if (!this.beginOperation("enable-local-mcp")) {
+      return;
+    }
+    this.mcpEnablePending.set(true);
+    const operation = this.nextMcpOperation();
+    try {
+      const status = await this.rpc.enableLocalMcp();
+      // 版の採用は到着順によらず改訂番号だけで行う。先着の push で進んでいても
+      // 同じ版は捨て、新しい版だけ採用する。当該操作の完了表示は版の採否とは
+      // 別に、自分の操作の結果として反映する。記録・失敗表示の消去は採用した
+      // 状態の内容で決める（有効になったときだけ成功とする）。
+      this.adoptLocalMcpStatus(status);
+      if (!this.isCurrentMcpOperation(operation)) {
+        return;
+      }
+      if (status.enabled) {
+        this.mcpError.set("");
+        console.log("[bridge-gui-ng] 製品向け MCP を有効化した");
+        this.appendLog("製品向け MCP を有効化した");
+        return;
+      }
+      // 開始失敗は例外ではなく公開状態（無効・開始失敗あり）の正常応答で届く。
+      // RPC 成功を理由に成功と記録せず、失敗表示を残す。
+      console.log("[bridge-gui-ng] 製品向け MCP の有効化に失敗した");
+      this.appendLog("製品向け MCP の有効化に失敗した");
+      this.mcpError.set("操作に失敗した。もう一度試すか、起動記録を確認する。");
+    } catch {
+      if (!this.isCurrentMcpOperation(operation)) {
+        return;
+      }
+      // 失敗理由は定型文だけにし、例外内容は載せない。
+      console.log("[bridge-gui-ng] 製品向け MCP の有効化に失敗した");
+      this.appendLog("製品向け MCP の有効化に失敗した");
+      this.mcpError.set("操作に失敗した。もう一度試すか、起動記録を確認する。");
+    } finally {
+      this.mcpEnablePending.set(false);
+      this.endOperation("enable-local-mcp");
+    }
+  }
+
+  /**
+   * 製品向け MCP を停止する（人間の操作用）。個体の受付を失効し、待受けを止める。
+   *
+   * 停止は公開状態を返す。解放を確認したあとだけ「停止した」と記録し、
+   * 未完了の場合は未完了を示して再試行を促す。版の採用は到着順によらず
+   * 改訂番号だけで行い、先着の push で進んでいても当該操作の完了・失敗は
+   * 自分の操作の結果として反映する。新しい操作が始まっていたら古い結果は
+   * 捨て、新しい方に任せる。
+   */
+  async disableLocalMcp(): Promise<void> {
+    if (!this.beginOperation("disable-local-mcp")) {
+      return;
+    }
+    this.mcpDisablePending.set(true);
+    const operation = this.nextMcpOperation();
+    try {
+      const status = await this.rpc.disableLocalMcp();
+      this.adoptLocalMcpStatus(status);
+      if (!this.isCurrentMcpOperation(operation)) {
+        return;
+      }
+      if (status.cleanupPending) {
+        console.log("[bridge-gui-ng] 製品向け MCP の停止が未完了である");
+        this.appendLog("製品向け MCP の停止が未完了である。もう一度停止する。");
+        this.mcpError.set("停止が未完了である。もう一度停止する。");
+        return;
+      }
+      this.mcpError.set("");
+      console.log("[bridge-gui-ng] 製品向け MCP を停止した");
+      this.appendLog("製品向け MCP を停止した");
+    } catch {
+      if (!this.isCurrentMcpOperation(operation)) {
+        return;
+      }
+      // 失敗理由は定型文だけにし、例外内容は載せない。
+      console.log("[bridge-gui-ng] 製品向け MCP の停止に失敗した");
+      this.appendLog("製品向け MCP の停止に失敗した");
+      this.mcpError.set("操作に失敗した。もう一度試すか、起動記録を確認する。");
+    } finally {
+      this.mcpDisablePending.set(false);
+      this.endOperation("disable-local-mcp");
     }
   }
 
